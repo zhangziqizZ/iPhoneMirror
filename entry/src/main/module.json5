@@ -1,0 +1,241 @@
+{
+  "module": {
+    "name": "entry",
+    "type": "entry",
+    "description": "$string:module_desc",
+    "mainElement": "EntryAbility",
+    "deviceTypes": ["2in1"],
+    "deliveryWithInstall": true,
+    "installationFree": false,
+    "pages": "$profile:main_pages",
+    "abilities": [
+      {
+        "name": "EntryAbility",
+        "srcEntry": "./ets/entryability/EntryAbility.ets",
+        "description": "$string:EntryAbility_desc",
+        "icon": "$media:icon",
+        "label": "$string:EntryAbility_label",
+        "startWindowIcon": "$media:startIcon",
+        "startWindowBackground": "$color:start_window_background",
+        "exported": true,
+        // ───────────────────── 桌面启动入口（此前缺失） ─────────────────────
+        // DevEco Studio 的 Run 走的是 `aa start -a EntryAbility -b <bundleName>`：
+        // 它**直接点名 ability**，完全不经过启动器，所以少了下面这段也能跑起来。
+        //
+        // 而用户在桌面/应用中心点图标时，启动器要做的是"给定 bundleName，问系统
+        // 这个包里哪个 ability 是首页入口"—— 它**只**按 skills 里的
+        // entities + actions 反查。本工程此前一处 skills 都没有，于是启动器
+        // 找不到可启动的入口，点图标只能把你带到设置里的「应用详情」页
+        // （就是卸载/强行停止那一屏）。这正是"只能在 DevEco 里打开"的直接原因。
+        //
+        // 两个字符串取 SDK 的常量值，不凭印象写：
+        //   action  = WantConstant.ACTION_HOME  = 'ohos.want.action.home'
+        //             （@ohos.ability.wantConstant.d.ts:44）
+        //   entity  = WantConstant.ENTITY_HOME  = 'entity.system.home'
+        //             （@ohos.ability.wantConstant.d.ts:274）
+        "skills": [
+          {
+            "entities": ["entity.system.home"],
+            "actions": ["ohos.want.action.home"]
+          }
+        ],
+        "orientation": "unspecified",
+        "continuable": false,
+        // 长时任务（连续任务）模式：投屏时 App 会被切到后台（用户要去看 iPhone、
+        // 或去别的窗口），没有这个声明 + KEEP_BACKGROUND_RUNNING 权限，进程会被
+        // 系统冻结 —— 表现为"在 App 里看状态一切正常、一拿 iPhone 就搜不到"。
+        // dataTransfer 对应 BackgroundMode.DATA_TRANSFER。
+        "backgroundModes": ["dataTransfer"]
+      },
+      {
+        // ───────── 独立预览窗口：必须是「独立 Ability」而不是子窗口 ─────────
+        // 两条硬约束把它逼成了 Ability（详见 StandalonePreviewAbility.ets 文件头）：
+        //   ① 子窗生命周期挂在**主窗口**上 —— 主窗口最小化，子窗跟着不显示。
+        //      官方的「独立子窗」要 API 26 的 SubWindowOptions.zLevelAboveParentLoosened，
+        //      本工程 compileSdkVersion = 6.1.0(23)，没有这个字段。
+        //   ② 用户要的「只能等比例放大缩小」靠 setContentAspectRatio，而它
+        //      **只认主窗口、且只在自由悬浮窗（FLOATING）下生效**。
+        //
+        // 刻意**不给** process 字段 ⇒ 它跑在默认进程（同 EntryAbility）。
+        // 这是**必须**的：预览画面来自 libim_core.so 里的渲染器单例
+        // （OhosPreviewRenderer 只有一个 EGLSurface），换了进程就是另一份 so 实例，
+        // im_attach_preview_window() 根本挂不到画面。
+        "name": "StandalonePreviewAbility",
+        "srcEntry": "./ets/entryability/StandalonePreviewAbility.ets",
+        "description": "$string:StandalonePreviewAbility_desc",
+        "label": "$string:StandalonePreviewAbility_label",
+        "startWindowIcon": "$media:startIcon",
+        "startWindowBackground": "$color:start_window_background",
+        // 只由本应用自己拉起，不暴露给别的应用。
+        "exported": false,
+        // ★ 只给 floating：给了 fullscreen/split，窗口就不是 FLOATING 形态，
+        //   setContentAspectRatio 与 resizeAsync 会静默失效（表现为"比例锁不住"）。
+        "supportWindowMode": ["floating"],
+        // 窗口下限。★ 字段名是 minWindowWidth / minWindowHeight，**不能**写成
+        //   "windowSize": { minWidth, minHeight } —— windowSize 只在 module 层有，
+        //   abilities 的 schema 没有它，构建会直接挂（hvigor 00303038 Configuration
+        //   Error / propertyNames: windowSize）。单位是 vp（不是 px）。
+        //   这里取上游 AspectRatioWindowController 的 minWidthDips/minHeightDips。
+        "minWindowWidth": 320,
+        "minWindowHeight": 240,
+        // 主窗口一次只开一个独立窗口；重复拉起复用同一实例，不开第二个。
+        "launchType": "singleton",
+        // ★ 必须为 false：独立窗口自己点「最小化」后，它**不在 Dock 里就找不回来了**
+        //   （主窗口虽能再 startAbility 把它叫回来，但用户不会想到去那儿找）。
+        //   留一条任务项 = 和 macOS「iPhone 镜像」一致：那个窗口最小化后就是缩到
+        //   Dock 里的独立图标。代价只是 Dock 上多一个入口，可控。
+        "excludeFromMissions": false,
+        "orientation": "unspecified",
+        "continuable": false
+      }
+    ],
+    // ───────────────────────── 扩展外设驱动（USB） ─────────────────────────
+    // 这一块是"软件识别不到 iPhone"的根因所在，此前完全缺失。
+    //
+    // 官方文档对 OH_Usb_GetDevices 的说明是：获取到的 USB 设备 ID **已通过驱动
+    // 配置信息中的 vid 进行筛选过滤**；那个"驱动配置信息"就是下面 metadata 里的
+    // vid/pid。不声明它，DDK 枚举恒返回空列表 —— 用户在界面上只会看到"未发现
+    // 设备"，而 USB 线、iPhone 的信任提示、权限声明全都没问题，症状与"驱动没装"
+    // 一模一样。这正是鸿蒙语境下"驱动问题"的真实含义：不是缺 Apple 的驱动，而是
+    // 应用没有向系统声明自己要接管哪个 VID 的设备。
+    //
+    // 第二条官方约束（"USB DDK 开放 API 仅允许 DriverExtensionAbility 生命周期内
+    // 使用"）**在本机 2in1 上不成立**：入口 Ability 里 OH_Usb_Init() 实测返回 0
+    // （成功），从未出现过文档预告的 27400002。所以扩展不是"借生命周期"用的，
+    // 它的作用是让上面这份驱动配置信息生效 —— 这才是 DDK 枚举能看见 iPhone 的前提。
+    // 扩展本身仍必须存在且被 bind：它是懒加载的（launchOnBind），没有客户端
+    // bindDevice 就不会起来（onConnect 的时间戳已证实这一点）。
+    //
+    // metadata 各字段（bus/desc/vendor 必填；vid/pid 填 16 进制、逗号分隔）：
+    //   pid 列表与 Core 的 AppleUsbDiscovery.h 里 is_apple_mobile_capture_product_id
+    //   的 24 项白名单逐条一致 —— 不写全，插上某些型号就会被过滤掉。
+    //   刻意不含 0x110A（Apple USB-C 转 3.5mm 耳机转接头）：它不是采集目标。
+    "extensionAbilities": [
+      {
+        "name": "DriverExtAbility",
+        "srcEntry": "./ets/driverextensionability/DriverExtAbility.ets",
+        "description": "$string:DriverExtAbility_desc",
+        "icon": "$media:icon",
+        "label": "$string:DriverExtAbility_label",
+        "type": "driver",
+        // exported 必须是 true：绑定本驱动的是扩展外设管理服务（SA 5110，跑在
+        // hdf_ext_devmgr 进程里，uid 不是本应用）。exported=false 时框架的可见性检查
+        // 会把这个"外部调用方"挡掉，驱动永远拉不起来 —— 症状跟没声明 VID 一样。
+        // 官方文档与社区样例的 DriverExtensionAbility 一律写 true，没有写 false 的。
+        // 放宽这一位不会让别的应用拿到数据：真正的数据通道在原生 USB DDK 里，
+        // 本扩展的 onConnect 只返回一个把请求记进日志的最小 endpoint。
+        "exported": true,
+        "metadata": [
+          { "name": "bus", "value": "USB" },
+          { "name": "desc", "value": "Apple iPhone/iPad USB capture (iPhoneMirror)" },
+          { "name": "vendor", "value": "iPhoneMirror" },
+          { "name": "vid", "value": "0x05AC" },
+          { "name": "pid", "value": "0x1290,0x1291,0x1292,0x1293,0x1294,0x1297,0x1299,0x129A,0x129C,0x129D,0x129E,0x129F,0x12A0,0x12A1,0x12A2,0x12A3,0x12A4,0x12A5,0x12A6,0x12A8,0x12A9,0x12AA,0x12AB,0x12AC" },
+          // ★ 官方《开发无UI界面基础驱动》给出的 metadata 清单里还有这一项，而它的
+          //   **默认值是 false**（文档原文：The default value is **false** if the
+          //   specified value is incorrect or the value is left unspecified），
+          //   含义正是"是否允许 DDK 访问"。本应用的定位恰恰就是**客户端直接用 USB DDK**
+          //   （主进程调 OH_Usb_Init / OH_Usb_GetDevices，扩展进程反而不碰 DDK），
+          //   所以按语义它就该是 true，此前缺失属于漏配。
+          //   它是**元数据开关，不是权限申请**，不参与 requestPermissions 的 ACL 校验 ——
+          //   与 2026-09-19 那次 9568289（ACCESS_DDK_DRIVERS 未进 profile）不是一回事。
+          //   若这版安装又报 9568289，先删这一行再复测，以排除安装器把它当权限校验。
+          { "name": "ohos.permission.ACCESS_DDK_ALLOWED", "value": "true" }
+        ]
+      }
+    ],
+    // 权限只声明真正用到的。判断依据一律取 SDK 的 d.ts 写法和 PermissionDefinitions.json
+    // 里的 availableLevel/provisionEnable 两个字段，**不照抄文档"必须配置"的措辞** ——
+    // 多声明一个用不到的受限权限，代价就是安装直接被拒（见下面 ACCESS_DDK_DRIVERS）。
+    //
+    // 刻意**不**声明 ohos.permission.USB_MANAGER：本移植的 USB 通道是 USB DDK
+    // （usb/usb_ddk_api.h），完全不经过 @ohos.usbManager 那套服务；而 USB_MANAGER
+    // 是 system_core 级、必须在签名 profile 的 allowed-acls 里单独放行。
+    //
+    // 刻意**不**声明 ohos.permission.ACCESS_DDK_DRIVERS（2026-09-19 移除）：
+    //   SDK 的 @ohos.driver.deviceManager.d.ts 里，这个权限只挂在
+    //   bindDriverWithDeviceId / unbindDriverWithDeviceId 两个 API 上 —— 那是
+    //   **客户端去绑定别人提供的驱动**用的（AGC 申请 profile 时要填"服务端的
+    //   bundleName"）。本应用的定位是驱动服务端本身（extensionAbilities 里注册
+    //   DriverExtAbility），全部 ets 源码对它的引用数为 0。
+    //   它是 system_basic + provisionEnable=true，必须进 allowed-acls；而本工程的
+    //   debug profile 由 AGC 签发（issuer=app_gallery）、本地无法改，于是安装报
+    //   9568289 = ERR_APPINSTALL_GRANT_REQUEST_PERMISSIONS_FAILED。
+    //   将来若真要在 ArkTS 侧调 bindDriverWithDeviceId，得先在 AGC 申请 profile 时
+    //   勾选该受限权限并填服务端 bundleName，再把这条加回来。
+    //
+    // 保留的两个 USB 权限级别不同、对 ACL 的要求也完全不同（最容易搞错的地方）：
+    //   ACCESS_DDK_USB                    system_basic + provisionEnable=true
+    //                                     → 必须进 allowed-acls，当前 profile 已放行
+    //   ACCESS_EXTENSIONAL_DEVICE_DRIVER  normal + provisionEnable=false
+    //                                     → 声明即授权，**不需要** ACL
+    //                                     驱动扩展里的 deviceManager.queryDevices 用它
+    "requestPermissions": [
+      {
+        "name": "ohos.permission.ACCESS_DDK_USB",
+        "reason": "$string:usb_ddk_perm_reason",
+        "usedScene": {
+          "abilities": ["EntryAbility", "DriverExtAbility"],
+          "when": "always"
+        }
+      },
+      {
+        "name": "ohos.permission.ACCESS_EXTENSIONAL_DEVICE_DRIVER",
+        "reason": "$string:usb_driver_ext_perm_reason",
+        "usedScene": {
+          "abilities": ["EntryAbility", "DriverExtAbility"],
+          "when": "always"
+        }
+      },
+      {
+        "name": "ohos.permission.INTERNET",
+        "reason": "$string:net_perm_reason",
+        "usedScene": {
+          "abilities": ["EntryAbility"],
+          "when": "always"
+        }
+      },
+      {
+        // 长时任务权限。没有它，App 转入后台后线程被冻结，AirPlay/mDNS 响应器
+        // 立刻哑掉 —— 用户在 App 里看到的"已在广播、已应答 N 次"会变成谎言。
+        "name": "ohos.permission.KEEP_BACKGROUND_RUNNING",
+        "reason": "$string:bg_running_perm_reason",
+        "usedScene": {
+          "abilities": ["EntryAbility"],
+          "when": "always"
+        }
+      },
+      {
+        // 蓝牙反向控制（HOGP over BLE）：把本机蓝牙作为 BLE HID **外设**向 iPhone
+        // 广播（GattServer + startAdvertising），让电脑的鼠标/键盘成为 iPhone 的
+        // 输入设备。这条链路只做反控、不带画面（蓝牙带宽撑不起镜像）。
+        //
+        // ★ 级别与**授权方式**是两件事，必须分开读（PermissionDefinitions.json）：
+        //   ACCESS_BLUETOOTH   availableLevel = normal
+        //                      grantMode      = **user_grant**   ← 关键
+        //                      provisionEnable = false（不需要签名 profile 的 ACL）
+        //   MANAGE_BLUETOOTH   availableLevel = system_basic
+        //                      grantMode      = system_grant
+        //                      provisionEnable = true → 必须进 allowed-acls，
+        //                      而本工程 profile 由 AGC 签发、本地改不了 ⇒ 用它会让
+        //                      安装直接失败（9568289）。故**刻意不用**它，
+        //                      代价只是不能自定义广播名（advertiseName）。
+        //
+        // ★ 2026-09-20 纠错：此处原写「normal + provisionEnable=false → 声明即授权，
+        //   不需要 ACL」。availableLevel 读对了，**grantMode 漏读了** —— 它是
+        //   user_grant，本行只给了"申请资格"，**必须再调
+        //   abilityAccessCtrl.requestPermissionsFromUser 才会真正授权**。
+        //   漏了那一步的症状就是 GattServer.addService() 直接回
+        //   `201 BusinessError 201: Permission denied.`（addService 的 @permission
+        //   正是本条）。现在由 common/BluetoothHidPeripheral.ets 的 ensure_access()
+        //   在 start(ctx) 里统一申请，别再把这条声明当成已授权。
+        "name": "ohos.permission.ACCESS_BLUETOOTH",
+        "reason": "$string:bluetooth_perm_reason",
+        "usedScene": {
+          "abilities": ["EntryAbility"],
+          "when": "always"
+        }
+      }
+    ]
+  }
+}

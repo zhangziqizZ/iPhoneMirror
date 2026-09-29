@@ -1,0 +1,6 @@
+{
+  "name": "libim_core.so",
+  "types": "./Index.d.ts",
+  "version": "1.0.0",
+  "description": "iPhoneMirror Core NAPI 绑定（libim_core.so，nm_modname = im_core）"
+}

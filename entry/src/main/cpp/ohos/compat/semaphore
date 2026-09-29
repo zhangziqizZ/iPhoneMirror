@@ -1,0 +1,16 @@
+// SPDX-License-Identifier: GPL-3.0-only
+//
+// include 路径拦截头：接住上游 CaptureSession.cpp 里字面写死的
+// `#include <semaphore>`（上游只有 libusb0 恢复闸门用到 counting_semaphore，
+// 且仅 Windows 分支实际执行）。
+//
+// 与 ohos/compat/format 同一套机制：工具链有 <semaphore> 就让路，没有就由
+// ohos_cxx_compat.h 提供等价实现。
+
+#pragma once
+
+#if defined(__has_include_next)
+#  if __has_include_next(<semaphore>)
+#    include_next <semaphore>
+#  endif
+#endif

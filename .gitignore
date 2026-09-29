@@ -1,0 +1,65 @@
+# ─── 鸿蒙构建产物 ───
+/build/
+entry/build/
+# DevEco 的 CMake 本地缓存（.cxx/ 与 build/ 同级，体积很大且完全可重建）
+entry/.cxx/
+/.cxx/
+# oh_modules/ 在仓库根与 entry/ 下都可能出现
+/oh_modules/
+entry/oh_modules/
+/hvigor/
+.hvigor/
+*.hap
+*.app
+*.app.ab
+*.hprof
+
+# ─── 工具脚本产物（可随时重新生成） ───
+# tools/try_compile.sh 与 tools/shim_selftest.sh 的产物
+.build-check/
+# typescript@4.9.5 SDK 内置 ets-loader 缓存在用户家目录，
+# 不在仓库里。但若有 .tsbuildinfo 之类的本地缓存也忽略
+*.tsbuildinfo
+
+# ─── DevEco Studio 自动生成 ───
+# 用户本机 SDK 路径，不要提交
+local.properties
+# IDE 配置（不同机器之间不应共享）
+.idea/
+.vscode/
+*.iml
+# workspace.xml 单独列是因为部分人不用 .idea/ 但单独误提交
+workspace.xml
+
+# ─── 临时 / 编辑器 ───
+*.log
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ─── Linux port 的参考构建产物（保留 upstream 习惯） ───
+# cmake / build 临时
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+
+# ─── 本工作空间 / 工具链残留（只在本机产生） ───
+# WorkBuddy 沙箱/会话缓存
+.workbuddy/
+# BitFun 项目工具缓存
+.bitfun/
+# clangd LSP 缓存
+.clangd/
+# ArkTS sourcemap（编译产物，发布时不需要）
+*.map
+# 用户机器的临时报告（开发者有时会临时 grep -E 写文件）
+/tmp/
+*.local

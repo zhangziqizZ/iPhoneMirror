@@ -1,0 +1,6 @@
+{
+  "rules": {
+    "@hw/naming-convention": "warn",
+    "no-unused-vars": "warn"
+  }
+}

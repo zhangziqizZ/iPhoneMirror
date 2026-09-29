@@ -1,0 +1,21 @@
+// SPDX-License-Identifier: GPL-3.0-only
+//
+// include 路径拦截头：接住上游源码里字面写死的 `#include <format>`。
+//
+// 上游（Plist.cpp / Socket.cpp / AppleUsbSelection.cpp / Logging.cpp /
+// CaptureSession.cpp / UsbMuxClient.cpp 等）直接 `#include <format>`。OHOS NDK
+// 的 libc++ 尚未提供 <format>，该 include 会直接编译失败；而本工程不允许改动
+// 上游文件。
+//
+// 处理办法：本文件所在目录以 `-I ... -BEFORE` 的形式排在 include 搜索路径最前，
+// 于是 `<format>` 先命中本文件。工具链真的提供 <format> 时，`#include_next` 会把
+// 它让给系统头，本文件等于不存在；否则本文件为空，由强制预包含的
+// ohos_cxx_compat.h 提供 std::format 的等价实现。
+
+#pragma once
+
+#if defined(__has_include_next)
+#  if __has_include_next(<format>)
+#    include_next <format>
+#  endif
+#endif

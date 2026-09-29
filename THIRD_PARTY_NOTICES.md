@@ -1,0 +1,254 @@
+# Third-party notices
+
+This file describes third-party material intentionally included in the source
+tree or release package. Each component remains under its upstream license.
+The root GNU General Public License v3.0 only applies to original iPhoneMirror
+material and does not replace, narrow or relicense any component listed below.
+
+## quicktime_video_hack protocol fixtures
+
+The binary fixtures in `src/Core/tests/fixtures/quicktime_video_hack/` are
+unmodified protocol captures from Daniel Paulus' `quicktime_video_hack`
+project. They are used only as interoperability test vectors; no upstream
+implementation source is copied into iPhoneMirror.
+
+- Project: https://github.com/danielpaulus/quicktime_video_hack
+- Copyright (c) 2019 danielpaulus
+- License: MIT
+- Included license: `src/Core/tests/fixtures/quicktime_video_hack/LICENSE`
+
+## libusb 1.0.29
+
+`third_party/libusb/` contains the public headers, x64 runtime DLL and import
+library used by the optional libusb-1.0 transport. iPhoneMirror dynamically
+links to the library.
+
+- Project: https://github.com/libusb/libusb
+- License: GNU Lesser General Public License 2.1 or later
+- Included license: `third_party/libusb/COPYING`
+
+## libusb-win32 1.2.6.0
+
+`third_party/libusb-win32/` contains the public compatibility header and the
+x64 dynamic import library used by the native core. The main application ships
+the signed upstream x64 `libusb0.dll` user-mode runtime so it can start before
+the capture filter is installed. The standalone driver manager carries the
+remaining signed runtime and kernel-driver payload under
+`src/DriverInstaller/Assets/libusb-win32-1.2.6.0/`.
+
+- Project: https://github.com/mcuee/libusb-win32
+- Release archive: https://sourceforge.net/projects/libusb-win32/files/libusb-win32-releases/1.2.6.0/
+- Dynamic import library: GNU Lesser General Public License version 3
+- Driver payload licenses: `src/DriverInstaller/Assets/libusb-win32-1.2.6.0/COPYING_GPL.txt`,
+  `COPYING_LGPL.txt`, `README.txt` and `AUTHORS.txt`
+- Driver payload hashes and signature validation are enforced by
+  `src/DriverInstaller/Services/DriverConstants.cs` and `DriverPayload.cs`.
+
+The driver manager does not copy proprietary Aisi binaries. Apple USB support
+is installed from a signed offline AppleMobileDeviceSupport MSI when available,
+from the Apple Devices Microsoft Store product through Windows Package Manager,
+or from Apple's official HTTPS iTunes installer as a compatibility fallback.
+Apple software is not redistributed in this repository or its release assets.
+
+## Microsoft Visual C++ runtime
+
+The Windows release includes app-local x64 copies of `msvcp140.dll`,
+`vcruntime140.dll` and `vcruntime140_1.dll`. They satisfy the runtime imports of
+the bundled libusb and AirPlayServer binaries on clean Windows installations.
+The build copies these files only from an installed Visual Studio Redistributable
+directory after validating their Microsoft Authenticode signatures.
+
+- Publisher: Microsoft Corporation
+- Deployment documentation:
+  https://learn.microsoft.com/cpp/windows/redistributing-visual-cpp-files
+- License terms:
+  https://visualstudio.microsoft.com/license-terms/
+
+## AirPlayServer 1.1.2 wireless receiver
+
+`third_party/airplay-server/` contains a pinned runtime subset of the
+AirPlayServer x64 release with local compatibility patches. The GPL-licensed
+`iPhoneMirror.WirelessHost.exe` process loads its protocol/decoder DLL and sends
+decoded I420 video and PCM audio to the GPL-3.0-only application over a named
+pipe. The application and native capture core do not link to the receiver DLL.
+
+- Project: https://github.com/xenos1337/AirPlayServer
+- Version/commit: v1.1.2 / `34ba6cfd49b2432cf30e89913d66decb775763e4`
+- AirPlayServer wrapper: MIT
+- PlayFair implementation and receiver runtime: GPL version 3
+- FFmpeg 4.4.2 runtime: LGPL version 2.1 or later
+- Fraunhofer FDK AAC: Fraunhofer FDK AAC license
+- Exact hashes, source links and license files:
+  `third_party/airplay-server/SOURCE.md`
+
+## FFmpeg 8.1.2 media-output runtime
+
+The default release uses an FFmpeg essentials build staged at `tools/ffmpeg/`.
+An explicitly requested compact edition may omit this runtime and use a
+user-installed FFmpeg from `PATH`. The bundled runtime is prepared by
+`scripts/prepare_ffmpeg.ps1`, which verifies the published archive SHA-256
+before copying `ffmpeg.exe`, the license, build README and source record into
+the application output. This runtime is independent of the older FFmpeg DLLs
+distributed with AirPlayServer.
+
+- Binary package: https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-8.1.2-essentials_build.zip
+- Upstream FFmpeg source: https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz
+- License for the distributed essentials build: GNU General Public License v3
+- Included license and build/source metadata: `tools/ffmpeg/LICENSE.txt`,
+  `tools/ffmpeg/README.txt` and `tools/ffmpeg/SOURCE.txt`
+- Pinned archive and extracted-file hashes:
+  `scripts/ffmpeg-runtime-manifest.psd1`
+- The build enables GPL components such as libx264 and is therefore distributed
+  under GPLv3 terms. It encodes projection video and, when available, muxes the
+  captured iPhone PCM audio into recordings and live-streaming output.
+
+## Markdig Markdown processor
+
+The in-app update window uses Markdig 1.3.2 to parse GitHub Release notes into
+safe WPF document elements. Markdig is distributed under the BSD 2-Clause
+License. Source and license: https://github.com/xoofx/markdig
+
+## WPF-UI 4.3.0 and Microsoft Fluent System Icons
+
+The main application and standalone driver manager use WPF-UI 4.3.0. Its
+`SymbolIcon` control embeds the Microsoft Fluent System Icons font in the
+WPF-UI assembly, so application icons do not depend on fonts installed in
+Windows.
+
+- WPF-UI: https://github.com/lepoco/wpfui
+- Microsoft Fluent System Icons: https://github.com/microsoft/fluentui-system-icons
+- WPF-UI copyright (c) 2021-2025 Leszek Pomianowski and WPF UI Contributors
+- Microsoft Fluent System Icons copyright (c) 2020 Microsoft Corporation
+- License: MIT
+- Exact upstream license and bundled component notices are copied into release
+  packages as `licenses/WPF-UI-LICENSE.md` and
+  `licenses/WPF-UI-ThirdPartyNotices.txt`.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+## Inno Setup installer engine
+
+The Windows Setup executable is built with Inno Setup 6.7.3. The compiler is
+downloaded from the official JRSoftware GitHub release and verified against the
+SHA-256 recorded in `scripts/inno-runtime-manifest.psd1`. The generated Setup
+engine is redistributed under the Inno Setup License:
+https://jrsoftware.org/files/is/license.txt
+
+# Linux port components
+
+The components in this section are used only by the Linux build of this fork.
+The Linux build vendors no prebuilt binaries: every component below is either a
+system library resolved at build time or built from upstream source. See
+`docs/LINUX_PORT.md` for the fork's modification notice.
+
+## UxPlay
+
+The Linux wireless receiver replaces the Windows-only vendored
+`airplay2dll.dll` with UxPlay's AirPlay receiver library, built from upstream
+source. UxPlay is GPL-3.0, which is compatible with this project's
+GPL-3.0-only license. UxPlay itself incorporates PlayFair (GPL-3.0) and
+llhttp (MIT); those notices travel with the UxPlay source tree.
+
+- Project: https://github.com/FDH2/UxPlay
+- License: GNU General Public License v3.0
+
+## libplacebo
+
+Used by the Linux preview renderer for NV12/P010 handling, colour management,
+PQ/HLG tone mapping and dmabuf import. Dynamically linked.
+
+- Project: https://code.videolan.org/videolan/libplacebo
+- License: GNU Lesser General Public License 2.1 or later
+
+## FFmpeg
+
+The Linux build decodes H.264/HEVC and AAC/ALAC through the distribution's
+FFmpeg libraries (`libavcodec`, `libavutil`, `libswresample`, `libswscale`)
+instead of the vendored Windows FFmpeg runtime. Dynamically linked.
+
+- Project: https://ffmpeg.org/
+- License: GNU Lesser General Public License 2.1 or later, depending on the
+  distribution's build configuration
+
+## libusb
+
+The Linux USB transport links against the distribution's libusb-1.0 rather
+than the vendored Windows headers, import library and DLL under
+`third_party/libusb/`. Dynamically linked.
+
+- Project: https://github.com/libusb/libusb
+- License: GNU Lesser General Public License 2.1 or later
+
+## Avahi
+
+DNS-SD service registration and browsing use Avahi's `libdns_sd` compatibility
+layer, which replaces this project's Windows-only `DnsSdShim`. Dynamically
+linked.
+
+- Project: https://github.com/avahi/avahi
+- License: GNU Lesser General Public License 2.1 or later
+
+## PipeWire
+
+Audio playback on Linux uses PipeWire's client library in place of WASAPI.
+Dynamically linked.
+
+- Project: https://gitlab.freedesktop.org/pipewire/pipewire
+- License: MIT
+
+## systemd libudev
+
+Linux USB device discovery uses libudev in place of SetupAPI and cfgmgr32.
+Dynamically linked.
+
+- Project: https://github.com/systemd/systemd
+- License: GNU Lesser General Public License 2.1 or later
+
+## Avalonia
+
+The Linux graphical shell replaces the Windows-only WPF and WPF-UI user
+interface with Avalonia, resolved as a NuGet dependency.
+
+- Project: https://github.com/AvaloniaUI/Avalonia
+- License: MIT
+
+## Fluent System Icons
+
+The OpenHarmony shell replaces the WPF-UI `SymbolIcon` glyphs (which render the
+Fluent System Icons font) with the icons' own vector paths, drawn by ArkUI's
+`Shape` + `Path`. The unmodified SVG sources are vendored under
+`tools/fluent-icons/`, and `tools/gen_fluent_icons.py` turns them into
+`entry/src/main/ets/common/FluentIcon.ets`. No coordinate is altered.
+
+- Project: https://github.com/microsoft/fluentui-system-icons
+- Copyright (c) Microsoft Corporation
+- License: MIT
+- Upstream license: https://github.com/microsoft/fluentui-system-icons/blob/main/LICENSE
+
+## OpenHarmony system libraries (no third-party binary bundled)
+
+The OpenHarmony media, audio, USB and graphics backends in
+`entry/src/main/cpp/ohos/` link only against system NDK libraries that ship with
+the OS and are resolved at load time — `libusb_ndk.z.so` (USB DDK),
+`libnative_media_vdec.so` / `libnative_media_codecbase.so` /
+`libnative_media_core.so` (AVCodec), `libohaudio.so` (OHAudio),
+`libnative_window.so` and `libEGL.so` / `libGLESv3.so`
+(NativeWindow / GLES). No third-party binary is redistributed with this port.
+
+All third-party components are provided without warranty.

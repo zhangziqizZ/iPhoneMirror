@@ -1,0 +1,163 @@
+name: Bug 报告
+description: 提交一个明确的 bug — 包含现象、复现步骤、诊断文本。
+title: "[Bug] "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        > 提交前请先看 [SUPPORT.md](../../blob/main/SUPPORT.md) ——
+        > 包含「必读的三步自查」「必填信息清单」「已知不实现的清单」。
+        > 
+        > **⚠ 蓝牙反向控制仍在实现阶段，不保证可用** —— iPhone 上可能始终不出现指针。
+        > 这条的反馈很欢迎（我们需要现场数据），但请先读 SUPPORT.md 的 § 〇，
+        > 确认这不是已知情况，并**务必贴上下面的诊断文本**。
+        > 
+        > **不要**在 issue 里贴 UDID、ECID、序列号、配对记录、USB 抓包等敏感信息。
+        > 详见 [SECURITY.md](../../blob/main/SECURITY.md)。
+
+  - type: input
+    id: app_version
+    attributes:
+      label: App 版本
+      description: 设置面板底部 / 「关于」页（例如 1.0.23 / versionCode 1000023）
+      placeholder: "1.0.23 / 1000023"
+    validations:
+      required: true
+
+  - type: input
+    id: harmonyos_version
+    attributes:
+      label: 鸿蒙 PC 系统版本
+      description: 设置 → 关于本机 → 系统版本
+      placeholder: "HarmonyOS NEXT 5.0.0.120"
+    validations:
+      required: true
+
+  - type: input
+    id: harmonyos_model
+    attributes:
+      label: 鸿蒙电脑型号
+      placeholder: "HUAWEI MateBook X Pro 2024"
+    validations:
+      required: true
+
+  - type: input
+    id: iphone_ios
+    attributes:
+      label: iPhone 型号 + iOS 版本
+      placeholder: "iPhone 15 Pro / iOS 18.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: problem_area
+    attributes:
+      label: 问题所属模块
+      description: 选择最贴近的一项
+      options:
+        - 蓝牙反向控制（实验性 · 仍在实现阶段、不保证可用）
+        - AirPlay 无线接收（iPhone 屏幕镜像）
+        - USB 有线投屏
+        - 预览渲染 / 画质
+        - 音频播放
+        - 启动 / 安装 / 权限
+        - UI / 控件 / 文案
+        - 其他 / 不确定
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: 问题描述
+      description: 一句话说清楚现象
+      placeholder: |
+        例：iPhone 上没有鼠标指针；本机指针在窗口里被藏了（=接管成立），但 iPhone 上从头到尾没出现自己的鼠标指针。
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 复现步骤
+      description: 从打开应用到现象出现的完整路径
+      placeholder: |
+        1. 打开应用
+        2. 鼠标移到投屏画面上
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected_actual
+    attributes:
+      label: 期望行为 + 实际行为
+      description: 你认为应该怎样 + 实际怎样
+      placeholder: |
+        期望：iPhone 上出现鼠标指针
+        实际：iPhone 上从头到尾没有指针
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnosis
+    attributes:
+      label: 诊断文本（点击「复制诊断」按钮的输出）
+      description: |
+        在投屏设置 → 蓝牙反控鼠标设置（或无线 AirPlay）卡片里点「**复制诊断**」按钮，
+        把那段完整文本贴在这里。
+        
+        **没有它就只能来回追问** — 详见 SUPPORT.md § 二 步骤 A。
+      placeholder: |
+        （必填）例如：
+        主机 读0 写0 订阅0
+        已配对1台(命中)
+        最近主机动作
+        描述符
+    validations:
+      required: true
+
+  - type: dropdown
+    id: ios_prechecks
+    attributes:
+      label: iOS 端三步（蓝牙反控类问题必填）
+      description: |
+        蓝牙反控类问题**必须**全部做过这三步 ——
+        缺一步提的 issue 会被退回去重做。
+        
+        ①「设置 → 蓝牙」打开蓝牙、「其他设备」列表里手动点配对
+        ②「设置 → 辅助功能 → 触控 → 辅助触控」开启
+        ③「设置 → 辅助功能 → 触控 → 辅助触控 → 设备 → 蓝牙设备」里配对这台电脑
+      options:
+        - 三步全做了
+        - 只做了 ①②
+        - 只做了 ①
+        - 没做（我先回去做一遍再提）
+        - 不适用（非蓝牙反控问题）
+    validations:
+      required: true
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: 截图 / 录屏
+      description: |
+        可选 ——
+        但 UI 改动类 bug **强烈建议**附图。截图请用系统截图工具，
+        不要在云相册里生成（带隐私元数据）。
+
+  - type: dropdown
+    id: security_check
+    attributes:
+      label: 隐私自检
+      description: |
+        我已确认本 issue **不**包含以下任何一项：
+        UDID / ECID / 序列号 / Wi-Fi 密码 / USB 抓包 / 蓝牙配对记录 / AirPlay 凭据 /
+        个人身份信息截图。
+        详见 SECURITY.md。
+      options:
+        - 我已确认
+        - 我不确定（会被退回去重做）
+    validations:
+      required: true

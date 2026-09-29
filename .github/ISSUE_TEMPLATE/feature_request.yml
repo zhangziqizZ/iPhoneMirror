@@ -1,0 +1,93 @@
+name: 功能请求
+description: 提议一个新功能或改进 ——
+title: "[Feature] "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        > 提功能请求前请先看 [SUPPORT.md](../../blob/main/SUPPORT.md) § 一 —
+        > 那里列出了**本项目不计划实现**的功能清单。
+        > 命中清单的功能会被直接关闭，请先看一遍。
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: 功能类别
+      options:
+        - 蓝牙反控（鼠标/键盘 · 实验性，仍在实现阶段）
+        - USB 反控（触摸/手势）
+        - AirPlay 接收
+        - USB 投屏
+        - 音频 / 视频
+        - 预览 / 渲染
+        - 录制 / 截图 / 推流
+        - UI / 交互
+        - 性能 / 稳定性
+        - 其他 / 不确定
+    validations:
+      required: true
+
+  - type: input
+    id: title
+    attributes:
+      label: 一句话标题
+      description: 50 字内说清要什么
+      placeholder: "支持滚轮手势在 iPhone 屏幕上滚动"
+    validations:
+      required: true
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: 动机 / 用例
+      description: |
+        哪个**场景**下需要这个功能？解决了什么**痛点**？
+        如果有具体使用流程，描述一下从打开应用到完成这件事的路径。
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed_solution
+    attributes:
+      label: 你设想的方案（可选）
+      description: |
+        如果你已经有了具体想法 ——
+        比如"在蓝牙 HID 里加一个 Consumer Control 特征，专门做音量键"。
+        没想法就跳过，描述清楚场景即可。
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 备选方案（可选）
+      description: |
+        还有没有别的办法解决同样的痛点？
+        现有功能能不能 workaround（临时方案）？
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: 优先级（你的主观判断）
+      description: 仅供参考 ——
+      不会因为标"高"就优先做，但能帮我们排序
+      options:
+        - 低（有了更好，没有也能用）
+        - 中（偶尔碰到，会难受）
+        - 高（每次用到都卡，影响日常）
+        - 阻塞（没它这功能基本没法用）
+    validations:
+      required: true
+
+  - type: dropdown
+    id: upstream_check
+    attributes:
+      label: 是否在 SUPPORT.md § 一「已知不实现」清单里？
+      description: |
+        如果**是**：本项目**不计划实现**，提了也会被关闭。
+        如果**不确定**：留空，先不提，往下看说明。
+      options:
+        - 不在清单
+        - 在清单（提了会被关闭）
+        - 不确定
+    validations:
+      required: true

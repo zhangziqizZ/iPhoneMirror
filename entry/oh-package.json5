@@ -1,0 +1,13 @@
+{
+  "name": "entry",
+  "version": "1.0.0",
+  "description": "iPhoneMirror 鸿蒙 PC 投屏主模块",
+  "main": "",
+  "author": "",
+  "license": "GPL-3.0-only",
+  "dependencies": {
+    // libim_core.so 是 NAPI 模块（CPP 构建产物），类型声明在
+    // src/main/cpp/types/libim_core/ 下。ArkTS 里 import ... from 'libim_core.so'。
+    "libim_core.so": "file:./src/main/cpp/types/libim_core"
+  }
+}

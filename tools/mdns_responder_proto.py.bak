@@ -1,0 +1,277 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# mdns_responder_proto.py —— AirPlay mDNS 响应器「原型」
+#
+# 目的：在不重新构建 HAP 的前提下，于本机（192.168.0.108）用原生 UDP 套接字
+# 直接回答局域网的 mDNS 查询，验证「iPhone 能否发现我们」这件事到底卡在
+# @ohos.net.mdns 还是别的环节。已证实本机没有常驻 mDNS 守护进程、5353 可独占绑定。
+#
+# 用法：python3 tools/mdns_responder_proto.py
+#   后台运行；iPhone 打开「屏幕镜像」时应能看到 "iPhoneMirror AirPlay"。
+#   日志会打印收到的查询与发出的应答，方便确认 iPhone 确实在问。
+#
+# 注意：这是**发现层**原型。它把服务宣告到网上，但背后没有真正的 AirPlay
+# TCP 服务在监听（端口是占位值），所以 iPhone 即便点进去也会连不上 ——
+# 这不影响「能不能被发现」的验证。真正出画要等把这段逻辑移植进原生层
+# （那时端口用的是 vendored 库真实绑定的端口）。
+
+import socket
+import struct
+import subprocess
+import sys
+import time
+
+MCAST_GROUP = "224.0.0.251"
+MCAST_PORT = 5353
+LOCAL_IP = "192.168.0.108"
+
+# 用户可见的接收端名称（与 App 里的输入框默认值一致）
+SERVICE_NAME = "iPhoneMirror AirPlay"
+AIRPLAY_PORT = 7000   # 原型占位；真移植时用 vendored 库实际端口
+RAOP_PORT = 5000      # 原型占位
+HOSTNAME = "iphonemirror.local"
+
+# ── AirPlay / RAOP 常量（与 vendored 库 dnssd_ohos.c / global.h / dnssdint.h 对齐）──
+GLOBAL_VERSION = "845.5.1"
+FEATURES = "0x5A7FFEE6,0x00000000"
+MODEL = "AppleTV14,1"
+RAOP_SF = "0x4"
+RAOP_VV = "2"
+
+
+def get_wlan0_mac() -> str:
+    for path in ("/sys/class/net/wlan0/address", "/sys/class/net/wlan1/address"):
+        try:
+            with open(path) as f:
+                return f.read().strip().lower()
+        except OSError:
+            pass
+    try:
+        out = subprocess.check_output(["ip", "link", "show", "wlan0"],
+                                      stderr=subprocess.DEVNULL).decode()
+        for tok in out.split():
+            if len(tok) == 17 and tok.count(":") == 5:
+                return tok.lower()
+    except Exception:
+        pass
+    return "aa:bb:cc:dd:ee:ff"
+
+
+MAC = get_wlan0_mac()
+DEVICEID = MAC
+AIRPLAY_INSTANCE = f"{SERVICE_NAME}._airplay._tcp.local"
+RAOP_INSTANCE = f"{DEVICEID}@{SERVICE_NAME}._raop._tcp.local"
+
+
+# ─────────────────────────── DNS 编码工具 ───────────────────────────
+
+def enc_name(name: str) -> bytes:
+    out = b""
+    for label in name.split("."):
+        if label == "":
+            continue
+        b = label.encode("utf-8")
+        out += bytes([len(b)]) + b
+    return out + b"\x00"
+
+
+def dec_name(data: bytes, off: int):
+    labels = []
+    i = off
+    while True:
+        length = data[i]
+        if length == 0:
+            i += 1
+            break
+        if length & 0xC0 == 0xC0:
+            ptr = ((length & 0x3F) << 8) | data[i + 1]
+            sub, _ = dec_name(data, ptr)
+            labels.append(sub)
+            i += 2
+            break
+        labels.append(data[i + 1:i + 1 + length].decode("utf-8", "replace"))
+        i += 1 + length
+    return ".".join(labels), i
+
+
+def txt_bytes(pairs: list) -> bytes:
+    out = b""
+    for k, v in pairs:
+        entry = f"{k}={v}" if v != "" else k
+        b = entry.encode("utf-8")
+        out += bytes([len(b)]) + b
+    return out
+
+
+def srv_bytes(target: str, port: int) -> bytes:
+    return struct.pack(">HHH", 0, 0, port) + enc_name(target)
+
+
+def resource_record(name: str, rtype: int, rdata: bytes, ttl=4500,
+                    cache_flush=True) -> bytes:
+    rclass = 0x0001 | (0x8000 if cache_flush else 0)
+    return enc_name(name) + struct.pack(">HHIH", rtype, rclass, ttl, len(rdata)) + rdata
+
+
+def airplay_txt() -> list:
+    return [
+        ("srcvers", GLOBAL_VERSION), ("deviceid", DEVICEID),
+        ("features", FEATURES), ("model", MODEL),
+        ("flags", RAOP_SF), ("vv", RAOP_VV),
+    ]
+
+
+def raop_txt() -> list:
+    return [
+        ("txtvers", "1"), ("ch", "2"), ("cn", "0,1,3"), ("et", "0,3,5"),
+        ("sv", "false"), ("da", "true"), ("sr", "44100"), ("ss", "16"),
+        ("pw", "false"), ("vn", "3"), ("tp", "TCP,UDP"), ("md", "0,1,2"),
+        ("vs", GLOBAL_VERSION), ("sm", "false"), ("ek", "1"), ("sf", RAOP_SF),
+        ("ft", FEATURES), ("am", MODEL),
+    ]
+
+
+def airplay_bundle() -> bytes:
+    out = b""
+    out += resource_record("_airplay._tcp.local", 12, enc_name(AIRPLAY_INSTANCE),
+                           cache_flush=False)
+    out += resource_record(AIRPLAY_INSTANCE, 33, srv_bytes(HOSTNAME, AIRPLAY_PORT))
+    out += resource_record(AIRPLAY_INSTANCE, 16, txt_bytes(airplay_txt()))
+    out += resource_record(HOSTNAME, 1, socket.inet_aton(LOCAL_IP))
+    return out
+
+
+def raop_bundle() -> bytes:
+    out = b""
+    out += resource_record("_raop._tcp.local", 12, enc_name(RAOP_INSTANCE),
+                           cache_flush=False)
+    out += resource_record(RAOP_INSTANCE, 33, srv_bytes(HOSTNAME, RAOP_PORT))
+    out += resource_record(RAOP_INSTANCE, 16, txt_bytes(raop_txt()))
+    out += resource_record(HOSTNAME, 1, socket.inet_aton(LOCAL_IP))
+    return out
+
+
+def answer_for(qname: str) -> bytes:
+    q = qname.lower()
+    if q == "_airplay._tcp.local":
+        return airplay_bundle()
+    if q == "_raop._tcp.local":
+        return raop_bundle()
+    if q == AIRPLAY_INSTANCE.lower():
+        return (resource_record(AIRPLAY_INSTANCE, 33, srv_bytes(HOSTNAME, AIRPLAY_PORT))
+                + resource_record(AIRPLAY_INSTANCE, 16, txt_bytes(airplay_txt()))
+                + resource_record(HOSTNAME, 1, socket.inet_aton(LOCAL_IP)))
+    if q == RAOP_INSTANCE.lower():
+        return (resource_record(RAOP_INSTANCE, 33, srv_bytes(HOSTNAME, RAOP_PORT))
+                + resource_record(RAOP_INSTANCE, 16, txt_bytes(raop_txt()))
+                + resource_record(HOSTNAME, 1, socket.inet_aton(LOCAL_IP)))
+    if q == HOSTNAME.lower():
+        return resource_record(HOSTNAME, 1, socket.inet_aton(LOCAL_IP))
+    return b""
+
+
+def count_records(body: bytes) -> int:
+    n = 0
+    i = 0
+    while i < len(body):
+        j = i
+        while body[j] != 0:
+            if body[j] & 0xC0 == 0xC0:
+                j += 2
+                break
+            j += 1 + body[j]
+        else:
+            j += 1
+        rdlen = struct.unpack(">H", body[j + 8:j + 10])[0]
+        i = j + 10 + rdlen
+        n += 1
+    return n
+
+
+def response(qname: str, qtype: int, qclass: int, answers: bytes) -> bytes:
+    flags = 0x8400  # QR=1, AA=1
+    ancount = count_records(answers)
+    header = struct.pack(">HHHHHH", 0, flags, 1, ancount, 0, 0)
+    question = enc_name(qname) + struct.pack(">HH", qtype, qclass & 0x7FFF)
+    return header + question + answers
+
+
+def announcement(answers: bytes) -> bytes:
+    """主动宣告：qd=0，全部放 answer 段。"""
+    flags = 0x8400
+    ancount = count_records(answers)
+    header = struct.pack(">HHHHHH", 0, flags, 0, ancount, 0, 0)
+    return header + answers
+
+
+def main():
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+    except OSError:
+        pass
+    sock.bind(("0.0.0.0", MCAST_PORT))
+    mreq = struct.pack("4s4s", socket.inet_aton(MCAST_GROUP), socket.inet_aton("0.0.0.0"))
+    sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+    sock.settimeout(1.0)
+
+    print(f"[responder] 本机 {LOCAL_IP}  mac={MAC}", flush=True)
+    print(f"[responder] AirPlay 实例: {AIRPLAY_INSTANCE}", flush=True)
+    print(f"[responder] RAOP 实例:    {RAOP_INSTANCE}", flush=True)
+    print(f"[responder] 监听 {MCAST_GROUP}:{MCAST_PORT} ... (Ctrl-C 退出)", flush=True)
+
+    def announce_once():
+        for bundle in (airplay_bundle(), raop_bundle()):
+            sock.sendto(announcement(bundle), (MCAST_GROUP, MCAST_PORT))
+
+    for _ in range(3):
+        announce_once()
+        time.sleep(0.4)
+    print("[responder] 已主动宣告，等待 iPhone 查询…")
+
+    last_announce = time.time()
+    while True:
+        try:
+            data, addr = sock.recvfrom(4096)
+        except socket.timeout:
+            if time.time() - last_announce > 5:
+                announce_once()
+                last_announce = time.time()
+            continue
+
+        print(f"[{time.strftime('%H:%M:%S')}] RAW 收到来自 {addr[0]}:{addr[1]} 的 {len(data)} 字节", flush=True)
+        if len(data) < 12:
+            continue
+        qd = struct.unpack(">H", data[4:6])[0]
+        off = 12
+        for _ in range(qd):
+            try:
+                qname, off = dec_name(data, off)
+            except Exception:
+                break
+            if off + 4 > len(data):
+                break
+            qtype, qclass = struct.unpack(">HH", data[off:off + 4])
+            off += 4
+            ql = qname.lower()
+            if ql in (AIRPLAY_INSTANCE.lower(), RAOP_INSTANCE.lower(),
+                      "_airplay._tcp.local", "_raop._tcp.local", HOSTNAME.lower()):
+                answers = answer_for(qname)
+                if answers:
+                    resp = response(qname, qtype, qclass, answers)
+                    try:
+                        sock.sendto(resp, addr)
+                        print(f"[{time.strftime('%H:%M:%S')}] {addr[0]}:{addr[1]} "
+                              f"查询 {qname} (type={qtype}) → 应答 {count_records(answers)} 条")
+                    except OSError as e:
+                        print(f"[responder] 发送失败: {e}")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n[responder] 退出")
+        sys.exit(0)

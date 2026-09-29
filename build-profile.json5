@@ -1,0 +1,49 @@
+{
+  "app": {
+    "products": [
+      {
+        "name": "default",
+        "compatibleSdkVersion": "6.1.0(23)",
+        "compileSdkVersion": "6.1.0(23)",
+        "targetSdkVersion": "6.1.0(23)",
+        "runtimeOS": "HarmonyOS",
+        "buildOption": {
+          "strictMode": {
+            "caseSensitiveCheck": true,
+            "useNormalizedOHMUrl": true
+          }
+        },
+        "signingConfig": "default"
+      }
+    ],
+    "signingConfigs": [
+      {
+        "name": "default",
+        "material": {
+          "storePassword": "00000020B63EF9A84630F8ABA3D1D4175DA929909844899E66E9022CF9EFF7E9CBF3CAE4F6785F734405340A0923072E",
+          "certpath": "/storage/Users/currentUser/Documents/ohos/config/default_iPhoneMirror-ohosE-ruv-wiSXCxcYNEO_d25wptlUB44-wkzK2SOce9chk.cer",
+          "keyAlias": "debugKey",
+          "keyPassword": "00000020B63EF9A84630F8ABA3D1D4175DA929909844899E66E9022CF9EFF7E9CBF3CAE4F6785F734405340A0923072E",
+          "profile": "/storage/Users/currentUser/Documents/ohos/config/default_iPhoneMirror-ohosE-ruv-wiSXCxcYNEO_d25wptlUB44-wkzK2SOce9chk.p7b",
+          "signAlg": "SHA256withECDSA",
+          "storeFile": "/storage/Users/currentUser/Documents/ohos/config/default_iPhoneMirror-ohosE-ruv-wiSXCxcYNEO_d25wptlUB44-wkzK2SOce9chk.p12"
+        },
+        "type": "HarmonyOS"
+      }
+    ]
+  },
+  "modules": [
+    {
+      "name": "entry",
+      "srcPath": "./entry",
+      "targets": [
+        {
+          "name": "default",
+          "applyToProducts": [
+            "default"
+          ]
+        }
+      ]
+    }
+  ]
+}

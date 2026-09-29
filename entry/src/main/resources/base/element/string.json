@@ -1,0 +1,60 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "iPhoneMirror 鸿蒙 PC 投屏模块"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "iPhoneMirror 主能力"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "iPhoneMirror"
+    },
+    {
+      "name": "usb_perm_reason",
+      "value": "需要访问已连接的 iPhone USB 设备以建立屏幕镜像通道"
+    },
+    {
+      "name": "usb_ddk_perm_reason",
+      "value": "需要通过 USB DDK 对 iPhone 的 USB 端点直接收发数据（usbmux 握手与音视频流）"
+    },
+    {
+      "name": "usb_driver_ext_perm_reason",
+      "value": "需要向系统注册 Apple（VID 0x05AC）设备的 USB 扩展外设驱动，否则系统不会把该设备交给本应用"
+    },
+    {
+      "name": "usb_driver_acl_perm_reason",
+      "value": "需要在扩展外设驱动生命周期内访问 USB DDK 设备驱动"
+    },
+    {
+      "name": "DriverExtAbility_desc",
+      "value": "Apple iPhone/iPad USB 采集扩展驱动"
+    },
+    {
+      "name": "StandalonePreviewAbility_desc",
+      "value": "iPhone 画面的独立预览窗口（主窗口最小化后仍可显示）"
+    },
+    {
+      "name": "StandalonePreviewAbility_label",
+      "value": "iPhoneMirror 独立预览"
+    },
+    {
+      "name": "DriverExtAbility_label",
+      "value": "iPhoneMirror USB 驱动"
+    },
+    {
+      "name": "net_perm_reason",
+      "value": "AirPlay 无线接收端需要监听网络端口以接收投屏数据"
+    },
+    {
+      "name": "bg_running_perm_reason",
+      "value": "投屏/镜像过程中需要在后台持续响应 iPhone 的连接与音视频数据"
+    },
+    {
+      "name": "bluetooth_perm_reason",
+      "value": "蓝牙反向控制需要把本机蓝牙作为输入设备（BLE HID）向 iPhone 广播，以转发鼠标与键盘操作"
+    }
+  ]
+}

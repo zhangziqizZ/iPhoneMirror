@@ -1,0 +1,42 @@
+#!/bin/sh
+#
+# hvigor command-line launcher.
+# 本文件用于「命令行构建」；用 DevEco Studio 打开本工程点击 Build 时会使用其自带的 hvigor。
+# 首次命令行构建前需先执行 `ohpm install`（或 DevEco 的 Sync）以下载 hvigor 运行时。
+#
+# 典型用法：
+#   ./hvigorw assembleHap        # 构建 debug HAP
+#   ./hvigorw assembleApp        # 构建 APP（含多模块）
+#   ./hvigorw clean              # 清理
+#
+# 解析软链得到脚本真实位置
+PRG="$0"
+while [ -h "$PRG" ]; do
+    ls=$(ls -ld "$PRG")
+    link=$(expr "$ls" : '.*-> \(.*\)$')
+    if expr "$link" : '/.*' > /dev/null; then
+        PRG="$link"
+    else
+        PRG="$(dirname "$PRG")/$link"
+    fi
+done
+APP_HOME=$(cd "$(dirname "$PRG")" && pwd)
+
+# Java 命令：优先 JAVA_HOME，否则用 PATH 中的 java
+if [ -n "$JAVA_HOME" ] && [ -x "$JAVA_HOME/bin/java" ]; then
+    JAVACMD="$JAVA_HOME/bin/java"
+elif command -v java >/dev/null 2>&1; then
+    JAVACMD="java"
+else
+    echo "ERROR: JAVA_HOME 未设置且 PATH 中找不到 java 命令。" >&2
+    exit 1
+fi
+
+# hvigor 运行时 jar（由 ohpm install 下载到 $APP_HOME/hvigor/）
+CLASSPATH="$APP_HOME/hvigor/hvigor-*.jar"
+
+exec "$JAVACMD" \
+    -Dorg.gradle.appname=hvigorw \
+    -classpath "$CLASSPATH" \
+    com.huawei.hvigor.client.cli.HvigorCli \
+    "$@"

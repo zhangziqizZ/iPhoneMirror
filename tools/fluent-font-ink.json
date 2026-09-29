@@ -1,0 +1,277 @@
+{
+ "_comment": "由 tools/gen_font_ink.py 从 FluentSystemIcons-Regular.ttf 生成，勿手改",
+ "_unitsPerEm": 500,
+ "_meaning": "ink: 字形墨迹包围盒（字体单位，xMin/yMin/xMax/yMax）",
+ "glyphs": {
+  "Add20": {
+   "glyph": "ic_fluent_add_20_regular",
+   "ink": [
+    0,
+    0,
+    438,
+    438
+   ],
+   "advance": 500
+  },
+  "ArrowClockwise20": {
+   "glyph": "ic_fluent_arrow_clockwise_20_regular",
+   "ink": [
+    0,
+    0,
+    428,
+    429
+   ],
+   "advance": 500
+  },
+  "Bluetooth20": {
+   "glyph": "ic_fluent_bluetooth_20_regular",
+   "ink": [
+    0,
+    0,
+    351,
+    453
+   ],
+   "advance": 500
+  },
+  "Cursor20": {
+   "glyph": "ic_fluent_cursor_20_regular",
+   "ink": [
+    0,
+    0,
+    451,
+    450
+   ],
+   "advance": 500
+  },
+  "Delete20": {
+   "glyph": "ic_fluent_delete_20_regular",
+   "ink": [
+    0,
+    0,
+    451,
+    463
+   ],
+   "advance": 500
+  },
+  "DeveloperBoard20": {
+   "glyph": "ic_fluent_developer_board_20_regular",
+   "ink": [
+    0,
+    0,
+    451,
+    451
+   ],
+   "advance": 500
+  },
+  "Dismiss20": {
+   "glyph": "ic_fluent_dismiss_20_regular",
+   "ink": [
+    0,
+    0,
+    401,
+    401
+   ],
+   "advance": 500
+  },
+  "ErrorCircle20": {
+   "glyph": "ic_fluent_error_circle_20_regular",
+   "ink": [
+    0,
+    0,
+    450,
+    451
+   ],
+   "advance": 500
+  },
+  "FullScreenMaximize20": {
+   "glyph": "ic_fluent_full_screen_maximize_20_regular",
+   "ink": [
+    0,
+    0,
+    426,
+    426
+   ],
+   "advance": 500
+  },
+  "ImageEdit20": {
+   "glyph": "ic_fluent_image_edit_20_regular",
+   "ink": [
+    0,
+    0,
+    476,
+    425
+   ],
+   "advance": 500
+  },
+  "Info24": {
+   "glyph": "ic_fluent_info_24_regular",
+   "ink": [
+    0,
+    0,
+    459,
+    459
+   ],
+   "advance": 500
+  },
+  "KeyboardShift16": {
+   "glyph": "ic_fluent_keyboard_shift_16_regular",
+   "ink": [
+    0,
+    0,
+    439,
+    469
+   ],
+   "advance": 500
+  },
+  "Maximize20": {
+   "glyph": "ic_fluent_maximize_20_regular",
+   "ink": [
+    0,
+    0,
+    425,
+    425
+   ],
+   "advance": 500
+  },
+  "Open20": {
+   "glyph": "ic_fluent_open_20_regular",
+   "ink": [
+    0,
+    0,
+    426,
+    426
+   ],
+   "advance": 500
+  },
+  "Pause20": {
+   "glyph": "ic_fluent_pause_20_regular",
+   "ink": [
+    0,
+    0,
+    425,
+    450
+   ],
+   "advance": 500
+  },
+  "PhoneDesktop24": {
+   "glyph": "ic_fluent_phone_desktop_24_regular",
+   "ink": [
+    0,
+    0,
+    459,
+    459
+   ],
+   "advance": 500
+  },
+  "Play20": {
+   "glyph": "ic_fluent_play_20_regular",
+   "ink": [
+    0,
+    0,
+    450,
+    426
+   ],
+   "advance": 500
+  },
+  "ProjectionScreen24": {
+   "glyph": "ic_fluent_projection_screen_24_regular",
+   "ink": [
+    0,
+    0,
+    460,
+    438
+   ],
+   "advance": 500
+  },
+  "Screenshot20": {
+   "glyph": "ic_fluent_screenshot_20_regular",
+   "ink": [
+    0,
+    0,
+    426,
+    425
+   ],
+   "advance": 500
+  },
+  "Settings24": {
+   "glyph": "ic_fluent_settings_24_regular",
+   "ink": [
+    0,
+    0,
+    446,
+    454
+   ],
+   "advance": 500
+  },
+  "SpeakerMute20": {
+   "glyph": "ic_fluent_speaker_mute_20_regular",
+   "ink": [
+    0,
+    0,
+    450,
+    451
+   ],
+   "advance": 500
+  },
+  "Subtract20": {
+   "glyph": "ic_fluent_subtract_20_regular",
+   "ink": [
+    0,
+    0,
+    426,
+    263
+   ],
+   "advance": 500
+  },
+  "UsbPlug20": {
+   "glyph": "ic_fluent_usb_plug_20_regular",
+   "ink": [
+    0,
+    0,
+    375,
+    451
+   ],
+   "advance": 500
+  },
+  "UsbPlug24": {
+   "glyph": "ic_fluent_usb_plug_24_regular",
+   "ink": [
+    0,
+    0,
+    365,
+    459
+   ],
+   "advance": 500
+  },
+  "VideoRecording20": {
+   "glyph": "ic_fluent_video_recording_20_regular",
+   "ink": [
+    0,
+    0,
+    451,
+    401
+   ],
+   "advance": 500
+  },
+  "Warning20": {
+   "glyph": "ic_fluent_warning_20_regular",
+   "ink": [
+    0,
+    0,
+    467,
+    455
+   ],
+   "advance": 500
+  },
+  "WindowNew20": {
+   "glyph": "ic_fluent_window_new_20_regular",
+   "ink": [
+    0,
+    0,
+    425,
+    426
+   ],
+   "advance": 500
+  }
+ }
+}

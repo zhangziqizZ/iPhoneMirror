@@ -1,0 +1,445 @@
+# Platform-neutral protocol, container, bitstream, transport and decoded-video
+# code. These translation units compile with MSVC, GCC and Clang and are shared
+# by both platforms.
+set(IPHONEMIRROR_CORE_PORTABLE_SOURCES
+    src/Protocol/Plist.cpp
+    src/Protocol/QuickTimePacket.cpp
+    src/Protocol/QuickTimeSession.cpp
+    src/Media/H264.cpp
+    src/Media/CoreMedia.cpp
+    src/Media/VideoFrameCopy.cpp
+    src/Audio/PcmBufferPolicy.cpp
+    src/Text/Utf.cpp
+    src/Logging.cpp
+    src/Transport/Socket.cpp
+    src/Transport/AppleUsbSerial.cpp
+    src/Transport/AppleUsbSelection.cpp
+    src/Transport/UsbMuxClient.cpp
+    src/Transport/QtUsbTransport.cpp
+    src/Capture/CaptureSession.cpp
+)
+
+# Windows-only subsystems: Media Foundation decoding, WASAPI playback, D3D11
+# preview, SetupAPI discovery, the libusb-win32 filter transport and the named
+# pipe receiver hub. Socket and QtUsbTransport have moved to the portable list;
+# the Linux replacements for the rest live in the Linux source list.
+set(IPHONEMIRROR_CORE_WINDOWS_SOURCES
+    resources/iPhoneMirror.Core.rc
+    src/CoreApi.cpp
+    src/Media/ActiveVideoDecoder.cpp
+    src/Transport/LibUsb0Transport.cpp
+    src/Device/AppleUsbDiscovery.cpp
+    src/Device/DeviceManager.cpp
+    src/Capture/WirelessReceiverHub.cpp
+    src/Capture/WirelessCaptureSession.cpp
+    src/Media/MediaFoundationDecoder.cpp
+    src/Audio/WasapiRenderer.cpp
+    src/Renderer/D3D11PreviewRenderer.cpp
+)
+
+if(WIN32)
+    set(IPHONEMIRROR_CORE_SOURCES
+        ${IPHONEMIRROR_CORE_PORTABLE_SOURCES}
+        ${IPHONEMIRROR_CORE_WINDOWS_SOURCES})
+else()
+    # The Linux backends are added as this port progresses; see
+    # docs/LINUX_PORT.md for the phase status. The shared capture state machine
+    # builds against the media seams; the video decoder is real, the audio
+    # renderer is still a stub until the PipeWire backend lands.
+    set(IPHONEMIRROR_CORE_LINUX_SOURCES
+        src/Audio/LinuxPipeWireAudioRenderer.cpp
+        src/Device/LinuxAppleUsbDiscovery.cpp
+        src/Device/LinuxDeviceManager.cpp
+        src/Device/LinuxEnvironmentProbe.cpp
+        src/Device/LinuxUdevMonitor.cpp
+        src/Transport/LinuxUsbConfiguration.cpp
+        src/Media/LinuxFFmpegVideoDecoder.cpp
+        src/Media/LinuxMediaBackends.cpp
+        src/Media/LinuxPlaceboRenderer.cpp
+        src/Media/LinuxSharedGpuFrame.cpp)
+    set(IPHONEMIRROR_CORE_SOURCES
+        ${IPHONEMIRROR_CORE_PORTABLE_SOURCES}
+        ${IPHONEMIRROR_CORE_LINUX_SOURCES}
+        src/LinuxCoreApi.cpp
+        src/LinuxPreviewApi.cpp)
+endif()
+
+add_library(iPhoneMirror.Core SHARED ${IPHONEMIRROR_CORE_SOURCES})
+target_link_libraries(iPhoneMirror.Core PRIVATE iPhoneMirror.CompileOptions)
+
+target_compile_definitions(iPhoneMirror.Core PRIVATE
+    IPHONEMIRROR_CORE_EXPORTS
+    $<$<BOOL:${WIN32}>:UNICODE>
+    $<$<BOOL:${WIN32}>:_UNICODE>
+    $<$<BOOL:${WIN32}>:WIN32_LEAN_AND_MEAN>
+    $<$<BOOL:${WIN32}>:NOMINMAX>
+)
+
+target_include_directories(iPhoneMirror.Core
+    PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${PROJECT_SOURCE_DIR}/src/WirelessHost
+)
+
+if(WIN32)
+    target_include_directories(iPhoneMirror.Core PRIVATE
+        ${PROJECT_SOURCE_DIR}/third_party/libusb/include
+        ${PROJECT_SOURCE_DIR}/third_party/libusb-win32/include
+    )
+
+    target_link_libraries(iPhoneMirror.Core PRIVATE
+        ws2_32
+        bcrypt
+        setupapi
+        cfgmgr32
+        advapi32
+        mfplat
+        mf
+        mfuuid
+        wmcodecdspuuid
+        d3d11
+        d3dcompiler
+        dcomp
+        dxgi
+        ole32
+        avrt
+        winhttp
+        delayimp
+        "${PROJECT_SOURCE_DIR}/third_party/libusb/lib/x64/libusb-1.0.lib"
+        "${PROJECT_SOURCE_DIR}/third_party/libusb-win32/lib/x64/libusb0-dynamic.lib"
+    )
+    target_link_options(iPhoneMirror.Core PRIVATE /DELAYLOAD:libusb0.dll)
+
+    add_custom_command(TARGET iPhoneMirror.Core POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${PROJECT_SOURCE_DIR}/third_party/libusb/bin/x64/libusb-1.0.dll
+            $<TARGET_FILE_DIR:iPhoneMirror.Core>/libusb-1.0.dll
+    )
+else()
+    # QtUsbTransport in the portable source list talks to libusb-1.0 directly;
+    # the distribution library replaces the vendored Windows one. libcrypto
+    # provides the SHA-256 that BCrypt provides on Windows, used only to
+    # anonymize device serials in the log.
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(IPHONEMIRROR_LIBUSB REQUIRED IMPORTED_TARGET libusb-1.0)
+    pkg_check_modules(IPHONEMIRROR_CRYPTO REQUIRED IMPORTED_TARGET libcrypto)
+    pkg_check_modules(IPHONEMIRROR_UDEV REQUIRED IMPORTED_TARGET libudev)
+    # libavcodec decodes what Media Foundation decodes on Windows; libswscale
+    # turns whatever planar format the decoder chose into the tightly packed
+    # NV12/P010 the DecodedFrame seam promises.
+    pkg_check_modules(IPHONEMIRROR_FFMPEG REQUIRED IMPORTED_TARGET
+        libavcodec libavutil libswscale)
+    # PipeWire plays what WASAPI plays on Windows.
+    pkg_check_modules(IPHONEMIRROR_PIPEWIRE REQUIRED IMPORTED_TARGET
+        libpipewire-0.3)
+    # libplacebo on Vulkan is what replaces the D3D11 preview.
+    pkg_check_modules(IPHONEMIRROR_PLACEBO REQUIRED IMPORTED_TARGET
+        libplacebo vulkan)
+    target_link_libraries(iPhoneMirror.Core PRIVATE
+        PkgConfig::IPHONEMIRROR_LIBUSB
+        PkgConfig::IPHONEMIRROR_CRYPTO
+        PkgConfig::IPHONEMIRROR_UDEV
+        PkgConfig::IPHONEMIRROR_FFMPEG
+        PkgConfig::IPHONEMIRROR_PIPEWIRE
+        PkgConfig::IPHONEMIRROR_PLACEBO)
+endif()
+
+set_target_properties(iPhoneMirror.Core PROPERTIES
+    OUTPUT_NAME "iPhoneMirror.Core"
+    WINDOWS_EXPORT_ALL_SYMBOLS OFF
+    CXX_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN ON
+)
+
+# The libusb-win32 filter-driver helper has no Linux counterpart: a Linux host
+# changes the USB configuration through libusb-1.0 directly.
+if(WIN32)
+    add_executable(iPhoneMirror.UsbConfigurationSwitch
+        tools/UsbConfigurationSwitch.cpp)
+    target_include_directories(iPhoneMirror.UsbConfigurationSwitch PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${PROJECT_SOURCE_DIR}/third_party/libusb-win32/include)
+    target_compile_definitions(iPhoneMirror.UsbConfigurationSwitch PRIVATE
+        UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_link_libraries(iPhoneMirror.UsbConfigurationSwitch PRIVATE
+        iPhoneMirror.CompileOptions
+        cfgmgr32
+        "${PROJECT_SOURCE_DIR}/third_party/libusb-win32/lib/x64/libusb0-dynamic.lib")
+endif()
+
+if(IPHONEMIRROR_BUILD_TESTS)
+    enable_testing()
+    # CoreTests exercises the Windows capture, decoder, audio and transport
+    # stack in one binary, so it stays Windows-only until those backends have
+    # Linux implementations. The platform-neutral protocol assertions move to
+    # PortableProtocolTests below and run on both platforms.
+    if(WIN32)
+        add_executable(iPhoneMirror.Core.Tests
+            tests/CoreTests.cpp
+            src/Protocol/Plist.cpp
+            src/Protocol/QuickTimePacket.cpp
+            src/Protocol/QuickTimeSession.cpp
+            src/Media/H264.cpp
+            src/Media/CoreMedia.cpp
+            src/Media/VideoFrameCopy.cpp
+            src/Media/MediaFoundationDecoder.cpp
+            src/Media/ActiveVideoDecoder.cpp
+            src/Audio/PcmBufferPolicy.cpp
+            src/Audio/WasapiRenderer.cpp
+            src/Text/Utf.cpp
+            src/Transport/Socket.cpp
+            src/Transport/AppleUsbSerial.cpp
+            src/Transport/AppleUsbSelection.cpp
+            src/Transport/UsbMuxClient.cpp
+            src/Transport/QtUsbTransport.cpp
+            src/Transport/LibUsb0Transport.cpp
+            src/Device/AppleUsbDiscovery.cpp
+            src/Capture/CaptureSession.cpp
+            src/Capture/WirelessReceiverHub.cpp
+            src/Capture/WirelessCaptureSession.cpp
+            src/Logging.cpp
+        )
+        target_include_directories(iPhoneMirror.Core.Tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/src
+            ${PROJECT_SOURCE_DIR}/src/WirelessHost
+            ${PROJECT_SOURCE_DIR}/third_party/libusb/include
+            ${PROJECT_SOURCE_DIR}/third_party/libusb-win32/include
+        )
+        target_compile_definitions(iPhoneMirror.Core.Tests PRIVATE
+            UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX
+        )
+        target_link_libraries(iPhoneMirror.Core.Tests PRIVATE
+            iPhoneMirror.CompileOptions
+            iPhoneMirror.Core
+            "${PROJECT_SOURCE_DIR}/third_party/libusb/lib/x64/libusb-1.0.lib"
+            "${PROJECT_SOURCE_DIR}/third_party/libusb-win32/lib/x64/libusb0-dynamic.lib"
+            mfplat mf mfuuid wmcodecdspuuid d3d11 dxgi
+            ole32 advapi32 setupapi cfgmgr32 avrt winhttp
+            ws2_32
+            bcrypt
+            delayimp
+        )
+        target_link_options(iPhoneMirror.Core.Tests PRIVATE /DELAYLOAD:libusb0.dll)
+        add_custom_command(TARGET iPhoneMirror.Core.Tests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${PROJECT_SOURCE_DIR}/third_party/libusb/bin/x64/libusb-1.0.dll
+                $<TARGET_FILE_DIR:iPhoneMirror.Core.Tests>/libusb-1.0.dll
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures
+                $<TARGET_FILE_DIR:iPhoneMirror.Core.Tests>/fixtures
+        )
+        add_test(NAME CoreProtocolTests COMMAND iPhoneMirror.Core.Tests)
+        set_tests_properties(CoreProtocolTests PROPERTIES
+            WORKING_DIRECTORY $<TARGET_FILE_DIR:iPhoneMirror.Core.Tests>
+        )
+    endif()
+
+    # The plist, QuickTime framing, CoreMedia and H.264 assertions currently
+    # live inside the Windows-only CoreTests binary. Extracting them into a
+    # shared portable test target requires editing CoreTests.cpp, which cannot
+    # be compile-verified without a Windows toolchain, so that split is P2 work
+    # gated on Windows CI. See docs/LINUX_PORT.md.
+
+    add_executable(iPhoneMirror.OutputModeState.Tests
+        tests/OutputModeStateTests.cpp)
+    target_include_directories(iPhoneMirror.OutputModeState.Tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(iPhoneMirror.OutputModeState.Tests PRIVATE
+        iPhoneMirror.CompileOptions)
+    add_test(NAME OutputModeStateTests COMMAND iPhoneMirror.OutputModeState.Tests)
+
+    # Exercises the shared UTF helpers on both platforms; see Text/Utf.h.
+    add_executable(iPhoneMirror.Utf.Tests
+        tests/UtfTests.cpp
+        src/Text/Utf.cpp)
+    target_include_directories(iPhoneMirror.Utf.Tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(iPhoneMirror.Utf.Tests PRIVATE
+        iPhoneMirror.CompileOptions)
+    add_test(NAME UtfTests COMMAND iPhoneMirror.Utf.Tests)
+
+    if(NOT WIN32)
+        # The readiness verdict and its diagnostic decide what the user is told
+        # to fix, so they are tested as pure functions over a synthetic report.
+        add_executable(iPhoneMirror.LinuxEnvironmentProbe.Tests
+            tests/LinuxEnvironmentProbeTests.cpp
+            src/Device/LinuxEnvironmentProbe.cpp
+            src/Text/Utf.cpp
+            src/Transport/Socket.cpp)
+        target_include_directories(iPhoneMirror.LinuxEnvironmentProbe.Tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src)
+        target_link_libraries(iPhoneMirror.LinuxEnvironmentProbe.Tests PRIVATE
+            iPhoneMirror.CompileOptions
+            PkgConfig::IPHONEMIRROR_LIBUSB)
+        add_test(NAME LinuxEnvironmentProbeTests
+            COMMAND iPhoneMirror.LinuxEnvironmentProbe.Tests)
+
+        # WP3 acceptance tool: prints the environment report through the real C
+        # ABI. Needs no device and changes no state, so it is always built.
+        add_executable(iPhoneMirror.Linux.EnvironmentReport
+            tools/LinuxEnvironmentReport.cpp)
+        target_include_directories(iPhoneMirror.Linux.EnvironmentReport PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include)
+        target_link_libraries(iPhoneMirror.Linux.EnvironmentReport PRIVATE
+            iPhoneMirror.CompileOptions
+            iPhoneMirror.Core)
+
+        # WP5 acceptance tool: decodes a file through the real IVideoDecoder
+        # seam. Needs no device either. libavformat is linked here and nowhere
+        # else: the capture path receives samples from USB, so the library itself
+        # has no reason to know about containers.
+        pkg_check_modules(IPHONEMIRROR_FFMPEG_FORMAT REQUIRED IMPORTED_TARGET
+            libavformat)
+        add_executable(iPhoneMirror.Linux.DecodeProbe
+            tools/LinuxDecodeProbe.cpp
+            src/Media/CoreMedia.cpp
+            src/Media/H264.cpp
+            src/Media/LinuxFFmpegVideoDecoder.cpp
+            src/Media/LinuxSharedGpuFrame.cpp
+            src/Media/VideoFrameCopy.cpp
+            src/Protocol/QuickTimePacket.cpp)
+        target_include_directories(iPhoneMirror.Linux.DecodeProbe PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src)
+        target_link_libraries(iPhoneMirror.Linux.DecodeProbe PRIVATE
+            iPhoneMirror.CompileOptions
+            PkgConfig::IPHONEMIRROR_FFMPEG
+            PkgConfig::IPHONEMIRROR_FFMPEG_FORMAT)
+
+        # WP6 acceptance tool: exercises the preview C ABI the Avalonia shell
+        # will call, through the exported entry points rather than the C++ seam.
+        add_executable(iPhoneMirror.Linux.PreviewAbiProbe
+            tools/LinuxPreviewAbiProbe.cpp)
+        target_include_directories(iPhoneMirror.Linux.PreviewAbiProbe PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include)
+        target_link_libraries(iPhoneMirror.Linux.PreviewAbiProbe PRIVATE
+            iPhoneMirror.CompileOptions
+            iPhoneMirror.Core)
+
+        # WP5 acceptance tool for the renderer. Device-free and window-free: it
+        # renders a raw NV12 frame and compares the readback against the shared
+        # CPU colour maths, so the GPU pipeline is checked on its own.
+        add_executable(iPhoneMirror.Linux.RenderProbe
+            tools/LinuxRenderProbe.cpp
+            src/Media/CoreMedia.cpp
+            src/Media/LinuxPlaceboRenderer.cpp
+            src/Media/LinuxSharedGpuFrame.cpp
+            src/Media/VideoFrameCopy.cpp
+            src/Protocol/QuickTimePacket.cpp)
+        target_include_directories(iPhoneMirror.Linux.RenderProbe PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src)
+        target_link_libraries(iPhoneMirror.Linux.RenderProbe PRIVATE
+            iPhoneMirror.CompileOptions
+            PkgConfig::IPHONEMIRROR_PLACEBO)
+
+        # WP5 acceptance tool for the audio half. Also device-free: it plays a
+        # generated tone through the real renderer and reports the counters.
+        add_executable(iPhoneMirror.Linux.AudioProbe
+            tools/LinuxAudioProbe.cpp
+            src/Audio/LinuxPipeWireAudioRenderer.cpp
+            src/Audio/PcmBufferPolicy.cpp
+            src/Logging.cpp
+            src/Media/CoreMedia.cpp
+            src/Protocol/QuickTimePacket.cpp
+            src/Text/Utf.cpp)
+        target_include_directories(iPhoneMirror.Linux.AudioProbe PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src)
+        target_link_libraries(iPhoneMirror.Linux.AudioProbe PRIVATE
+            iPhoneMirror.CompileOptions
+            PkgConfig::IPHONEMIRROR_PIPEWIRE
+            PkgConfig::IPHONEMIRROR_CRYPTO)
+    endif()
+
+    add_executable(iPhoneMirror.UsbConfigurationRestorePolicy.Tests
+        tests/UsbConfigurationRestorePolicyTests.cpp)
+    target_include_directories(iPhoneMirror.UsbConfigurationRestorePolicy.Tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(iPhoneMirror.UsbConfigurationRestorePolicy.Tests PRIVATE
+        iPhoneMirror.CompileOptions)
+    add_test(NAME UsbConfigurationRestorePolicyTests
+        COMMAND iPhoneMirror.UsbConfigurationRestorePolicy.Tests)
+
+    # Header-only policy, so this builds on both platforms even though only the
+    # Linux capture path needs the recovery it describes.
+    add_executable(iPhoneMirror.UsbReenumerationPolicy.Tests
+        tests/UsbReenumerationPolicyTests.cpp)
+    target_include_directories(iPhoneMirror.UsbReenumerationPolicy.Tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(iPhoneMirror.UsbReenumerationPolicy.Tests PRIVATE
+        iPhoneMirror.CompileOptions)
+    add_test(NAME UsbReenumerationPolicyTests
+        COMMAND iPhoneMirror.UsbReenumerationPolicy.Tests)
+
+    # WP4 headless wired capture. It changes the USB configuration, so it is
+    # gated behind the same option as the Windows real-device probe.
+    if(IPHONEMIRROR_BUILD_DANGEROUS_USB_TOOLS AND NOT WIN32)
+        # The library exports only the C ABI (hidden visibility), so the tool
+        # recompiles the sources it needs, the same way CoreTests does.
+        add_executable(iPhoneMirror.Linux.HeadlessCapture
+            tools/LinuxHeadlessCapture.cpp
+            ${IPHONEMIRROR_CORE_PORTABLE_SOURCES}
+            ${IPHONEMIRROR_CORE_LINUX_SOURCES})
+        target_include_directories(iPhoneMirror.Linux.HeadlessCapture PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/src)
+        target_link_libraries(iPhoneMirror.Linux.HeadlessCapture PRIVATE
+            iPhoneMirror.CompileOptions
+            PkgConfig::IPHONEMIRROR_LIBUSB
+            PkgConfig::IPHONEMIRROR_CRYPTO
+            PkgConfig::IPHONEMIRROR_UDEV
+            PkgConfig::IPHONEMIRROR_FFMPEG
+            PkgConfig::IPHONEMIRROR_PIPEWIRE
+            PkgConfig::IPHONEMIRROR_PLACEBO)
+    endif()
+
+    if(IPHONEMIRROR_BUILD_DANGEROUS_USB_TOOLS AND WIN32)
+        add_executable(iPhoneMirror.LibUsb0Probe
+            tools/LibUsb0Probe.cpp
+            src/Transport/LibUsb0Transport.cpp
+            src/Protocol/QuickTimePacket.cpp
+        )
+        target_include_directories(iPhoneMirror.LibUsb0Probe PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src
+            ${PROJECT_SOURCE_DIR}/third_party/libusb/include
+            ${PROJECT_SOURCE_DIR}/third_party/libusb-win32/include)
+        target_link_libraries(iPhoneMirror.LibUsb0Probe PRIVATE
+            iPhoneMirror.CompileOptions
+            "${PROJECT_SOURCE_DIR}/third_party/libusb-win32/lib/x64/libusb0-dynamic.lib")
+    elseif(WIN32)
+        # Multi-config generators keep artifacts for targets removed from a
+        # later configure. Remove the old real-device probe so a default safe
+        # build cannot accidentally launch a stale binary.
+        foreach(config Debug Release RelWithDebInfo MinSizeRel)
+            file(REMOVE
+                "${CMAKE_CURRENT_BINARY_DIR}/${config}/iPhoneMirror.LibUsb0Probe.exe")
+        endforeach()
+        file(REMOVE
+            "${CMAKE_CURRENT_BINARY_DIR}/iPhoneMirror.LibUsb0Probe.exe")
+    endif()
+
+    # The pipeline switch probe drives the full capture C ABI, which is not
+    # implemented on Linux yet.
+    if(WIN32)
+        add_executable(iPhoneMirror.PipelineSwitchProbe
+            tools/PipelineSwitchProbe.cpp)
+        target_include_directories(iPhoneMirror.PipelineSwitchProbe PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include)
+        target_compile_definitions(iPhoneMirror.PipelineSwitchProbe PRIVATE
+            UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+        target_link_libraries(iPhoneMirror.PipelineSwitchProbe PRIVATE
+            iPhoneMirror.CompileOptions
+            iPhoneMirror.Core)
+    endif()
+endif()
+
+set(IPHONEMIRROR_CORE_INSTALL_TARGETS iPhoneMirror.Core)
+if(WIN32)
+    list(APPEND IPHONEMIRROR_CORE_INSTALL_TARGETS
+        iPhoneMirror.UsbConfigurationSwitch)
+endif()
+install(TARGETS ${IPHONEMIRROR_CORE_INSTALL_TARGETS}
+    RUNTIME DESTINATION .
+    LIBRARY DESTINATION .
+    ARCHIVE DESTINATION lib
+)

@@ -1,0 +1,1147 @@
+// AboutWindow.ets —— 子窗口：关于（应用信息 / 更新设置 / 诊断）
+//
+// 逐项对照上游 src/App/Windows/AboutWindow.xaml（189 行）
+//              src/App/Windows/AboutWindow.xaml.cs（241 行）
+//  上游 main（1.8.4）与 linux-port（1.8.1）两份 .xaml / .xaml.cs **逐行相同**，
+//  本文件按 main 版还原。
+//
+// ── 窗口属性（XAML 根元素 <ui:FluentWindow> 那一行）──────────────────────────
+//   Title="{DynamicResource AboutTitle}"   → 「关于」
+//   Width="760" Height="600" MinWidth="700" MinHeight="520"
+//   WindowStartupLocation="CenterOwner"    → SubWindowHost.open 里算居中
+//   ResizeMode="CanResize"                 → resizable: true
+//   ExtendsContentIntoTitleBar="True"      → decorEnabled: false + 自绘表头
+//   WindowBackdropType="Mica" / WindowCornerPreference="Round" → 由系统窗口负责
+//   Background="{DynamicResource AppBackgroundBrush}"
+//   AutomationProperties.AutomationId="AboutWindow"
+//
+// ── 行定义（3 行）＋ TabControl（3 个 TabItem）───────────────────────────────
+//   Row Auto : Grid Style=SubWindowHeader（MinHeight 44, WindowDragBehavior）
+//                StackPanel Margin="0,0,48,0"
+//                  TextBlock AboutTitle    / Style=SubWindowTitle
+//                  TextBlock AboutSubtitle / Style=SubWindowSubtitle
+//                Button SubWindowCloseButton + SymbolIcon Dismiss20/18（Click=OnCloseClick）
+//   Row 16   : 间隔                                        → shell 的 gap
+//   Row *    : TabControl Style=SubWindowTabControl         → content（layoutWeight 1）
+//              ├ TabItem Header=关于
+//              ├ TabItem Header=更新设置
+//              └ TabItem Header=诊断
+//   ★ 原版**没有**底部按钮条：四个操作按钮都在「关于」页里，
+//     所以本窗口 hasActions = false。
+//
+// ── TabItem 1「关于」（ScrollViewer + StackPanel Margin 4,14,0,0）────────────
+//   Grid：Col 88（Border 68×68 圆角 14 / PanelAltBrush 底 / BorderBrush 边，
+//                内含 Image Assets/iPhoneMirror.png 52×52）
+//         Col *（TextBlock "iPhoneMirror" SubWindowTitle
+//                TextBlock VersionText Muted 12 SemiBold Margin 0,4,0,0
+//                TextBlock AboutDescription SubWindowSubtitle Margin 0,6,0,0）
+//   Border Height 1 / BorderSoftBrush / Margin 0,20
+//   TextBlock UpdateStatusTitle / SubWindowSectionTitle
+//   TextBlock UpdateStatus / SubWindowSubtitle / Margin 0,6,0,14
+//   WrapPanel：Button「检查更新」  MinWidth 138（AboutCheckUpdatesButtonStyle）
+//              Button「GitHub」     MinWidth 96
+//              Button「更新日志」   MinWidth 108
+//              Button「许可证信息」 MinWidth 118
+//              四个都 Margin="0,0,8,8"
+//
+// ── TabItem 2「更新设置」─────────────────────────────────────────────────────
+//   TextBlock UpdateSettingsTitle / SubWindowSectionTitle
+//   TextBlock UpdateSettingsDescription / SubWindowSubtitle / Margin 0,6,0,18
+//   CheckBox CheckOnStartup            Margin 0,0,0,14
+//   CheckBox AutoDownloadUpdates       Margin 0,0,0,14
+//   CheckBox AllowUpdateMirrorFallback Margin 0,0,0,14（ToolTip=…Description）
+//   CheckBox NotifyStableReleases      Margin 0,0,0,14
+//   CheckBox NotifyPrereleaseReleases
+//
+// ── TabItem 3「诊断」─────────────────────────────────────────────────────────
+//   TextBlock DiagnosticsTitle / SubWindowSectionTitle
+//   TextBlock DiagnosticsDescription / SubWindowSubtitle / Margin 0,6,0,18
+//   TextBlock DiagnosticsLocation / SubWindowSectionTitle
+//   TextBox DiagnosticPath（OneWay / IsReadOnly / Margin 0,9,0,14 / Padding 10,7 / Wrap）
+//   TextBlock DiagnosticStatus / SubWindowSubtitle / Margin 0,0,0,14
+//   WrapPanel：Button「打开日志目录」MinWidth 126（PrimaryButton）
+//              Button「清理日志和更新缓存」MinWidth 126
+//              两个都 Margin="0,0,8,8"
+//   Border Height 1 / BorderSoftBrush / Margin 0,12,0,18
+//   Grid：TextBlock LiveLogHeader（左，SubWindowSectionTitle）
+//         Button「清空视图」（右，Padding 10,5 / MinHeight 32 / FontSize 11）
+//   TextBlock LogPathDisplay（Consolas 10 / Muted / 单行省略 / Margin 0,10,0,7）
+//   Border PreviewChromeBrush 底 / BorderBrush 边 / 圆角 10 / ClipToBounds
+//     └ TextBox LiveLogTextBox（IsReadOnly / Consolas 10 / Height 180 / Padding 10 /
+//               不换行 / 纵向滚动 / TextChanged=OnLiveLogTextChanged 自动滚到底）
+//
+// ── 文案来源 Strings.zh-CN.xaml（逐字取用）────────────────────────────────
+//   AboutTitle                        「关于」
+//   AboutSubtitle                     「应用信息、更新和诊断」
+//   AboutDescription                  「低延迟 iPhone 屏幕投射、录制、直播与虚拟摄像头。」
+//   UpdateStatusTitle                 「更新状态」
+//   UpdateStatusReady                 「可随时检查 GitHub Release 更新。」
+//   CheckForUpdates                   「检查更新」
+//   Changelog                         「更新日志」
+//   LicenseInformation                「许可证信息」
+//   UpdateSettingsTitle               「更新设置」
+//   UpdateSettingsDescription         「控制后台检查、自动下载、镜像加速和发布通道。」
+//   CheckOnStartup                    「启动时检查更新」
+//   AutoDownloadUpdates               「发现更新后自动开始下载」
+//   AllowUpdateMirrorFallback         「自动选择最快更新下载线路」
+//   AllowUpdateMirrorFallbackDescription
+//                                     「测试 GitHub 和全部镜像，仅对可达线路进行 256 KB
+//                                       下载测速；下载内容仍必须通过官方发布摘要中的
+//                                       SHA-256 校验。」
+//   NotifyStableReleases              「提醒正式版更新」
+//   NotifyPrereleaseReleases          「提醒 Beta 预览版更新」
+//   DiagnosticsTitle                  「诊断」
+//   DiagnosticsDescription            「应用错误、投屏核心和更新流程会写入本地日志，
+//                                       便于排查其他电脑上的问题。」
+//   DiagnosticsLocation               「日志位置」
+//   DiagnosticsRetentionSummary       「日志自动限制为单文件 8–16 MB，并清理超过 14 天
+//                                       或总量超过 64 MB 的旧文件。」
+//   OpenLogs                          「打开日志目录」
+//   CleanLogs                         「清理日志和更新缓存」
+//   DiagnosticsCleanedFormat          「清理完成：删除 {0} 个文件，释放 {1}；{2} 个正在
+//                                       使用或无权限的文件已跳过。」
+//   DiagnosticsCleanupFailedFormat    「清理失败：{0}」
+//   LiveLogHeader                     「实时日志  ·  Ctrl+L」
+//   ClearView                         「清空视图」
+//   LogViewCleared                    「日志视图已清空（不会删除磁盘日志）」
+//   CheckingForUpdates                「正在连接更新服务检查新版本…」
+//   AlreadyUpToDate                   「当前已是所选发布通道的最新版本。」
+//   UpdateAvailableFormat             「发现新版本 {0}。」
+//   UpdateCheckCancelled              「更新检查已取消。」
+//   UpdateCheckFailedFormat           「无法检查更新：{0}」
+//   UpdateNetworkUnavailable          「所有更新线路暂时不可用，请检查网络连接后重试。」
+//   UpdateRequestTimedOut             「连接更新服务超时，请稍后重试。」
+//
+// ── 平台替换（原版机制在鸿蒙没有对应物，逐条列出）──────────────────────────
+//   1. 【VersionText】原版 VersionManager.DisplayVersion 读程序集
+//      AssemblyInformationalVersionAttribute。鸿蒙改读
+//      bundleManager.getBundleInfoForSelf().versionName（真做，前面加 v）。
+//   2. 【应用图标】原版是 pack://application:,,,/Assets/iPhoneMirror.png（52×52）。
+//      鸿蒙工程资源里没有同名位图 → 用已有的 FluentSymbol('PhoneDesktop24') 占住
+//      同样的 68×68 圆角 14 容器，尺寸与配色不变。
+//   3. 【检查更新】原版 _app.CheckForUpdatesAsync(manual: true) 打 GitHub Releases
+//      API（含镜像测速与 SemanticVersion 比较）。鸿蒙版尚未接入该检查管线 →
+//      「检查更新」按钮保留原版文案，点击后**不假装检查成功**，而是明写
+//      「鸿蒙版尚未接入 GitHub Release 检查」，并提示可点「更新日志」直接看发布页。
+//   4. 【GitHub / 更新日志 / 许可证】原版 Process.Start(UseShellExecute=true)，
+//      本地 CHANGELOG.md / LICENSE 存在时优先用 explorer 打开。鸿蒙侧：
+//        · 三个按钮都改为用系统浏览器打开发布页/仓库页（startAbility +
+//          ACTION_VIEW，真做）；
+//        · 原版「本地文件优先、回退到 URL」的分支在鸿蒙不成立（应用安装包内没有
+//          随包 CHANGELOG/LICENSE，且没有 explorer），一律走 URL。
+//   5. 【打开日志目录】原版 Open(DiagnosticLogger.DirectoryPath) → explorer.exe。
+//      鸿蒙**没有**可由应用拉起的文件管理器接口 → 按钮保留原版文案，点击后
+//      明写原因，并把完整沙箱路径保留在上方「日志位置」文本框里。
+//   6. 【清理日志和更新缓存】原版 DiagnosticLogger.Cleanup(includeActiveLogs:true)
+//      + GitHubReleaseClient.CleanupOldDownloads(includeCompleted:true)。
+//      鸿蒙侧**真做**前半段（诊断日志目录），按原版口径统计
+//      「删除文件数 / 释放字节 / 跳过文件数」并用 DiagnosticsCleanedFormat 展示；
+//      更新缓存目录在鸿蒙侧不存在（见 3），这部分恒为 0，脚注里明说。
+//   7. 【实时日志】原版 MainViewModel.LogText 由 DiagnosticLogger 供数、500 ms
+//      轮询（DispatcherTimer）。鸿蒙侧**真做**：读取诊断日志文件尾部，
+//      同样 500 ms 刷新一次（setInterval / clearInterval），
+//      字体用 'monospace' 近似 Consolas。
+//   8. 【清空视图】原版 ClearLogCommand 只清视图不动磁盘（LogViewCleared 已写明）。
+//      鸿蒙侧一致：只把视图文本清空，不删除任何文件。
+//   9. 【更新设置的持久化】原版写 %LOCALAPPDATA%\iPhoneMirror\settings.json
+//      （UpdateSettingsStore，带 tmp + File.Move 的原子写）。鸿蒙侧改存
+//      AppStorage（见 SETTINGS_KEY_*），不新增文件写入逻辑——与本项目其它
+//      子窗口（AdvancedSettingsWindow）的通道一致。
+//  10. 【TabControl】ArkUI 有 Tabs/TabContent，可一一对应原版的三个 TabItem；
+//      页签文字与原版 Header 相同。
+//  11. 【ShowDiagnostics()】原版 AboutTabs.SelectedIndex = 2。鸿蒙侧由
+//      open_about(ctx, tabIndex) 指定初始页（2 = 诊断页）。
+//
+// ── 不做假成功 ─────────────────────────────────────────────────────────────
+//   「检查更新」不会回报「已是最新」（那是假成功）；能真做的只有「打开浏览器」、
+//   「写/清/读日志」与「读应用版本号」，其余全部明写原因。
+
+import { BusinessError } from '@ohos.base';
+import common from '@ohos.app.ability.common';
+import { hilog } from '@kit.PerformanceAnalysisKit';
+import { bundleManager, Want } from '@kit.AbilityKit';
+import { UIContext } from '@kit.ArkUI';
+import { fileIo } from '@kit.CoreFileKit';
+import {
+  SubWindowShell, SubWindowHost, SecondaryButton, PrimaryButton, RoundedTextBox,
+  section_title, hint_text,
+  SUBWINDOW_ROW_GAP, SubWindowSpec,
+} from '../../common/SubWindow';
+import {
+  ACCENT, BORDER, BORDER_SOFT, PANEL_ALT, MUTED_TEXT, TEXT,
+  CONTROL_FILL, ICON_BUTTON_HOVER, SELECTION,
+  PREVIEW_CHROME, PREVIEW_TEXT,
+} from '../../common/Theme';
+import { FluentSymbol } from '../../common/FluentIcon';
+
+const TAG: string = 'im_about';
+const DOMAIN: number = 0x0100;
+
+/** 窗口名 —— 用 XAML 的类名，window.findWindow 也用它。 */
+export const WINDOW_NAME: string = 'AboutWindow';
+/** 页面路径。 */
+export const PAGE_PATH: string = 'pages/windows/AboutWindow';
+
+/** 原版 internal AboutWindow(App app, MainViewModel vm) + ShowDiagnostics() 的入参键。 */
+export const ARG_KEY_TAB_INDEX: string = 'im.about.tabIndex';
+
+/** 原版 UpdateSettings 五个开关的持久化键（平台替换 9）。 */
+export const SETTINGS_KEY_CHECK_ON_STARTUP: string = 'im.updateSettings.checkOnStartup';
+export const SETTINGS_KEY_AUTO_DOWNLOAD: string = 'im.updateSettings.autoDownload';
+export const SETTINGS_KEY_ALLOW_MIRROR: string = 'im.updateSettings.allowMirrorFallback';
+export const SETTINGS_KEY_NOTIFY_STABLE: string = 'im.updateSettings.notifyStableReleases';
+export const SETTINGS_KEY_NOTIFY_PRERELEASE: string = 'im.updateSettings.notifyPrereleaseReleases';
+
+/** 原版 GitHubReleaseClient 的三个链接（xaml.cs 里的字面量）。 */
+const GITHUB_REPO_URL: string = 'https://github.com/RayrenSX/iPhoneMirror';
+const GITHUB_RELEASES_URL: string = 'https://github.com/RayrenSX/iPhoneMirror/releases';
+const GITHUB_LICENSE_URL: string = 'https://github.com/RayrenSX/iPhoneMirror/blob/main/LICENSE';
+
+/** Strings（逐键标注）。 */
+const S_TITLE: string = '关于';                                    // AboutTitle
+const S_SUBTITLE: string = '应用信息、更新和诊断';                    // AboutSubtitle
+const S_DESCRIPTION: string = '低延迟 iPhone 屏幕投射、录制、直播与虚拟摄像头。';  // AboutDescription
+/**
+ * 变更说明（CHANGELOG.md 的镜像）。
+ *
+ * 为什么在代码里存一份而不是读文件：鸿蒙 App 安装包里没有随包可读的
+ * CHANGELOG.md（也没有 explorer 打开本地文件），所以关于页的「本次更新」区块
+ * 直接内嵌这份常量。**每次改版本号时，必须同步更新这里和 CHANGELOG.md**，
+ * 二者内容一致；版本号本身只认 AppScope/app.json5 的 versionName（经 bundleManager 读）。
+ */
+const CHANGELOG_ITEMS: string[] = [
+  '反控改为显式标注「实验性」：预览快捷条按钮文案由「蓝牙反向控制已广播」改成「蓝牙反控（实验）已广播」——「已广播」只说明 GATT 服务起来了，不代表能用',
+  '蓝牙反控卡片标题下新增一行橙色加粗声明：「实验性功能（开发中）：反向控制仍在实现阶段，本版本不保证可用……」',
+  '「等待连接 / 已连接」提示窗口新增成熟度声明行（上游没有这一条），显示在 5 步配对清单之前；「已连接」标题改为「蓝牙反向控制已开启（实验）」',
+  '短摘要行与设置面板状态行同步加「（实验·开发中）」：避免把 订阅1 这个读数读成"功能成了"',
+  'README / SUPPORT / 项目简介与两份 issue 模板同步写入「反控仍在实现阶段、不保证可用」；SUPPORT 新增 § 〇 实验性功能专节',
+  '本条只改文案与文档，未改协议层、未改任何 HID 行为',
+  '蓝牙反控卡片新增一行「主机 读N 写N 订阅S + 已配对X台(命中)」短摘要：fontSize 12 + 加粗 + 订阅1绿其它橙，第一眼就能看出"iPhone 端配置 vs 投递问题"',
+  '状态行长串诊断改为可换行（maxLines=10）—— 此前单行截断后用户只看到「蓝牙反控已广播」一句话，「复制诊断」按钮在卡片底也找不到',
+  '空态占位从「当前未开启蓝牙反向控制。」改成「当前未开启蓝牙反向控制（点上方按钮启用）」——少一个句号都容易被当成"功能坏了"',
+  '修完后的 0 错 0 嫌：types 0 错（3 警告 = napi 28014）、alias 0 嫌',
+  '修复「iPhone 上始终不出现系统指针」的根因：GATT 服务端漏了应答义务 —— 官方规定收到读取特征值请求必须调用 sendResponse，我们此前一个读请求都没应答',
+  '补齐 characteristicRead / descriptorRead / descriptorWrite 应答，并在带响应的写入里也应答；应答统一带请求自带的 deviceId/transId/offset',
+  '此前 iOS 读 Report Map（HID 描述符）会无声超时 ⇒ 建不出 HID 设备 ⇒ 手机不出现指针，且对端不给任何错误提示',
+  '新增「主机侧交互账本」：读N / 写N / 订阅0-1 / 应答失败N，可直接区分「手机没来枚举」与「来了但不订阅」',
+  '新增「复制诊断」按钮：一次点击把输入侧 + HID 侧整段真值写进剪贴板，便于把现场报回开发者',
+  '新增「与 iPhone 配对」按钮：鸿蒙 GattProperties 没有「要求加密」这一项，只能用主动配对补上 iOS 对 HID 的加密要求',
+  '协议模式 / 控制点属性放宽成「写 + 免应答写」都收，避免另一种写法的 ATT 请求被栈直接拒掉（我们这侧连回调都不会有）',
+  '去掉挂在 Report Map 上的 Report Reference 描述符（它只属于 Report 特征，与上游对齐）',
+  '引导文案更正为上游用户手册的准确路径：iPhone 上「设置 → 辅助功能 → 触控 → 辅助触控」开启，并在该页「设备 → 蓝牙设备」配对（不开辅助触控 iOS 不显示指针）',
+  '核对确认：Report Map 与上游逐字节相同（189 字节）、HID Information 同值、广播已带 0x1812',
+  '定位「指针藏了但手机不动」的根因：鸿蒙发通知只能按 UUID 定位特征，而 5 个 Report 特征共用 0x2A4D，投递落点由协议栈决定',
+  'HID 布局改为默认「单 Report 特征 + 载荷首字节带 report id」，0x2A4D 只剩一个实例，投递不再有歧义',
+  '设置面板新增「HID 布局」一行与切换按钮，可在单特征 / 多特征之间对照，一次切换即可证伪布局问题',
+  '打开独立窗口时不再顺手关掉蓝牙反控（原来会经历停广播→重建服务→iPhone 重连，而独立窗口正是要操控手机的窗口）',
+  '独立窗口条带读数改成「必定可见」：不再因为通道没起来就返回空串，未启用 / 待机 / 接管 都给出可读真值',
+  '读数新增布局与广播-连接两格（如「待机 单特征 广1连0」），广播着而手机没连上这一格从此看得见',
+  '修复构建失败：ArkTS 不做「布尔别名收窄」，判空条件要直接写进使用它的那个 if（原写法 tsc 能过、真构建报 10605999）',
+  '新增自检脚本 tools/check_alias_narrowing.py，专门扫这类「靠布尔别名收窄」的写法（修完 0 处嫌疑）',
+  '修复键盘反控静默失效：取焦点的标识要用 .id() 而不是 .key()（后者在新版 SDK 上不再作为可寻址标识）',
+  '焦点的真值改由输入层的 onFocus/onBlur 回报（requestFocus 返回 void，没有成功失败可读）；接管中没焦点时栏上显示「无焦点」',
+  '修「独立窗口里指针藏了却操控不了」：新增原始位移可用性探针，原始计数恒为 0 时自动改走绝对坐标差分',
+  '画面区容器上再挂一份事件接口做兜底；同一事件被两处各收一次时按事件指纹去重，不会发两遍',
+  '画面区尺寸改用统一的 length_to_vp 解析，不再因为带单位的字符串算成 0（那会让差分一步都算不出来）',
+  '独立窗口栏上新增反控读数：移/原/送/鼠 四段账，缺哪段就指向哪段的问题',
+  '独立窗口补 500ms 状态轮询，主窗口不在前台时这边的接管态不再停在过期值上',
+  '接管成立即把键盘焦点要过来，不再依赖「先点一下画面」',
+  '状态行新增「协议N」：iOS 写下的协议模式，是它认下这台 HID 设备的握手证据',
+  '修复「独立窗口」「刷新画面」等按钮不实时刷新：旧写法把状态当参数传给 @Builder，而它按值传参不参与动态刷新',
+  '同一族的四格统计（分辨率/帧率/延迟/音频）不再永远停在首帧的「—」',
+  '画面调节窗口的四个数值跟着滑杆实时变化，此前拖动数字不动',
+  '工具条上的蓝牙状态文案与设置面板里的蓝牙状态行现在都跟着真实状态变',
+  '设备列表的选中高亮改为确定性行为：选中态与连接状态进 ForEach 的 key，点一下必定移动',
+  '鼠标放到画面上就能操控：接管层常驻，进入画面即接管、移开即释放，不用再先去找开关',
+  '蓝牙通道改为惰性启动：第一次把鼠标放到画面上时才申请权限、开广播，不再一开应用就弹框',
+  '接管期间隐藏本地指针，免得屏幕上两个指针各走各的；状态行显示「★操控中」',
+  '指针移动改用鼠标硬件原始位移（rawDelta），不再受窗口边缘挡住、光标跑出窗口的影响',
+  'rawDelta 取不到时自动退回旧算法，降级次数显示在状态行（可判断这台设备支不支持）',
+  '独立预览窗口接入反向控制：此前该窗口完全没有输入层，而它才是日常真正在用的那个',
+  '排除三种不该接管的场合，且画面一到位就自动接管（不必把鼠标移开再移回来）',
+  '「停止蓝牙反向控制」不再被自动启动立刻推翻；外设启动加了并发守卫',
+  '修复镜像卡顿：解码从网络收包线程上摘下，交给专属解码线程；积压时丢最旧的包，丢帧数直接可见',
+  '修复投屏声音断续发闷：音频欠载门限只在首次起播拦一次，起播后有多少放多少，不再周期性整块静音',
+  '修复蓝牙反控误判「特征数为 0」：注册后回读改为双路交叉印证 + 沉降重试，失败时带出重试次数与 SDK 等级',
+  '独立窗口只保留一条栏：系统标题栏与系统三键区都已关掉，不再出现两套按钮',
+  '独立窗口的栏不再压住手机画面：改为预留条带，且随窗口等比缩放',
+  '独立窗口的栏去掉「放大」键，只保留关闭与最小化（对齐 macOS 左上角三键）',
+  '独立窗口的长故障文案移到主窗口显示，栏上只留短提示，不再挤掉画面',
+  '修复构建失败：独立窗口 Ability 的窗口下限写法不合规（windowSize 不是 abilities 的字段）',
+  '独立窗口改为独立 Ability：主窗口最小化后它照样显示，不再跟着一起消失',
+  '独立窗口新增可隐藏的三键浮层栏（最小化/放大/关闭），鼠标移到顶部浮出、移开自动隐藏，可设常驻',
+  '独立窗口只能等比例放大缩小：按源帧宽高比锁定，画面不会被拉变形',
+  '修复投屏没有声音：AirPlay 音频此前只计数、没接到播放器，现在交给 OHAudio 真播放',
+  '音频接了 iPhone 侧音量与 flush，状态行直说「已播 N 帧 / 未收到数据 / 未出声：原因」',
+  '修复「蓝牙控制无法启动：特征数为 0」的误判：回读接口是本机不支持的新 API，异常被当成了没注册',
+  '蓝牙状态行区分「特征 N/9」与「特征未知(回读不可用)」；回读失败不再拦启动，只报隐患',
+  '新增「按真实 iPhone/iPad 外形适配」：按机型匹配圆角与曲线，Home 键机型保持直角',
+  '独立窗口新增「圆角」开关，拖动与缩放后轮廓仍按机型贴合（原版在右键菜单里）',
+  '修复蓝牙反向控制报 201 Permission denied：蓝牙权限是「运行时授权」，此前只声明没申请',
+  '修复「独立窗口」按钮恒灰、点了只回"该操作需先开始投屏"：AirPlay 镜像不经过 USB 采集状态机',
+  '修复无线镜像时独立窗口打不开：改为按上游统一设备模型，退回用 AirPlay 客户端名开窗',
+  '修复关闭独立窗口后主窗口一片黑：渲染器只有一个 surface，关窗时必须清账再无条件重挂',
+  '新增独立预览窗口：画面可移到独立窗口，主窗口原位显示「已在独立窗口打开」圆形提示',
+  '独立窗口按原版规格：720×900 起、最小 320×240、可缩放、首开取工作区 82%、按内容宽高比锁定',
+  '独立窗口无需改 C++：渲染器只有一个 EGLSurface，开窗即把它重挂到新窗口的 XComponent',
+  '新增蓝牙反向控制：真 BLE HID 外设（GATT Server + 广播），iPhone 能搜到、能配对、能收发鼠标滚轮',
+  '反控坐标按渲染器实测帧尺寸换算并剔除黑边——不是拿界面上写的分辨率硬算',
+  '蓝牙反控开关改为真开关，状态行显示真实计数（特征数/报表数/连接断开/丢弃/失败/超时）',
+  '设备绑定器的「连接设备」接真实现：临时广播 HID → 等配对 → 保存绑定 → 收掉广播',
+  '修正一批"鸿蒙做不到"的过时文案——BLE HID 外设其实已经实现，不再是能力缺失',
+  '修掉主窗口蓝牙开关的状态漂移：每轮从外设真实状态回读，被别处停掉时同步关闭输入路由',
+  '修复"只能在 DevEco Studio 里启动"：补上桌面启动入口声明（skills·home），点图标即可直接开',
+  '修复 AirPlay 黑屏根因：EGL 上下文此前被跨线程使用——现在 GL 调用全归专属渲染线程',
+  '修掉渲染侧假成功：swap 失败不再计入"画成功"，状态行的帧数现在是真的',
+  '渲染诊断新增 EGL 错误码与"上下文未就绪"计数，黑屏能一眼看出卡在哪一层',
+  '「刷新画面」不再假成功：真调 ABI，未挂载 surface 时如实报错',
+  '未实现功能统一灰化：录制推流/截图/全屏预览点击弹「敬请期待」',
+  '「调节画面」「更多设置」修正过时文案——原本只提示"待接入"，现在真的打开调节窗口',
+];
+/** 「本次更新」区块标题。 */
+const S_WHATS_NEW: string = '本次更新';
+
+const S_UPDATE_STATUS_TITLE: string = '更新状态';                   // UpdateStatusTitle
+const S_UPDATE_STATUS_READY: string = '可随时检查 GitHub Release 更新。';          // UpdateStatusReady
+const S_CHECK_UPDATES: string = '检查更新';                         // CheckForUpdates
+const S_CHANGELOG: string = '更新日志';                             // Changelog
+const S_LICENSE: string = '许可证信息';                             // LicenseInformation
+const S_TAB_ABOUT: string = '关于';                                 // AboutTitle（TabItem Header）
+
+/** 页签「无悬停」哨兵值（原版 SubWindowTabItem 的 IsMouseOver 触发器需要区分未悬停）。 */
+const NAV_TAB_NONE: number = -1;
+const S_TAB_UPDATE_SETTINGS: string = '更新设置';                    // UpdateSettingsTitle
+const S_TAB_DIAGNOSTICS: string = '诊断';                           // DiagnosticsTitle
+const S_UPDATE_SETTINGS_TITLE: string = '更新设置';                  // UpdateSettingsTitle
+const S_UPDATE_SETTINGS_DESC: string = '控制后台检查、自动下载、镜像加速和发布通道。';  // UpdateSettingsDescription
+const S_CHECK_ON_STARTUP: string = '启动时检查更新';                 // CheckOnStartup
+const S_AUTO_DOWNLOAD: string = '发现更新后自动开始下载';             // AutoDownloadUpdates
+const S_ALLOW_MIRROR: string = '自动选择最快更新下载线路';            // AllowUpdateMirrorFallback
+const S_ALLOW_MIRROR_DESC: string =
+  '测试 GitHub 和全部镜像，仅对可达线路进行 256 KB 下载测速；下载内容仍必须通过官方' +
+  '发布摘要中的 SHA-256 校验。';                                     // AllowUpdateMirrorFallbackDescription
+const S_NOTIFY_STABLE: string = '提醒正式版更新';                     // NotifyStableReleases
+const S_NOTIFY_PRERELEASE: string = '提醒 Beta 预览版更新';           // NotifyPrereleaseReleases
+const S_DIAGNOSTICS_TITLE: string = '诊断';                          // DiagnosticsTitle
+const S_DIAGNOSTICS_DESC: string =
+  '应用错误、投屏核心和更新流程会写入本地日志，便于排查其他电脑上的问题。';  // DiagnosticsDescription
+const S_DIAGNOSTICS_LOCATION: string = '日志位置';                    // DiagnosticsLocation
+const S_RETENTION: string =
+  '日志自动限制为单文件 8–16 MB，并清理超过 14 天或总量超过 64 MB 的旧文件。';  // DiagnosticsRetentionSummary
+const S_OPEN_LOGS: string = '打开日志目录';                           // OpenLogs
+const S_CLEAN_LOGS: string = '清理日志和更新缓存';                     // CleanLogs
+const S_LIVE_LOG: string = '实时日志  ·  Ctrl+L';                      // LiveLogHeader
+const S_CLEAR_VIEW: string = '清空视图';                               // ClearView
+const S_LOG_VIEW_CLEARED: string = '日志视图已清空（不会删除磁盘日志）';  // LogViewCleared
+/** DiagnosticsCleanedFormat：{0} 文件数 / {1} 释放体积 / {2} 跳过数。 */
+const S_CLEANED: string = '清理完成：删除 %d 个文件，释放 %s；%d 个正在使用或无权限的文件已跳过。';
+/** DiagnosticsCleanupFailedFormat：{0} = 错误。 */
+const S_CLEAN_FAILED: string = '清理失败：%s';
+
+/** 平台替换 3：点「检查更新」后的确切原因。 */
+const S_CHECK_UNAVAILABLE: string =
+  '鸿蒙版尚未接入 GitHub Release 检查（原版走 GitHubReleaseClient + 镜像测速 + ' +
+  'SemanticVersion 比较）。可点「更新日志」直接查看发布页。';
+/** 平台替换 5：点「打开日志目录」后的确切原因。 */
+const S_OPEN_LOGS_REASON: string =
+  '鸿蒙没有 explorer.exe 的等价能力，应用无法拉起文件管理器打开沙箱目录。' +
+  '完整路径见上方「日志位置」。';
+/** 平台替换 6：更新缓存那部分恒为 0 的说明。 */
+const S_NO_UPDATE_CACHE: string =
+  '注：鸿蒙版没有「更新下载缓存」目录（见文件头的平台替换 3），清理只覆盖诊断日志。';
+
+/** 原版 internal void ShowDiagnostics() → AboutTabs.SelectedIndex = 2。 */
+export const ABOUT_TAB_INDEX: number = 0;
+export const UPDATE_SETTINGS_TAB_INDEX: number = 1;
+export const DIAGNOSTICS_TAB_INDEX: number = 2;
+
+/** 按原版打开这个子窗口。tabIndex 见 *_TAB_INDEX（ShowDiagnostics 传 2）。 */
+export function open_about(ctx: common.Context, tabIndex: number): void {
+  host_ctx = ctx;
+  AppStorage.setOrCreate<number>(ARG_KEY_TAB_INDEX, tabIndex);
+
+  const spec: SubWindowSpec = {
+    name: WINDOW_NAME,
+    page: PAGE_PATH,
+    title: S_TITLE,
+    width: 760,
+    height: 600,
+    resizable: true,                // ResizeMode="CanResize"
+    minWidth: 700,
+    minHeight: 520,
+    modal: true,                    // WindowStartupLocation="CenterOwner"
+  };
+  // ★ 这个 .catch 里**不允许再抛异常**：Promise 的拒绝回调抛出的错误没人接管，
+  //   会被运行时当成未捕获异常，直接把应用结束掉（表现为"点一下闪退"）。
+  //   而拒绝原因可能是 undefined（不是每个实现都给 Error 对象），
+  //   所以取 .message 之前必须先判空。
+  SubWindowHost.open(ctx, spec).catch((error: BusinessError): void => {
+    const failure: BusinessError = error as BusinessError;
+    const reason: string = failure !== undefined && failure !== null && failure.message !== undefined
+      ? failure.message : '未知原因';
+    hilog.error(DOMAIN, TAG, '打开失败: %{public}s', reason);
+  });
+}
+
+/**
+ * 开窗时记下的宿主 Context。
+ * 原版子窗口是进程内对象，天然拿得到 App；鸿蒙侧页面拿不到构造参数，
+ * 所以在 open_about() 里记一份（与 pending_request 同一个思路）。
+ *
+ * ⚠ 这只是一条**快路**，不能当成唯一来源：子窗口页面真正可用的是
+ *   `this.getUIContext().getHostContext()`（见 AboutWindow.ability_context()，
+ *   Index.ets 的 start_window_drag 用的也是这个）。页面里一律走那条路，
+ *   模块级的 ui_context() 只服务确实拿不到 UI 实例的地方（open_url）。
+ */
+let host_ctx: common.Context | null = null;
+
+/**
+ * 取 UIAbility 上下文（模块级兜底）。
+ *
+ * 历史坑：这里原来写的是 `host_ctx !== null ? host_ctx : getContext()`，然后直接
+ * `ui_context().filesDir` —— 一旦两条路都拿不到（页面级函数里调无参 getContext()
+ * 在新 SDK 上已废弃），`.filesDir` 就是对 undefined 取属性，抛出的 TypeError 若
+ * 发生在 aboutToAppear / setInterval 回调里没有任何人接管，**整个应用会被结束**。
+ * 所以这里改成"拿不到就返回 null"，由调用方决定怎么退让。
+ */
+function resolve_context(uic: UIContext | null): common.Context | null {
+  if (host_ctx !== null) {
+    return host_ctx;
+  }
+  if (uic !== null) {
+    const hosted: common.Context | undefined = uic.getHostContext();
+    if (hosted !== undefined && hosted !== null) {
+      return hosted;
+    }
+  }
+  // 无参 getContext() 是已废弃的兜底写法，某些版本上可能直接抛错 —— 包一层。
+  try {
+    const legacy: common.Context | undefined = getContext() as common.Context;
+    return legacy !== undefined && legacy !== null ? legacy : null;
+  } catch (error) {
+    hilog.warn(DOMAIN, TAG, 'getContext() 不可用: %{public}s', (error as BusinessError).message);
+    return null;
+  }
+}
+
+/** 平台替换 4：真做 —— 用系统浏览器打开 URL。 */
+function open_url(url: string): boolean {
+  const ctx: common.Context | null = resolve_context(null);
+  if (ctx === null) {
+    hilog.error(DOMAIN, TAG, 'open_url: 取不到 Ability 上下文');
+    return false;
+  }
+  try {
+    const want: Want = {
+      action: 'ohos.want.action.viewData',
+      entities: ['entity.system.browsable'],
+      uri: url,
+    };
+    (ctx as common.UIAbilityContext).startAbility(want).catch((error: BusinessError): void => {
+      hilog.error(DOMAIN, TAG, 'startAbility 失败: %{public}s', error.message);
+    });
+    return true;
+  } catch (error) {
+    hilog.error(DOMAIN, TAG, 'open_url 失败: %{public}s', (error as BusinessError).message);
+    return false;
+  }
+}
+
+/**
+ * 平台替换 2/7：诊断日志目录（Windows: %LOCALAPPDATA%\iPhoneMirror\Logs）。
+ * 取不到上下文时返回空串 —— 调用方按"没有日志目录"处理，绝不抛异常。
+ */
+function diagnostic_dir(ctx: common.Context | null): string {
+  if (ctx === null) {
+    return '';
+  }
+  const files: string = (ctx as common.UIAbilityContext).filesDir;
+  return files !== undefined ? files + '/iPhoneMirror/Logs' : '';
+}
+
+/** 原版 FormatBytes(long bytes)。 */
+function format_bytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) {
+    return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+  }
+  if (bytes >= 1024) {
+    return Math.round(bytes / 1024).toString() + ' KB';
+  }
+  return bytes.toString() + ' B';
+}
+
+/** 原版 CleanupResult：删除文件数 / 删除字节 / 跳过文件数。 */
+class CleanupResult {
+  deletedFiles: number = 0;
+  deletedBytes: number = 0;
+  skippedFiles: number = 0;
+}
+
+/** 平台替换 6：真做 —— 清掉诊断日志目录里的文件。 */
+function cleanup_logs(ctx: common.Context | null): CleanupResult {
+  const result: CleanupResult = new CleanupResult();
+  const directory: string = diagnostic_dir(ctx);
+  if (directory.length === 0) {
+    return result;
+  }
+  let names: string[] = [];
+  try {
+    if (!fileIo.accessSync(directory)) {
+      return result;
+    }
+    names = fileIo.listFileSync(directory);
+  } catch (error) {
+    hilog.error(DOMAIN, TAG, 'listFileSync 失败: %{public}s', (error as BusinessError).message);
+    return result;
+  }
+  for (const name of names) {
+    const path: string = directory + '/' + name;
+    try {
+      result.deletedBytes += fileIo.statSync(path).size;
+      fileIo.unlinkSync(path);
+      result.deletedFiles += 1;
+    } catch (error) {
+      // 原版口径：正在使用或无权限的文件计入 skipped。
+      result.skippedFiles += 1;
+      hilog.warn(DOMAIN, TAG, '跳过 %{public}s: %{public}s', name,
+        (error as BusinessError).message);
+    }
+  }
+  return result;
+}
+
+/**
+ * 平台替换 7：真做 —— 读诊断日志目录里最新一个日志文件的尾部。
+ *
+ * ★ 整个函数体必须在 try 内：它由 `setInterval` 每 500 ms 调一次，而
+ *   **定时器回调里抛出的异常没有任何人接管**，会被运行时当成未捕获异常
+ *   直接结束应用。所以连"取目录"这一步也要放在 try 里（原实现把它放在了 try 外面）。
+ */
+function read_log_tail(ctx: common.Context | null): string {
+  try {
+    const directory: string = diagnostic_dir(ctx);
+    if (directory.length === 0) {
+      return '';
+    }
+    if (!fileIo.accessSync(directory)) {
+      return '';
+    }
+    const names: string[] = fileIo.listFileSync(directory);
+    if (names.length === 0) {
+      return '';
+    }
+    const path: string = directory + '/' + names[names.length - 1];
+    const text: string = fileIo.readTextSync(path);
+    // 原版 TextBox 高度 180，取尾部即可（超出部分由滚动条承担）。
+    return text.length > 8000 ? text.substring(text.length - 8000) : text;
+  } catch (error) {
+    hilog.warn(DOMAIN, TAG, 'read_log_tail 失败: %{public}s', (error as BusinessError).message);
+    return '';
+  }
+}
+
+/**
+ * 应用图标位（68×68 圆角 14）。
+ *
+ * 原版（AboutWindow.xaml:55–62）是
+ *   Border Width=68 Height=68 CornerRadius=14  →  里面 Image Width=52 Height=52
+ * 这里按「平台替换 2」用 Fluent 字形顶替那张 Logo 位图，所以盒子尺寸要按墨迹比例折算：
+ * 位图的图面会**填满** 52×52；而 PhoneDesktop24 字形的墨迹只占 em 框的 20/24 ≈ 0.833
+ * （见 FluentIcon.ets 的取证表）。要让墨迹正好 52，字号取 52 ÷ 0.833 ≈ 62。
+ *
+ * 取 44 时墨迹只有 36.7 —— 比原版小 29%，正是这轮「图标普遍偏小」的一部分。
+ */
+@Component
+struct AboutAppIcon {
+  build() {
+    Row() {
+      FluentSymbol({ iconName: 'PhoneDesktop24', iconSize: 62, iconColor: TEXT });
+    }
+    .width(68)
+    .height(68)
+    .borderRadius(14)
+    .backgroundColor(PANEL_ALT)
+    .border({ width: 1, color: BORDER })
+    .justifyContent(FlexAlign.Center)
+    .alignItems(VerticalAlign.Center);
+  }
+}
+
+/** 「更新设置」页的一个 CheckBox（原版 Margin 0,0,0,14 + 可选 ToolTip）。 */
+@Component
+struct SettingsToggle {
+  @Prop toggleLabel: string = '';
+  @Prop checked: boolean = false;
+  @Prop toggleMarginBottom: number = 14;
+  on_toggle: (value: boolean) => void = () => {};
+
+  build() {
+    Row() {
+      Checkbox({ name: this.toggleLabel, group: 'aboutUpdateSettings' })
+        .select(this.checked)
+        .selectedColor(ACCENT)
+        .width(20)
+        .height(20)
+        .onChange((value: boolean): void => { this.on_toggle(value); });
+      Text(this.toggleLabel)
+        .fontSize(12)
+        .fontColor(TEXT)
+        .margin({ left: 10 });
+    }
+    .width('100%')
+    .alignItems(VerticalAlign.Center)
+    .margin({ bottom: this.toggleMarginBottom });
+  }
+}
+
+@Entry
+@Component
+struct AboutWindow {
+  @State aboutTabIndex: number = ABOUT_TAB_INDEX;
+  /** 当前悬停的页签下标（NAV_TAB_NONE = 无）。对应原版 IsMouseOver 触发器。 */
+  @State hoverTabIndex: number = NAV_TAB_NONE;
+  @State versionText: string = 'v0.0.0';
+  @State updateStatus: string = S_UPDATE_STATUS_READY;
+  @State diagnosticPath: string = '';
+  @State diagnosticStatus: string = S_RETENTION;
+  @State logText: string = '';
+  @State liveLogPath: string = '';
+  @State checkOnStartup: boolean = true;
+  @State autoDownload: boolean = false;
+  @State allowMirrorFallback: boolean = true;
+  @State notifyStableReleases: boolean = true;
+  @State notifyPrereleaseReleases: boolean = false;
+  private logTimer: number = -1;
+
+  /**
+   * 本页所在的 Ability 上下文。
+   *
+   * 这是**页面自己**拿上下文的正路（与 Index.ets 的 start_window_drag 同一写法）：
+   * UI 实例 → UIContext → getHostContext()。不依赖模块级变量，也不依赖已废弃的
+   * 无参 getContext()，所以在子窗口页面里同样成立。
+   */
+  private ability_context(): common.Context | null {
+    // 这个函数会被生命周期与 500 ms 定时器反复调用，**它自己绝不能抛**：
+    // 定时器/生命周期里抛出的异常没人接管，会被运行时当成未捕获异常结束应用。
+    let uic: UIContext | null = null;
+    try {
+      uic = this.getUIContext();
+    } catch (error) {
+      uic = null;
+    }
+    try {
+      return resolve_context(uic);
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, '取 Ability 上下文失败: %{public}s',
+        (error as BusinessError).message);
+      return null;
+    }
+  }
+
+  /**
+   * ★ 生命周期里抛出的异常没人接管，会被运行时当成未捕获异常直接结束应用
+   *   （用户看到的就是"点一下闪退"）。所以这里整块用 try 包住：
+   *   版本号读不到、日志目录取不到，都只是少一行信息，**绝不能把窗口带崩**。
+   */
+  aboutToAppear(): void {
+    try {
+      this.aboutTabIndex = AppStorage.get<number>(ARG_KEY_TAB_INDEX) ?? ABOUT_TAB_INDEX;
+      this.checkOnStartup = AppStorage.get<boolean>(SETTINGS_KEY_CHECK_ON_STARTUP) ?? true;
+      this.autoDownload = AppStorage.get<boolean>(SETTINGS_KEY_AUTO_DOWNLOAD) ?? false;
+      this.allowMirrorFallback = AppStorage.get<boolean>(SETTINGS_KEY_ALLOW_MIRROR) ?? true;
+      this.notifyStableReleases = AppStorage.get<boolean>(SETTINGS_KEY_NOTIFY_STABLE) ?? true;
+      this.notifyPrereleaseReleases = AppStorage.get<boolean>(SETTINGS_KEY_NOTIFY_PRERELEASE) ?? false;
+    } catch (error) {
+      hilog.error(DOMAIN, TAG, '读取更新设置失败: %{public}s', (error as BusinessError).message);
+    }
+
+    try {
+      const ctx: common.Context | null = this.ability_context();
+      const dir: string = diagnostic_dir(ctx);
+      this.diagnosticPath = dir.length > 0 ? dir
+        : '（取不到应用沙箱路径：Ability 上下文不可用）';
+      this.liveLogPath = dir.length > 0 ? dir + '/startup.log' : '';
+    } catch (error) {
+      hilog.error(DOMAIN, TAG, '解析日志目录失败: %{public}s', (error as BusinessError).message);
+    }
+
+    this.load_version();
+    // 首次刷新也要包住：它在 aboutToAppear 里同步执行，抛出去同样会终止应用。
+    try {
+      this.refresh_logs();
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, '首次刷新日志失败: %{public}s', (error as BusinessError).message);
+    }
+    // 平台替换 7：原版 DispatcherTimer 500 ms 轮询 RefreshLogsAsync。
+    // 回调里再包一层 try：定时器异常同样会终止应用（见 read_log_tail 的注释）。
+    this.logTimer = setInterval((): void => {
+      try {
+        this.refresh_logs();
+      } catch (error) {
+        hilog.warn(DOMAIN, TAG, '刷新日志失败: %{public}s', (error as BusinessError).message);
+      }
+    }, 500);
+  }
+
+  aboutToDisappear(): void {
+    if (this.logTimer >= 0) {
+      clearInterval(this.logTimer);
+      this.logTimer = -1;
+    }
+    // 原版 OnClosing 里 _app.SaveUpdateSettings()；这里落回 AppStorage（平台替换 9）。
+    try {
+      AppStorage.setOrCreate<boolean>(SETTINGS_KEY_CHECK_ON_STARTUP, this.checkOnStartup);
+      AppStorage.setOrCreate<boolean>(SETTINGS_KEY_AUTO_DOWNLOAD, this.autoDownload);
+      AppStorage.setOrCreate<boolean>(SETTINGS_KEY_ALLOW_MIRROR, this.allowMirrorFallback);
+      AppStorage.setOrCreate<boolean>(SETTINGS_KEY_NOTIFY_STABLE, this.notifyStableReleases);
+      AppStorage.setOrCreate<boolean>(SETTINGS_KEY_NOTIFY_PRERELEASE, this.notifyPrereleaseReleases);
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, '保存更新设置失败: %{public}s', (error as BusinessError).message);
+    }
+  }
+
+  /** 平台替换 1：真做 —— 读 bundleManager 的 versionName。 */
+  private load_version(): void {
+    try {
+      bundleManager.getBundleInfoForSelf(
+        bundleManager.BundleFlag.GET_BUNDLE_INFO_WITH_APPLICATION)
+        .then((info: bundleManager.BundleInfo): void => {
+          this.versionText = 'v' + info.versionName;
+        })
+        .catch((error: BusinessError): void => {
+          const failure: BusinessError = error as BusinessError;
+          hilog.error(DOMAIN, TAG, 'getBundleInfoForSelf 失败: %{public}s',
+            failure !== undefined && failure !== null && failure.message !== undefined
+              ? failure.message : '未知原因');
+        });
+    } catch (error) {
+      hilog.error(DOMAIN, TAG, 'getBundleInfoForSelf 抛错: %{public}s',
+        (error as BusinessError).message);
+    }
+  }
+
+  private refresh_logs(): void {
+    this.logText = read_log_tail(this.ability_context());
+  }
+
+  /** 平台替换 3：不假装检查成功。 */
+  private on_check_updates(): void {
+    this.updateStatus = S_CHECK_UNAVAILABLE;
+  }
+
+  /** 平台替换 4：OnGitHubClick。 */
+  private on_github(): void {
+    open_url(GITHUB_REPO_URL);
+  }
+
+  /** 平台替换 4：OnChangelogClick（原版本地 CHANGELOG.md 优先，鸿蒙一律走 URL）。 */
+  private on_changelog(): void {
+    open_url(GITHUB_RELEASES_URL);
+  }
+
+  /** 平台替换 4：OnLicenseClick（原版本地 LICENSE 优先，鸿蒙一律走 URL）。 */
+  private on_license(): void {
+    open_url(GITHUB_LICENSE_URL);
+  }
+
+  /** 平台替换 5：不假装打开了文件管理器。 */
+  private on_open_logs(): void {
+    this.diagnosticStatus = S_OPEN_LOGS_REASON;
+  }
+
+  /** 平台替换 6：真做 —— 清诊断日志并统计。 */
+  private on_clean_logs(): void {
+    try {
+      const logs: CleanupResult = cleanup_logs(this.ability_context());
+      // 更新缓存目录在鸿蒙侧不存在，两项目恒为 0（原版是 logs + updates 相加）。
+      this.diagnosticStatus = S_CLEANED
+        .replace('%d', logs.deletedFiles.toString())
+        .replace('%s', format_bytes(logs.deletedBytes))
+        .replace('%d', logs.skippedFiles.toString())
+        + S_NO_UPDATE_CACHE;
+      hilog.info(DOMAIN, TAG, 'manual_cleanup_complete: %{public}d 个文件',
+        logs.deletedFiles);
+    } catch (error) {
+      const failure: BusinessError = error as BusinessError;
+      const reason: string = failure !== undefined && failure !== null && failure.message !== undefined
+        ? failure.message : '未知原因';
+      hilog.error(DOMAIN, TAG, 'manual_cleanup_failed: %{public}s', reason);
+      this.diagnosticStatus = S_CLEAN_FAILED.replace('%s', reason);
+    }
+  }
+
+  /** 平台替换 8：只清视图，不动磁盘。 */
+  private on_clear_view(): void {
+    this.logText = '';
+    this.diagnosticStatus = S_LOG_VIEW_CLEARED;
+  }
+
+  // ── TabItem 1「关于」────────────────────────────────────────────────────
+  @Builder
+  about_tab() {
+    Scroll() {
+      Column() {
+        // Grid：Col 88 图标 + Col * 文字
+        Row() {
+          AboutAppIcon();
+          Column() {
+            Text('iPhoneMirror')
+              .fontSize(21)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(TEXT)
+              .width('100%');
+            Text(this.versionText)
+              .fontSize(12)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(MUTED_TEXT)
+              .width('100%')
+              .margin({ top: 4 });
+            Text(S_DESCRIPTION)
+              .fontSize(12)
+              .fontColor(MUTED_TEXT)
+              .lineHeight(18)
+              .width('100%')
+              .margin({ top: 6 });
+          }
+          .alignItems(HorizontalAlign.Start)
+          .layoutWeight(1)
+          .margin({ left: 20 });
+        }
+        .width('100%')
+        .alignItems(VerticalAlign.Center);
+
+        // ── 本次更新（CHANGELOG 镜像）────────────────────────────────────
+        section_title(S_WHATS_NEW);
+        ForEach(CHANGELOG_ITEMS, (item: string): void => {
+          Row() {
+            Text('•')
+              .fontSize(12)
+              .fontColor(ACCENT)
+              .margin({ right: 8 });
+            Text(item)
+              .fontSize(12)
+              .fontColor(MUTED_TEXT)
+              .lineHeight(18)
+              .layoutWeight(1);
+          }
+          .width('100%')
+          .alignItems(VerticalAlign.Top)
+          .margin({ bottom: 4 });
+        }, (item: string): string => item);
+
+        // Border Height 1 / BorderSoftBrush / Margin 0,20
+        Column()
+          .height(1)
+          .width('100%')
+          .backgroundColor(BORDER_SOFT)
+          .margin({ top: 20, bottom: 20 });
+
+        section_title(S_UPDATE_STATUS_TITLE);
+        Text(this.updateStatus)
+          .fontSize(12)
+          .fontColor(MUTED_TEXT)
+          .lineHeight(18)
+          .width('100%')
+          .margin({ top: 6, bottom: 14 });
+
+        // WrapPanel：四个按钮，都 Margin 0,0,8,8
+        Flex({ wrap: FlexWrap.Wrap }) {
+          PrimaryButton({
+            label: S_CHECK_UPDATES,
+            minButtonWidth: 138,
+            on_action: (): void => { this.on_check_updates(); },
+          })
+            .margin({ right: 8, bottom: 8 });
+          SecondaryButton({
+            label: 'GitHub',
+            minButtonWidth: 96,
+            on_action: (): void => { this.on_github(); },
+          })
+            .margin({ right: 8, bottom: 8 });
+          SecondaryButton({
+            label: S_CHANGELOG,
+            minButtonWidth: 108,
+            on_action: (): void => { this.on_changelog(); },
+          })
+            .margin({ right: 8, bottom: 8 });
+          SecondaryButton({
+            label: S_LICENSE,
+            minButtonWidth: 118,
+            on_action: (): void => { this.on_license(); },
+          })
+            .margin({ right: 8, bottom: 8 });
+        }
+        .width('100%');
+      }
+      .alignItems(HorizontalAlign.Start)
+      .width('100%');
+    }
+    .width('100%')
+    // 三个页签原本挂在 TabContent 下（由它提供确定的可用高度，Scroll 才能滚动）。
+    // 现在改用自绘内容区（Column + layoutWeight），必须显式把高度交给 Scroll，
+    // 否则它会按内容高度伸展、滚不动。
+    .height('100%')
+    .scrollBar(BarState.Auto)
+    .align(Alignment.Top);
+  }
+
+  // ── TabItem 2「更新设置」────────────────────────────────────────────────
+  @Builder
+  update_settings_tab() {
+    Scroll() {
+      Column() {
+        section_title(S_UPDATE_SETTINGS_TITLE);
+        Text(S_UPDATE_SETTINGS_DESC)
+          .fontSize(12)
+          .fontColor(MUTED_TEXT)
+          .lineHeight(18)
+          .width('100%')
+          .margin({ top: 6, bottom: 18 });
+
+        SettingsToggle({
+          toggleLabel: S_CHECK_ON_STARTUP,
+          checked: this.checkOnStartup,
+          on_toggle: (value: boolean): void => { this.checkOnStartup = value; },
+        });
+        SettingsToggle({
+          toggleLabel: S_AUTO_DOWNLOAD,
+          checked: this.autoDownload,
+          on_toggle: (value: boolean): void => { this.autoDownload = value; },
+        });
+        SettingsToggle({
+          toggleLabel: S_ALLOW_MIRROR,
+          checked: this.allowMirrorFallback,
+          on_toggle: (value: boolean): void => { this.allowMirrorFallback = value; },
+        });
+        // 原版 ToolTip=AllowUpdateMirrorFallbackDescription；ArkUI 无 ToolTip，
+        // 以常驻说明文字呈现同样内容（平台替换 10 的同族处理）。
+        Column() {
+          hint_text(S_ALLOW_MIRROR_DESC);
+        }
+        .width('100%')
+        .margin({ bottom: 14 });
+        SettingsToggle({
+          toggleLabel: S_NOTIFY_STABLE,
+          checked: this.notifyStableReleases,
+          on_toggle: (value: boolean): void => { this.notifyStableReleases = value; },
+        });
+        SettingsToggle({
+          toggleLabel: S_NOTIFY_PRERELEASE,
+          checked: this.notifyPrereleaseReleases,
+          toggleMarginBottom: 0,
+          on_toggle: (value: boolean): void => { this.notifyPrereleaseReleases = value; },
+        });
+      }
+      .alignItems(HorizontalAlign.Start)
+      .width('100%');
+    }
+    .width('100%')
+    // 三个页签原本挂在 TabContent 下（由它提供确定的可用高度，Scroll 才能滚动）。
+    // 现在改用自绘内容区（Column + layoutWeight），必须显式把高度交给 Scroll，
+    // 否则它会按内容高度伸展、滚不动。
+    .height('100%')
+    .scrollBar(BarState.Auto)
+    .align(Alignment.Top);
+  }
+
+  // ── TabItem 3「诊断」────────────────────────────────────────────────────
+  @Builder
+  diagnostics_tab() {
+    Scroll() {
+      Column() {
+        section_title(S_DIAGNOSTICS_TITLE);
+        Text(S_DIAGNOSTICS_DESC)
+          .fontSize(12)
+          .fontColor(MUTED_TEXT)
+          .lineHeight(18)
+          .width('100%')
+          .margin({ top: 6, bottom: 18 });
+
+        section_title(S_DIAGNOSTICS_LOCATION);
+        RoundedTextBox({
+          text: this.diagnosticPath,
+          readOnly: true,
+          boxHeight: 40,
+        })
+          .margin({ top: 9, bottom: 14 });
+
+        Text(this.diagnosticStatus)
+          .fontSize(12)
+          .fontColor(MUTED_TEXT)
+          .lineHeight(18)
+          .width('100%')
+          .margin({ bottom: 14 });
+
+        Flex({ wrap: FlexWrap.Wrap }) {
+          PrimaryButton({
+            label: S_OPEN_LOGS,
+            minButtonWidth: 126,
+            on_action: (): void => { this.on_open_logs(); },
+          })
+            .margin({ right: 8, bottom: 8 });
+          SecondaryButton({
+            label: S_CLEAN_LOGS,
+            minButtonWidth: 126,
+            on_action: (): void => { this.on_clean_logs(); },
+          })
+            .margin({ right: 8, bottom: 8 });
+        }
+        .width('100%');
+
+        // Border Height 1 / BorderSoftBrush / Margin 0,12,0,18
+        Column()
+          .height(1)
+          .width('100%')
+          .backgroundColor(BORDER_SOFT)
+          .margin({ top: 12, bottom: 18 });
+
+        // Grid：LiveLogHeader（左）+「清空视图」（右，Padding 10,5 / MinHeight 32 / 11）
+        Row() {
+          section_title(S_LIVE_LOG);
+          Row() {
+            Text(S_CLEAR_VIEW)
+              .fontSize(11)
+              .fontColor(TEXT);
+          }
+          .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+          .constraintSize({ minHeight: 32 })
+          .borderRadius(8)
+          .border({ width: 1, color: BORDER })
+          .alignItems(VerticalAlign.Center)
+          .onClick((): void => { this.on_clear_view(); });
+        }
+        .width('100%')
+        .justifyContent(FlexAlign.SpaceBetween)
+        .alignItems(VerticalAlign.Center);
+
+        Text(this.liveLogPath)
+          .fontSize(10)
+          .fontColor(MUTED_TEXT)
+          .fontFamily('monospace')
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .width('100%')
+          .margin({ top: 10, bottom: 7 });
+
+        // Border PreviewChromeBrush / 圆角 10 / 内嵌只读 TextBox（Height 180）
+        Scroll() {
+          Text(this.logText)
+            .fontSize(10)
+            .fontColor(PREVIEW_TEXT)
+            .fontFamily('monospace')
+            .width('100%')
+            .copyOption(CopyOptions.LocalDevice);
+        }
+        .width('100%')
+        .height(180)
+        .padding(10)
+        .borderRadius(10)
+        .backgroundColor(PREVIEW_CHROME)
+        .border({ width: 1, color: BORDER })
+        .scrollBar(BarState.Auto)
+        .align(Alignment.Top);
+      }
+      .alignItems(HorizontalAlign.Start)
+      .width('100%');
+    }
+    .width('100%')
+    // 三个页签原本挂在 TabContent 下（由它提供确定的可用高度，Scroll 才能滚动）。
+    // 现在改用自绘内容区（Column + layoutWeight），必须显式把高度交给 Scroll，
+    // 否则它会按内容高度伸展、滚不动。
+    .height('100%')
+    .scrollBar(BarState.Auto)
+    .align(Alignment.Top);
+  }
+
+  /**
+   * 原版 TabControl 的三个页签（文字与 Header 一致）。
+   *
+   * 样式逐条对照 src/SharedUI/Controls/ModernControls.xaml：
+   *  · TabItem（`SubWindowTabItem`）：Padding 14,8 / Margin 2 / CornerRadius 8 /
+   *    FontSize 14 / FontWeight SemiBold（**选中与否都是 SemiBold**，不是选中才加粗。
+   *    ArkUI 的 FontWeight 没有 SemiBold 档，用 Medium 近似）/
+   *    文字色 MutedTextBrush → AccentBrush（选中）/ 底色 Transparent →
+   *    SelectionBrush（选中）、IconButtonHoverBrush（悬停且未选中）。
+   *  · 三段等宽由容器的 `UniformGrid Rows="1"` 保证 —— 鸿蒙侧用 layoutWeight(1)。
+   *  · 原版用 `IsKeyboardFocused` 把边框染成 AccentBrush，这里没有键盘焦点概念，省去。
+   */
+  @Builder
+  tab_item(text: string, index: number) {
+    Row() {
+      Text(text)
+        .fontSize(14)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(this.aboutTabIndex === index ? ACCENT : MUTED_TEXT)
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+    }
+    .justifyContent(FlexAlign.Center)
+    .layoutWeight(1)
+    .padding({ left: 14, right: 14, top: 8, bottom: 8 })
+    .margin(2)
+    .borderRadius(8)
+    .backgroundColor(this.aboutTabIndex === index
+      ? SELECTION
+      : (this.hoverTabIndex === index ? ICON_BUTTON_HOVER : Color.Transparent))
+    .onHover((isHover: boolean): void => {
+      this.hoverTabIndex = isHover ? index : NAV_TAB_NONE;
+    })
+    .onClick((): void => {
+      this.aboutTabIndex = index;
+    });
+  }
+
+  /**
+   * 正文区。原版 body 是 TabControl（`SubWindowTabControl`）：
+   *   容器 Border：ControlFillBrush 底 / BorderSoftBrush 1px 边 / CornerRadius 10 /
+   *   Padding 2；页签行等宽（UniformGrid Rows=1）；内容在容器下方的第二行。
+   * 鸿蒙侧的 Tabs 组件自带一条系统风格的 bar，做不出"容器包住三个等宽块"的观感，
+   * 所以这里按原版结构自绘：外层 Column = 胶囊容器 + 内容区（内容区自带 Scroll）。
+   */
+  @Builder
+  body() {
+    Column() {
+      Row() {
+        this.tab_item(S_TAB_ABOUT, ABOUT_TAB_INDEX);
+        this.tab_item(S_TAB_UPDATE_SETTINGS, UPDATE_SETTINGS_TAB_INDEX);
+        this.tab_item(S_TAB_DIAGNOSTICS, DIAGNOSTICS_TAB_INDEX);
+      }
+      .width('100%')
+      .padding(2)                                  // 原版 Border Padding="2"
+      .backgroundColor(CONTROL_FILL)               // ControlFillBrush
+      .border({ width: 1, color: BORDER_SOFT })    // BorderSoftBrush / 1px
+      .borderRadius(10);                           // CornerRadius="10"
+
+      // 内容区（原版 ContentPresenter Grid.Row=1）。三个 tab 自带 Scroll，
+      // 用 layoutWeight 占满剩余高度，它们才能正确滚动。
+      Column() {
+        if (this.aboutTabIndex === ABOUT_TAB_INDEX) {
+          this.about_tab();
+        } else if (this.aboutTabIndex === UPDATE_SETTINGS_TAB_INDEX) {
+          this.update_settings_tab();
+        } else {
+          this.diagnostics_tab();
+        }
+      }
+      .width('100%')
+      .layoutWeight(1);
+    }
+    .width('100%')
+    .height('100%');
+  }
+
+  build() {
+    Column() {
+      SubWindowShell({
+      windowName: WINDOW_NAME,
+      title: S_TITLE,
+      subtitle: S_SUBTITLE,
+      gap: SUBWINDOW_ROW_GAP,       // 行 1 = 16
+      hasNotice: false,
+      hasFooter: false,
+      hasActions: false,            // 原版没有底部按钮条，四个按钮在「关于」页里
+      content: (): void => { this.body(); },
+    });
+    }
+  }
+}

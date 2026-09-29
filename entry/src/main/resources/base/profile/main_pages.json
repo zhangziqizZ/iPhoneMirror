@@ -1,0 +1,26 @@
+{
+  "src": [
+    "pages/Index",
+    "pages/windows/AdvancedSettingsWindow",
+    "pages/windows/ImageSettingsWindow",
+    "pages/windows/AirPlayDeviceSelectionWindow",
+    "pages/windows/CaptureRecoveryWindow",
+    "pages/windows/ProtectedContentNoticeWindow",
+    "pages/windows/UsbProjectionModeInfoWindow",
+    "pages/windows/AppPromptWindow",
+    "pages/windows/AboutWindow",
+    "pages/windows/UpdateWindow",
+    "pages/windows/StartupErrorWindow",
+    "pages/windows/InstanceConflictWindow",
+    "pages/windows/BluetoothClientBindingWindow",
+    "pages/windows/BluetoothConnectionWindow",
+    "pages/windows/BluetoothControlNoticeWindow",
+    "pages/windows/CaptureStatusNoticeWindow",
+    "pages/windows/DeveloperToolsWindow",
+    "pages/windows/DeviceBindingWindow",
+    "pages/windows/MediaOutputSettingsWindow",
+    "pages/windows/ProjectionSettingsWindow",
+    "pages/windows/ShortcutSettingsWindow",
+    "pages/windows/StandalonePreviewWindow"
+  ]
+}
