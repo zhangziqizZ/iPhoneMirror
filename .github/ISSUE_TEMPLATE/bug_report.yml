@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        > 提交前请先看 [SUPPORT.md](../../blob/main/SUPPORT.md) ——
+        > 提交前请先看 [SUPPORT.md](https://github.com/zhangziqizZ/iPhoneMirror/blob/main/SUPPORT.md) ——
         > 包含「必读的三步自查」「必填信息清单」「已知不实现的清单」。
         > 
         > **⚠ 蓝牙反向控制仍在实现阶段，不保证可用** —— iPhone 上可能始终不出现指针。
@@ -14,7 +14,7 @@ body:
         > 确认这不是已知情况，并**务必贴上下面的诊断文本**。
         > 
         > **不要**在 issue 里贴 UDID、ECID、序列号、配对记录、USB 抓包等敏感信息。
-        > 详见 [SECURITY.md](../../blob/main/SECURITY.md)。
+        > 详见 [SECURITY.md](https://github.com/zhangziqizZ/iPhoneMirror/blob/main/SECURITY.md)。
 
   - type: input
     id: app_version

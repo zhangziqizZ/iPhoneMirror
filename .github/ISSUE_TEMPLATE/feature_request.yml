@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        > 提功能请求前请先看 [SUPPORT.md](../../blob/main/SUPPORT.md) § 一 —
+        > 提功能请求前请先看 [SUPPORT.md](https://github.com/zhangziqizZ/iPhoneMirror/blob/main/SUPPORT.md) § 一 —
         > 那里列出了**本项目不计划实现**的功能清单。
         > 命中清单的功能会被直接关闭，请先看一遍。
 
