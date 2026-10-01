@@ -239,6 +239,17 @@ std::int32_t IM_CALL im_log_message(const wchar_t* message) {
     return static_cast<std::int32_t>(iPhoneMirror::Result::Ok);
 }
 
+std::int32_t IM_CALL im_set_log_file(const char* path) {
+    if (!path || !*path) {
+        return fail(iPhoneMirror::Result::InvalidArgument, L"日志路径不能为空");
+    }
+    // 把原生诊断日志重定向进应用沙箱（filesDir/iPhoneMirror/Logs/startup.log），
+    // 否则默认写系统 temp 目录，ArkTS 的「实时日志」因沙箱隔离读不到、永远空白。
+    iPhoneMirror::logging::set_log_file_override(std::filesystem::path(path));
+    last_error.clear();
+    return static_cast<std::int32_t>(iPhoneMirror::Result::Ok);
+}
+
 std::int32_t IM_CALL im_get_environment(iPhoneMirror::EnvironmentInfo* environment) {
     if (!environment ||
         environment->struct_size != sizeof(iPhoneMirror::EnvironmentInfo)) {

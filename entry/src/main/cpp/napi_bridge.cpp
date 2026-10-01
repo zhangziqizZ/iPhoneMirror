@@ -880,6 +880,16 @@ napi_value JsAirPlayReportService(napi_env env, napi_callback_info info) {
         static_cast<std::int32_t>(iPhoneMirror::Result::Ok));
 }
 
+napi_value JsSetLogFile(napi_env env, napi_callback_info info) {
+    std::string path;
+    if (!arg_string(env, info, path)) {
+        return int32_result(env,
+            static_cast<std::int32_t>(iPhoneMirror::Result::InvalidArgument));
+    }
+    const std::int32_t result = im_set_log_file(path.c_str());
+    return int32_result(env, result);
+}
+
 } // namespace
 
 EXTERN_C_START
@@ -911,6 +921,7 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"lastError",        nullptr, JsLastError,        nullptr, nullptr, nullptr, napi_default, nullptr},
         {"usbDiagnostics",   nullptr, JsUsbDiagnostics,   nullptr, nullptr, nullptr, napi_default, nullptr},
         {"getEnvironment",   nullptr, JsGetEnvironment,   nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"setLogFile",       nullptr, JsSetLogFile,       nullptr, nullptr, nullptr, napi_default, nullptr},
     };
     napi_define_properties(env, exports, sizeof(desc) / sizeof(desc[0]), desc);
     return exports;

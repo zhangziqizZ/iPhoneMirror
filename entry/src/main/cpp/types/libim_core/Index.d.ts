@@ -101,6 +101,11 @@ export const lastError: () => string;
 // 有线采集失败时，这串记录是屏幕上唯一能说明"卡在哪一步"的东西。
 export const usbDiagnostics: () => string;
 
+// 把原生诊断日志重定向到显式路径（通常应是应用沙箱 filesDir/iPhoneMirror/Logs/startup.log）。
+// 原生默认写系统 temp 目录，而 ArkTS 因沙箱隔离读不到，导致「实时日志」永远空白。
+// 必须在 initialize() 之前调用，返回 0 = 成功，非 0 = 失败（原因取 lastError()）。
+export const setLogFile: (path: string) => number;
+
 // 环境诊断（im_get_environment）。diagnostic 是 Core 里 ohos_probe::probe() 的原话，
 // 它把"为什么看不到设备"分成了互斥的几种结论：
 //   · "USB DDK 可用，可见 N 台 Apple 设备"

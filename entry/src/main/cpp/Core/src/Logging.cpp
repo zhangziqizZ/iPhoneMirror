@@ -33,6 +33,9 @@ std::mutex log_mutex;
 std::mutex lifecycle_mutex;
 std::ofstream log_file;
 std::filesystem::path log_path;
+// 鸿蒙侧把原生日志重定向进应用沙箱时用的覆盖路径（见 set_log_file_override）。
+// 优先于环境变量 IPHONE_MIRROR_LOG_FILE，且不需要进程级环境变量。
+static std::optional<std::filesystem::path> g_path_override;
 bool initialized{};
 bool writes_suspended{};
 bool session_header_written{};
@@ -259,6 +262,7 @@ std::optional<std::filesystem::path> log_path_override() {
 }
 
 std::filesystem::path configured_path() {
+    if (g_path_override) return *g_path_override;
     if (auto override_path = log_path_override()) return *std::move(override_path);
     return default_path();
 }
@@ -402,6 +406,23 @@ bool salted_sha256(std::string_view value,
 }
 
 } // namespace
+
+void set_log_file_override(const std::filesystem::path& path) noexcept {
+    try {
+        std::scoped_lock lock(log_mutex);
+        g_path_override = path;
+        // 关闭当前已打开的日志文件，让下一次写入按新路径（应用沙箱）重新打开。
+        // 这样即使在 im_initialize() 之后调用也有效，只是此前的少量早期日志会留在
+        // 原来的 temp 路径里（应用读不到，无所谓）。
+        if (log_file.is_open()) {
+            log_file.flush();
+            log_file.close();
+        }
+        log_file.clear();
+    } catch (...) {
+        // 尽力而为：绝不让日志配置异常冒泡到调用方（尤其是 ArkTS 生命周期里）。
+    }
+}
 
 std::string fingerprint(std::string_view value) noexcept {
     try {

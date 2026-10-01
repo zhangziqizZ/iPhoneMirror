@@ -264,6 +264,12 @@ IM_API std::uint32_t IM_CALL im_api_version();
 // Messages are limited to 4096 UTF-16 code units and may not be empty.
 IM_API std::int32_t IM_CALL im_log_message(const wchar_t* message);
 
+// Redirects the native diagnostic log to an explicit path (e.g. the app sandbox)
+// instead of the default system temp directory. Returns 0 on success, non-zero on
+// failure. Best called before im_initialize(); safe afterwards (the open file is
+// reopened lazily on the next write).
+IM_API std::int32_t IM_CALL im_set_log_file(const char* path);
+
 // On input, *count is the number of entries available in devices. On output it
 // is the number of devices discovered. Passing devices == nullptr is a count query.
 IM_API std::int32_t IM_CALL im_refresh_devices(
