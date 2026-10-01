@@ -52,7 +52,9 @@ import {
   SETTINGS_SECTION_CORNER, SETTINGS_SECTION_PADDING,
   TEXTBOX_CORNER, TEXTBOX_PADDING_H, TEXTBOX_PADDING_V, TEXTBOX_MIN_HEIGHT, TEXTBOX_FONT_SIZE,
   TEXTBOX_READONLY_OPACITY,
+  DARK, LIGHT, ThemeColors,
 } from './Theme';
+import { THEME_SCHEME_KEY } from './theme_manager';
 
 const TAG: string = 'im_subwindow';
 const DOMAIN: number = 0x0100;
@@ -150,6 +152,14 @@ export struct SettingsSection {
 /** 普通按钮 —— App.xaml 隐式 Button 样式（「关闭高级模式」「取消」等）。 */
 @Component
 export struct SecondaryButton {
+  /**
+   * ★ 配色必须自取主题（`@StorageLink` + 调色板），不能用模块级静态常量：
+   *   `TEXT`/`CONTROL_FILL` 等是 **DarkTheme.xaml 的静态值**（近白文字 + 白 8% 底），
+   *   浅色模式下画在浅色卡片上 ⇒ 白字白底、几乎看不见（用户 2026-10-02 截图：
+   *   主窗「设置中心」一列按钮全部隐形）。主窗/子窗共用本组件，主题键在
+   *   AppStorage 全局一份 ⇒ 这里自取即可与宿主页面同进退。
+   */
+  @StorageLink(THEME_SCHEME_KEY) scheme: string = 'dark';
   @Prop label: string = '';
   @Prop buttonWidth: number = 0;
   /** 原版按钮常写 MinWidth="88" / MinWidth="120" 而不是 Width；0 表示不限制。 */
@@ -158,11 +168,15 @@ export struct SecondaryButton {
   @State hovered: boolean = false;
   on_action: () => void = () => {};
 
+  private palette(): ThemeColors {
+    return this.scheme === 'dark' ? DARK : LIGHT;
+  }
+
   build() {
     Text(this.label)
       .fontSize(BUTTON_FONT_SIZE)
       .fontWeight(FontWeight.Bold)
-      .fontColor(TEXT)
+      .fontColor(this.palette().TEXT)
       .textAlign(TextAlign.Center)
       .height(this.buttonHeight)
       .width(this.buttonWidth > 0 ? this.buttonWidth : undefined)
@@ -172,8 +186,8 @@ export struct SecondaryButton {
         bottom: this.buttonWidth > 0 ? 0 : BUTTON_PADDING_V,
       })
       .borderRadius(BUTTON_CORNER)
-      .backgroundColor(this.hovered ? CONTROL_HOVER : CONTROL_FILL)
-      .border({ width: 1, color: BORDER })
+      .backgroundColor(this.hovered ? this.palette().CONTROL_HOVER : this.palette().CONTROL_FILL)
+      .border({ width: 1, color: this.palette().BORDER })
       .constraintSize({ minWidth: this.minButtonWidth })
       .onHover((isHover: boolean): void => { this.hovered = isHover; })
       .onClick((): void => { this.on_action(); });

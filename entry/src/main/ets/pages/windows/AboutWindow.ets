@@ -227,9 +227,13 @@ export class ChangelogRelease {
 
 /**
  * 变更说明（CHANGELOG.md 的镜像），**最新版本排在最前**。
- * 关于页按版本分组：最新一版默认展开，旧版本默认收起，点版本行展开查看。
+ * 关于页按版本分组：最新一版默认展开（可收起），旧版本固定折叠只留版本行。
  */
 const CHANGELOG_RELEASES: ChangelogRelease[] = [
+  new ChangelogRelease('1.0.41', '2026-10-02', [
+    '修复：浅色模式下「设置中心」等次要按钮白字白底不可见 —— 按钮配色改为随主题切换（主窗与各子窗口一致）',
+    '调整：关于页「版本更新」旧版本固定折叠，只显示版本号与日期；最新版本仍可展开/收起',
+  ]),
   new ChangelogRelease('1.0.40', '2026-10-02', [
     '新增：半透明窗口 —— 对齐 Windows 11 原生深色观感，窗口底色半透明，UI 的 Fluent 半透明色板真正透到桌面',
     '浓度可在界面选档 78% / 60% / 50% / 40%（默认 60%），点一下立即生效；失焦时窗口变主题实色而非变黑；开关一键回到原纯色背景',
@@ -396,8 +400,13 @@ const S_WHATS_NEW: string = '版本更新';
 
 /**
  * 单个版本的变更分组（「版本更新」里的一项）。
- * 参考微信更新日志：版本行可点，展开/收起该版本的变更列表；
- * 最新版本（isLatest）默认展开，其余默认收起。
+ * ★ 交互规则（用户 2026-10-02 要求「把旧版本再折叠起来」）：
+ *   - **最新版本**默认展开，可点版本行收起/再展开；
+ *   - **旧版本固定折叠**：只显示「版本号 + 日期」一行，**不可展开**
+ *     （完整历史看仓库里的 CHANGELOG.md / GitHub Releases）。
+ * ★ 实现上刻意**不依赖** `aboutToAppear` 里读 `@Prop`：旧版本根本不渲染条目、
+ *   没有任何「Prop → State 拷贝」时序 —— 此前 `expanded = isLatest` 的写法在
+ *   真机上表现与预期不符（旧版本出现展开态），这里从根上消除该依赖。
  */
 @Component
 struct ChangelogGroup {
@@ -405,11 +414,8 @@ struct ChangelogGroup {
   @Prop date: string = '';
   @Prop items: string[] = [];
   @Prop isLatest: boolean = false;
-  @State expanded: boolean = false;
-
-  aboutToAppear(): void {
-    this.expanded = this.isLatest;
-  }
+  /** 仅最新版本使用；旧版本不渲染条目，此状态无意义。初始即展开，无需 Prop 拷贝。 */
+  @State latestExpanded: boolean = true;
 
   build(): void {
     Column() {
@@ -432,25 +438,30 @@ struct ChangelogGroup {
             .margin({ left: 8 });
         }
         Blank();
-        FluentSymbol({
-          iconName: this.expanded ? 'ChevronUp20' : 'ChevronDown20',
-          iconSize: 16,
-          iconColor: MUTED_TEXT,
-        });
+        if (this.isLatest) {
+          FluentSymbol({
+            iconName: this.latestExpanded ? 'ChevronUp20' : 'ChevronDown20',
+            iconSize: 16,
+            iconColor: MUTED_TEXT,
+          });
+        }
       }
       .width('100%')
       .alignItems(VerticalAlign.Center)
       .padding({ top: 11, bottom: 11 })
       .onClick((): void => {
+        if (!this.isLatest) {
+          return; // 旧版本固定折叠，点击无效果。
+        }
         try {
-          this.expanded = !this.expanded;
+          this.latestExpanded = !this.latestExpanded;
         } catch (error) {
           hilog.warn(DOMAIN, TAG, '版本分组展开/收起失败: %{public}s',
             (error as BusinessError).message);
         }
       });
 
-      if (this.expanded) {
+      if (this.isLatest && this.latestExpanded) {
         ForEach(this.items, (item: string): void => {
           Row() {
             Text('•')
