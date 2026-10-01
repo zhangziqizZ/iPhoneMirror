@@ -1,20 +1,25 @@
-// FluentIcon.ets —— Fluent System Icons 的矢量路径表（自动生成，勿手改）
+// FluentIcon.ets —— Fluent System Icons 的矢量路径表（自动生成，勿手改上半部分）
 //
-// 生成器：tools/gen_fluent_icons.py（路径表）／tools/gen_font_ink.py（字体墨迹核对）
+// 生成器：tools/gen_fluent_icons.py（路径表／本文件上半部分）／tools/gen_font_ink.py（字体墨迹核对）
 // 数据源：microsoft/fluentui-system-icons（MIT License）
 //         assets/<图标名>/SVG/ic_fluent_<名>_<尺寸>_regular.svg
 //
 // 为什么这样做：
 //   上游界面（WPF + WPF-UI 4.3.0）用 <ui:SymbolIcon Symbol="PhoneDesktop24"/>，
-//   它渲染的是 Fluent System Icons 字体里的对应码点。鸿蒙没有这个字体，
-//   但每个图标本身是一段纯矢量路径 —— 这里原样搬过来自绘。
+//   它渲染的是 Fluent System Icons 字体的对应码点。鸿蒙没有这个字体，但每个图标
+//   本身是一段纯矢量路径 —— 这里原样搬过来自绘，坐标一个不改。
 //
-// ★ 字体口径核对结论（2026-09-18，实测 FluentSystemIcons-Regular.ttf）：
-//   字体 unitsPerEm=500、hhea ascent=500 descent=0，且实测每个字形的**点坐标**
-//   与同名 SVG 完全同构：墨迹位置 = SVG viewBox 里 CAD 设计的位置，
-//   缩放比正好 500/viewBox（如 dismiss_20：SVG 12/20 → 字体 300/500），y 轴翻转。
-//   ⇒ **字体的 em 框就是 SVG 的 viewBox**。所以只要把 viewBox 整块铺满
-//   `iconSize × iconSize`（vp），就与 WPF 的 SymbolIcon 逐点一致；不需要按墨迹重新居中。
+// ★ 字体口径核对结论（实测 FluentSystemIcons-Regular.ttf）：
+//   字体 unitsPerEm=500、hhea ascent=500 descent=0，且每个字形的点坐标与同名 SVG
+//   完全同构：缩放比正好 500/viewBox，y 轴翻转。⇒ 字体的 em 框就是 SVG 的 viewBox，
+//   路径坐标可直接映射，不需按墨迹重新居中。
+//
+// ★ 绘制口径（关键，防回退）：
+//   路径坐标单位是 px，而布局尺寸单位是 vp。早期实现用 Shape.viewPort 把两者混在
+//   一起，导致「图标比原版小一圈、缩在方框左上角」。FluentSymbol 改用两步绘制
+//   （见下方手写组件 px_per_vp / fit_scale）：先把画布写成 viewBox 的 px 尺寸，
+//   再由根 Stack 居中并 .scale() 放大到布局框。本文件下半部分（FluentSymbol 组件）
+//   是手写的、生成器保留，切勿在生成器里覆盖它。
 //
 // 用法：FluentSymbol({ iconName: 'PhoneDesktop24', iconSize: 20, iconColor: ACCENT })
 
@@ -70,6 +75,20 @@ function build_icon_table(): Map<string, IconGlyph> {
       ' 6.37857 5.12372 6.17075C5.30556 5.96293 5.62144 5.94187 5.82926 6.12371L9.00001 8.89812V2.5C9.0' +
       '0001 2.29777 9.12183 2.11545 9.30867 2.03806ZM10 11.1019V16.2929L12.7685 13.5244L10 11.1019ZM10 ' +
       '8.89812L12.7685 6.47564L10 3.70711V8.89812Z'
+    ));
+  table.set('ChevronDown20',
+    new IconGlyph(20, 20,
+      'M15.8537 7.64582C16.0493 7.84073 16.0499 8.15731 15.855 8.35292L10.39 13.8374C10.1751 14.0531 9.' +
+      '82574 14.0531 9.6108 13.8374L4.14582 8.35292C3.9509 8.15731 3.95147 7.84073 4.14708 7.64582C4.34' +
+      '269 7.4509 4.65927 7.45147 4.85418 7.64708L10.0004 12.8117L15.1466 7.64708C15.3415 7.45147 15.65' +
+      '81 7.4509 15.8537 7.64582Z'
+    ));
+  table.set('ChevronUp20',
+    new IconGlyph(20, 20,
+      'M4.14708 12.3534C3.95147 12.1585 3.9509 11.8419 4.14582 11.6463L9.6108 6.16178C9.82574 5.94607 1' +
+      '0.1751 5.94607 10.39 6.16178L15.855 11.6463C16.0499 11.8419 16.0493 12.1585 15.8537 12.3534C15.6' +
+      '581 12.5483 15.3415 12.5477 15.1466 12.3521L10.0004 7.18753L4.85418 12.3521C4.65927 12.5477 4.34' +
+      '269 12.5483 4.14708 12.3534Z'
     ));
   table.set('Cursor20',
     new IconGlyph(20, 20,
@@ -406,7 +425,7 @@ export function icon_glyph(name: string): IconGlyph {
 }
 
 // 本表收录的图标（与原版 SymbolIcon 的 Symbol 名一一对应）：
-// DeviceOutline、Add20、ArrowClockwise20、Bluetooth20、Cursor20、Delete20、DeveloperBoard20、Dismiss20、ErrorCircle20、FullScreenMaximize20、ImageEdit20、Info24、KeyboardShift16、Maximize20、MusicNote220、Navigation20、Open20、Pause20、PhoneDesktop24、Play20、ProjectionScreen24、Screenshot20、Settings24、Speaker220、SpeakerMute20、Subtract20、UsbPlug20、UsbPlug24、VideoRecording20、Warning20、WindowNew20
+// DeviceOutline、Add20、ArrowClockwise20、Bluetooth20、ChevronDown20、ChevronUp20、Cursor20、Delete20、DeveloperBoard20、Dismiss20、ErrorCircle20、FullScreenMaximize20、ImageEdit20、Info24、KeyboardShift16、Maximize20、MusicNote220、Navigation20、Open20、Pause20、PhoneDesktop24、Play20、ProjectionScreen24、Screenshot20、Settings24、Speaker220、SpeakerMute20、Subtract20、UsbPlug20、UsbPlug24、VideoRecording20、Warning20、WindowNew20
 
 /**
  * 1 vp 等于多少 px。
@@ -440,6 +459,13 @@ function px_per_vp(ui: UIContext | null): number {
   }
   return 1;
 }
+
+// ╔════════════════════════════════════════════════════════════════════════╗
+// ║ 以下为「手写组件区」（FluentSymbol）。                                  ║
+// ║ 本文件上半部分是 tools/gen_fluent_icons.py 自动生成的图标数据表；      ║
+// ║ 重新生成时只重写上半部分，本行之后的手写组件原样保留，绝不覆盖。       ║
+// ║ 若需修改图标画法，改这里即可，不要改上面的数据表。                     ║
+// ╚════════════════════════════════════════════════════════════════════════╝
 
 /**
  * Fluent 图标组件 —— 对应原版的 <ui:SymbolIcon Symbol=... FontSize=.../>。
@@ -544,3 +570,7 @@ export struct FluentSymbol {
     .height(this.box_height())
   }
 }
+
+// ╔════════════════════════════════════════════════════════════════════════╗
+// ║ 手写组件区结束。                                                      ║
+// ╚════════════════════════════════════════════════════════════════════════╝
