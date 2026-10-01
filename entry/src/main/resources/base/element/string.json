@@ -55,6 +55,14 @@
     {
       "name": "bluetooth_perm_reason",
       "value": "蓝牙反向控制需要把本机蓝牙作为输入设备（BLE HID）向 iPhone 广播，以转发鼠标与键盘操作"
+    },
+    {
+      "name": "window_transparent_perm_reason",
+      "value": "半透明窗口效果需要设置窗口容器配色与阴影开关，使界面呈现类似 Windows 原生深色的磨砂观感"
+    },
+    {
+      "name": "imagevideo_perm_reason",
+      "value": "截图功能需要将预览画面保存到系统相册"
     }
   ]
 }

@@ -1,10 +1,13 @@
 import { AbilityConstant, UIAbility, Want, Configuration, ConfigurationConstant } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
-import { setSystemDark } from '../common/theme_manager';
+import { setSystemDark, SYSTEM_DARK_KEY } from '../common/theme_manager';
+import { WINDOW_ACRYLIC_RESULT_KEY, WINDOW_SHADOW_RESULT_KEY } from '../common/WindowServices';
+import { open_app_preferences, load_acrylic_preferences } from '../common/AppPreferences';
 import { vp_to_px_ratio } from '../common/SubWindow';
 import { BusinessError } from '@ohos.base';
 import { open_instance_conflict, InstanceConflictRequest } from '../pages/windows/InstanceConflictWindow';
+import { setLogFile } from 'libim_core.so';
 
 const TAG: string = 'iPhoneMirror';
 
@@ -22,6 +25,33 @@ const MAIN_WINDOW_MIN_HEIGHT_VP: number = 700;
 export default class EntryAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     hilog.info(0x0000, TAG, '%{public}s', 'EntryAbility.onCreate');
+    // ★ 半透明窗口的两个偏好必须**跨启动保留**：AppStorage 是进程内内存态，
+    //   进程一退就没了 ⇒ 用户选完浓度重启又回默认值（= 没保存）。
+    //   ★ 顺序要求：必须在**任何地方访问这两个键之前**（尤其 UI 组件里的 @StorageLink）
+    //     先把磁盘值读回 AppStorage —— UI 的 @StorageLink 首次读取会**建立**这个键
+    //     （用的是它的默认值），一旦它先建了，后面读回来的存档值就盖不住了。
+    //   ★ 对照：开发者模式（DEVELOPER_MODE_KEY）**有意**不持久化 —— 它是调试入口，
+    //     每次启动都该回到关闭态。
+    //   ★ 为什么之前用的 PersistentStorage 实测不行：它自己决定何时刷盘，用户直接关掉
+    //     /杀进程时来不及 ⇒ 现在换成显式 putSync + flushSync（见 AppPreferences.ets）。
+    open_app_preferences(this.context);
+    load_acrylic_preferences();
+    // 把原生 Core 的诊断日志重定向进应用沙箱，否则它默认写到系统 temp 目录
+    // （iPhoneMirror-capture.log），应用读不到 ⇒ 关于页"实时日志"永远空白。
+    // 必须在任何原生写入发生之前设置（im_initialize 会立即写首条会话头）。
+    // 沙箱目录由 native Logging.cpp 的 create_directories 自行创建，这里不用提前建。
+    try {
+      const logPath: string = this.context.filesDir + '/iPhoneMirror/Logs/startup.log';
+      const code: number = setLogFile(logPath);
+      if (code !== 0) {
+        hilog.warn(0x0000, TAG, 'setLogFile 返回非零（%{public}d），日志可能仍落 temp', code);
+      } else {
+        hilog.info(0x0000, TAG, '原生日志已重定向到 %{public}s', logPath);
+      }
+    } catch (error) {
+      const failure = error as BusinessError;
+      hilog.warn(0x0000, TAG, 'setLogFile 失败（非致命）：%{public}s', failure.message);
+    }
   }
 
   onDestroy(): void {
@@ -73,6 +103,20 @@ export default class EntryAbility extends UIAbility {
         const mainWindow: window.Window = windowStage.getMainWindowSync();
         mainWindow.setWindowDecorVisible(false);
 
+        // 半透明窗口（对齐 Win11 Acrylic 观感，已转正式特性）：主窗背景设为**全透明**，
+        // 让 Index 根容器的带 alpha 底色（root_background_color()）直接混到桌面。
+        // ★ 该调用**不需要权限**（@throws 仅 401/1300002），但透明效果能否透出桌面
+        //   取决于系统合成器 —— 退化表现是「看不到桌面/只有 UI 自绘色」，不是黑屏：
+        //   根容器 100%×100% 全覆盖，UI 半透明区域的兜底色永远是它自己。
+        // ★ 开关关闭时根容器回实色 BACKGROUND，这里保持透明无副作用（被 UI 盖住）。
+        try {
+          mainWindow.setWindowBackgroundColor('#00000000');
+        } catch (transparentError) {
+          const transparentFailure = transparentError as BusinessError;
+          hilog.warn(0x0000, TAG, 'setWindowBackgroundColor(transparent) failed: %{public}s',
+            transparentFailure.message);
+        }
+
         // 主窗口最小尺寸（原版 MinWidth="1280" MinHeight="700" DIP）。
         // 窗口 API 收的是 **px**，所以按屏幕密度把 vp 折算过去——与 SubWindowHost.open
         // 共用同一个 vp_to_px_ratio()，避免两处口径漂移；isForcible=true 才能把下限
@@ -101,6 +145,69 @@ export default class EntryAbility extends UIAbility {
       } catch (error) {
         const failure = error as BusinessError;
         hilog.warn(0x0000, TAG, 'read system colorMode failed: %{public}s', failure.message);
+      }
+
+      // ★★ 窗口容器配色（@since 20，SessionManager，需 SET_WINDOW_TRANSPARENT）。
+      //    setWindowBackgroundColor 只是**窗口内**兜底色（内容区），内容区透明后真正
+      //    决定"能不能透视桌面"的是**容器色**的 Alpha。
+      //    ★★ 401 的根因（1.0.33 实测）：官方《控制窗口外观》明写
+      //      「该接口**不支持将非焦点态下的主窗口背景设置为透明**」⇒ inactiveColor
+      //      必须是**不透明**色。1.0.33 两个参数都传了 #CC…（焦点/非焦点皆半透）
+      //      ⇒ 被框架层参数校验拒掉，返回 401（401 **不在** @throws 列表里，
+      //      列表只有 201/801/1300002/1300004，所以别照着列表排除可能性）。
+      //    ★ 为此做**分级探测**：依次试 4 组取值，每组独立记录成功/失败码，
+      //      **最后一次成功的组合生效**。一次构建就能读出「系统接受到哪一级 alpha」，
+      //      不用来回试。结果写 AppStorage 由设置面板显示（失败必须可见）。
+      //    ★ 放在主题确定**之后**：容器色按当前深浅取，否则深浅反。
+      const probeDark: boolean = AppStorage.get<boolean>(SYSTEM_DARK_KEY) ?? true;
+      const translucent: string = probeDark ? '#CC1F1F1F' : '#CCF3F3F5';
+      const solid: string = probeDark ? '#FF1F1F1F' : '#FFF3F3F5';
+      const systemDefault: string = probeDark ? '#FF1A1A1A' : '#FFF0F0F0';
+      const probeColors: string[][] = [
+        [systemDefault, systemDefault], // ① 基线：全实色——验证"颜色格式本身对不对"
+        [translucent, translucent], // ② 1.0.33 的原取值（已实测 401）
+        [translucent, solid], // ③ 期望：焦点半透 / 非焦点实色
+        ['#00000000', solid], // ④ 极限：焦点全透 / 非焦点主题实色（★ 不能用纯黑：
+        //   1.0.34 实测生效的是本组，失焦时容器底变纯黑 ⇒ 整窗发黑；
+        //   Win11 失焦窗口是变"实色"而非变黑 ⇒ inactive 用主题实色）。
+      ];
+      const probeLabels: string[] = ['基线', '双半透', '焦半透', '焦全透'];
+      let acrylicLedger: string = '';
+      let acrylicApplied: number = -1;
+      try {
+        const mainWindow: window.Window = windowStage.getMainWindowSync();
+        for (let probeIndex: number = 0; probeIndex < probeColors.length; probeIndex++) {
+          try {
+            mainWindow.setWindowContainerColor(probeColors[probeIndex][0], probeColors[probeIndex][1]);
+            acrylicApplied = probeIndex;
+            acrylicLedger += `${probeLabels[probeIndex]}=成功 `;
+          } catch (probeError) {
+            const probeFailure = probeError as BusinessError;
+            acrylicLedger += `${probeLabels[probeIndex]}=${probeFailure.code} `;
+          }
+        }
+      } catch (windowError) {
+        const windowFailure = windowError as BusinessError;
+        acrylicLedger += `取窗=${windowFailure.code} `;
+      }
+      AppStorage.setOrCreate(WINDOW_ACRYLIC_RESULT_KEY,
+        `容器 ${acrylicLedger}｜生效=${acrylicApplied >= 0 ? probeLabels[acrylicApplied] : '无'}`);
+      hilog.info(0x0000, TAG, 'setWindowContainerColor 探测：%{public}s', acrylicLedger);
+
+      // 半透明窗口不该带阴影（阴影不透明，会在窗口边缘糊出一圈灰）。
+      try {
+        windowStage.getMainWindowSync()
+          .setWindowShadowEnabled(false)
+          .catch((shadowError: BusinessError): void => {
+            AppStorage.setOrCreate(WINDOW_SHADOW_RESULT_KEY,
+              `阴影关闭=失败 ${shadowError.code} ${shadowError.message}`);
+            hilog.warn(0x0000, TAG, 'setWindowShadowEnabled failed: %{public}d %{public}s',
+              shadowError.code, shadowError.message);
+          });
+      } catch (shadowError) {
+        const shadowFailure = shadowError as BusinessError;
+        AppStorage.setOrCreate(WINDOW_SHADOW_RESULT_KEY,
+          `阴影关闭=失败 ${shadowFailure.code} ${shadowFailure.message}`);
       }
     });
   }

@@ -173,6 +173,7 @@ import {
   PREVIEW_CHROME, PREVIEW_TEXT,
 } from '../../common/Theme';
 import { FluentSymbol } from '../../common/FluentIcon';
+import { DEVELOPER_MODE_KEY } from '../../common/WindowServices';
 
 const TAG: string = 'im_about';
 const DOMAIN: number = 0x0100;
@@ -193,113 +194,284 @@ export const SETTINGS_KEY_NOTIFY_STABLE: string = 'im.updateSettings.notifyStabl
 export const SETTINGS_KEY_NOTIFY_PRERELEASE: string = 'im.updateSettings.notifyPrereleaseReleases';
 
 /** 原版 GitHubReleaseClient 的三个链接（xaml.cs 里的字面量）。 */
-const GITHUB_REPO_URL: string = 'https://github.com/RayrenSX/iPhoneMirror';
-const GITHUB_RELEASES_URL: string = 'https://github.com/RayrenSX/iPhoneMirror/releases';
-const GITHUB_LICENSE_URL: string = 'https://github.com/RayrenSX/iPhoneMirror/blob/main/LICENSE';
+const GITHUB_REPO_URL: string = 'https://github.com/zhangziqizZ/iPhoneMirror';
+const GITHUB_RELEASES_URL: string = 'https://github.com/zhangziqizZ/iPhoneMirror/releases';
+const GITHUB_LICENSE_URL: string = 'https://github.com/zhangziqizZ/iPhoneMirror/blob/main/LICENSE';
 
 /** Strings（逐键标注）。 */
 const S_TITLE: string = '关于';                                    // AboutTitle
 const S_SUBTITLE: string = '应用信息、更新和诊断';                    // AboutSubtitle
 const S_DESCRIPTION: string = '低延迟 iPhone 屏幕投射、录制、直播与虚拟摄像头。';  // AboutDescription
 /**
- * 变更说明（CHANGELOG.md 的镜像）。
+ * 一个版本的更新记录（关于页「版本更新」按版本分组展示）。
  *
  * 为什么在代码里存一份而不是读文件：鸿蒙 App 安装包里没有随包可读的
- * CHANGELOG.md（也没有 explorer 打开本地文件），所以关于页的「本次更新」区块
- * 直接内嵌这份常量。**每次改版本号时，必须同步更新这里和 CHANGELOG.md**，
- * 二者内容一致；版本号本身只认 AppScope/app.json5 的 versionName（经 bundleManager 读）。
+ * CHANGELOG.md（也没有 explorer 打开本地文件），所以关于页直接内嵌这份常量。
+ * **每次改版本号时，必须同步更新这里和 CHANGELOG.md**，二者内容一致；
+ * 版本号本身只认 AppScope/app.json5 的 versionName（经 bundleManager 读）。
  */
-const CHANGELOG_ITEMS: string[] = [
-  '反控改为显式标注「实验性」：预览快捷条按钮文案由「蓝牙反向控制已广播」改成「蓝牙反控（实验）已广播」——「已广播」只说明 GATT 服务起来了，不代表能用',
-  '蓝牙反控卡片标题下新增一行橙色加粗声明：「实验性功能（开发中）：反向控制仍在实现阶段，本版本不保证可用……」',
-  '「等待连接 / 已连接」提示窗口新增成熟度声明行（上游没有这一条），显示在 5 步配对清单之前；「已连接」标题改为「蓝牙反向控制已开启（实验）」',
-  '短摘要行与设置面板状态行同步加「（实验·开发中）」：避免把 订阅1 这个读数读成"功能成了"',
-  'README / SUPPORT / 项目简介与两份 issue 模板同步写入「反控仍在实现阶段、不保证可用」；SUPPORT 新增 § 〇 实验性功能专节',
-  '本条只改文案与文档，未改协议层、未改任何 HID 行为',
-  '蓝牙反控卡片新增一行「主机 读N 写N 订阅S + 已配对X台(命中)」短摘要：fontSize 12 + 加粗 + 订阅1绿其它橙，第一眼就能看出"iPhone 端配置 vs 投递问题"',
-  '状态行长串诊断改为可换行（maxLines=10）—— 此前单行截断后用户只看到「蓝牙反控已广播」一句话，「复制诊断」按钮在卡片底也找不到',
-  '空态占位从「当前未开启蓝牙反向控制。」改成「当前未开启蓝牙反向控制（点上方按钮启用）」——少一个句号都容易被当成"功能坏了"',
-  '修完后的 0 错 0 嫌：types 0 错（3 警告 = napi 28014）、alias 0 嫌',
-  '修复「iPhone 上始终不出现系统指针」的根因：GATT 服务端漏了应答义务 —— 官方规定收到读取特征值请求必须调用 sendResponse，我们此前一个读请求都没应答',
-  '补齐 characteristicRead / descriptorRead / descriptorWrite 应答，并在带响应的写入里也应答；应答统一带请求自带的 deviceId/transId/offset',
-  '此前 iOS 读 Report Map（HID 描述符）会无声超时 ⇒ 建不出 HID 设备 ⇒ 手机不出现指针，且对端不给任何错误提示',
-  '新增「主机侧交互账本」：读N / 写N / 订阅0-1 / 应答失败N，可直接区分「手机没来枚举」与「来了但不订阅」',
-  '新增「复制诊断」按钮：一次点击把输入侧 + HID 侧整段真值写进剪贴板，便于把现场报回开发者',
-  '新增「与 iPhone 配对」按钮：鸿蒙 GattProperties 没有「要求加密」这一项，只能用主动配对补上 iOS 对 HID 的加密要求',
-  '协议模式 / 控制点属性放宽成「写 + 免应答写」都收，避免另一种写法的 ATT 请求被栈直接拒掉（我们这侧连回调都不会有）',
-  '去掉挂在 Report Map 上的 Report Reference 描述符（它只属于 Report 特征，与上游对齐）',
-  '引导文案更正为上游用户手册的准确路径：iPhone 上「设置 → 辅助功能 → 触控 → 辅助触控」开启，并在该页「设备 → 蓝牙设备」配对（不开辅助触控 iOS 不显示指针）',
-  '核对确认：Report Map 与上游逐字节相同（189 字节）、HID Information 同值、广播已带 0x1812',
-  '定位「指针藏了但手机不动」的根因：鸿蒙发通知只能按 UUID 定位特征，而 5 个 Report 特征共用 0x2A4D，投递落点由协议栈决定',
-  'HID 布局改为默认「单 Report 特征 + 载荷首字节带 report id」，0x2A4D 只剩一个实例，投递不再有歧义',
-  '设置面板新增「HID 布局」一行与切换按钮，可在单特征 / 多特征之间对照，一次切换即可证伪布局问题',
-  '打开独立窗口时不再顺手关掉蓝牙反控（原来会经历停广播→重建服务→iPhone 重连，而独立窗口正是要操控手机的窗口）',
-  '独立窗口条带读数改成「必定可见」：不再因为通道没起来就返回空串，未启用 / 待机 / 接管 都给出可读真值',
-  '读数新增布局与广播-连接两格（如「待机 单特征 广1连0」），广播着而手机没连上这一格从此看得见',
-  '修复构建失败：ArkTS 不做「布尔别名收窄」，判空条件要直接写进使用它的那个 if（原写法 tsc 能过、真构建报 10605999）',
-  '新增自检脚本 tools/check_alias_narrowing.py，专门扫这类「靠布尔别名收窄」的写法（修完 0 处嫌疑）',
-  '修复键盘反控静默失效：取焦点的标识要用 .id() 而不是 .key()（后者在新版 SDK 上不再作为可寻址标识）',
-  '焦点的真值改由输入层的 onFocus/onBlur 回报（requestFocus 返回 void，没有成功失败可读）；接管中没焦点时栏上显示「无焦点」',
-  '修「独立窗口里指针藏了却操控不了」：新增原始位移可用性探针，原始计数恒为 0 时自动改走绝对坐标差分',
-  '画面区容器上再挂一份事件接口做兜底；同一事件被两处各收一次时按事件指纹去重，不会发两遍',
-  '画面区尺寸改用统一的 length_to_vp 解析，不再因为带单位的字符串算成 0（那会让差分一步都算不出来）',
-  '独立窗口栏上新增反控读数：移/原/送/鼠 四段账，缺哪段就指向哪段的问题',
-  '独立窗口补 500ms 状态轮询，主窗口不在前台时这边的接管态不再停在过期值上',
-  '接管成立即把键盘焦点要过来，不再依赖「先点一下画面」',
-  '状态行新增「协议N」：iOS 写下的协议模式，是它认下这台 HID 设备的握手证据',
-  '修复「独立窗口」「刷新画面」等按钮不实时刷新：旧写法把状态当参数传给 @Builder，而它按值传参不参与动态刷新',
-  '同一族的四格统计（分辨率/帧率/延迟/音频）不再永远停在首帧的「—」',
-  '画面调节窗口的四个数值跟着滑杆实时变化，此前拖动数字不动',
-  '工具条上的蓝牙状态文案与设置面板里的蓝牙状态行现在都跟着真实状态变',
-  '设备列表的选中高亮改为确定性行为：选中态与连接状态进 ForEach 的 key，点一下必定移动',
-  '鼠标放到画面上就能操控：接管层常驻，进入画面即接管、移开即释放，不用再先去找开关',
-  '蓝牙通道改为惰性启动：第一次把鼠标放到画面上时才申请权限、开广播，不再一开应用就弹框',
-  '接管期间隐藏本地指针，免得屏幕上两个指针各走各的；状态行显示「★操控中」',
-  '指针移动改用鼠标硬件原始位移（rawDelta），不再受窗口边缘挡住、光标跑出窗口的影响',
-  'rawDelta 取不到时自动退回旧算法，降级次数显示在状态行（可判断这台设备支不支持）',
-  '独立预览窗口接入反向控制：此前该窗口完全没有输入层，而它才是日常真正在用的那个',
-  '排除三种不该接管的场合，且画面一到位就自动接管（不必把鼠标移开再移回来）',
-  '「停止蓝牙反向控制」不再被自动启动立刻推翻；外设启动加了并发守卫',
-  '修复镜像卡顿：解码从网络收包线程上摘下，交给专属解码线程；积压时丢最旧的包，丢帧数直接可见',
-  '修复投屏声音断续发闷：音频欠载门限只在首次起播拦一次，起播后有多少放多少，不再周期性整块静音',
-  '修复蓝牙反控误判「特征数为 0」：注册后回读改为双路交叉印证 + 沉降重试，失败时带出重试次数与 SDK 等级',
-  '独立窗口只保留一条栏：系统标题栏与系统三键区都已关掉，不再出现两套按钮',
-  '独立窗口的栏不再压住手机画面：改为预留条带，且随窗口等比缩放',
-  '独立窗口的栏去掉「放大」键，只保留关闭与最小化（对齐 macOS 左上角三键）',
-  '独立窗口的长故障文案移到主窗口显示，栏上只留短提示，不再挤掉画面',
-  '修复构建失败：独立窗口 Ability 的窗口下限写法不合规（windowSize 不是 abilities 的字段）',
-  '独立窗口改为独立 Ability：主窗口最小化后它照样显示，不再跟着一起消失',
-  '独立窗口新增可隐藏的三键浮层栏（最小化/放大/关闭），鼠标移到顶部浮出、移开自动隐藏，可设常驻',
-  '独立窗口只能等比例放大缩小：按源帧宽高比锁定，画面不会被拉变形',
-  '修复投屏没有声音：AirPlay 音频此前只计数、没接到播放器，现在交给 OHAudio 真播放',
-  '音频接了 iPhone 侧音量与 flush，状态行直说「已播 N 帧 / 未收到数据 / 未出声：原因」',
-  '修复「蓝牙控制无法启动：特征数为 0」的误判：回读接口是本机不支持的新 API，异常被当成了没注册',
-  '蓝牙状态行区分「特征 N/9」与「特征未知(回读不可用)」；回读失败不再拦启动，只报隐患',
-  '新增「按真实 iPhone/iPad 外形适配」：按机型匹配圆角与曲线，Home 键机型保持直角',
-  '独立窗口新增「圆角」开关，拖动与缩放后轮廓仍按机型贴合（原版在右键菜单里）',
-  '修复蓝牙反向控制报 201 Permission denied：蓝牙权限是「运行时授权」，此前只声明没申请',
-  '修复「独立窗口」按钮恒灰、点了只回"该操作需先开始投屏"：AirPlay 镜像不经过 USB 采集状态机',
-  '修复无线镜像时独立窗口打不开：改为按上游统一设备模型，退回用 AirPlay 客户端名开窗',
-  '修复关闭独立窗口后主窗口一片黑：渲染器只有一个 surface，关窗时必须清账再无条件重挂',
-  '新增独立预览窗口：画面可移到独立窗口，主窗口原位显示「已在独立窗口打开」圆形提示',
-  '独立窗口按原版规格：720×900 起、最小 320×240、可缩放、首开取工作区 82%、按内容宽高比锁定',
-  '独立窗口无需改 C++：渲染器只有一个 EGLSurface，开窗即把它重挂到新窗口的 XComponent',
-  '新增蓝牙反向控制：真 BLE HID 外设（GATT Server + 广播），iPhone 能搜到、能配对、能收发鼠标滚轮',
-  '反控坐标按渲染器实测帧尺寸换算并剔除黑边——不是拿界面上写的分辨率硬算',
-  '蓝牙反控开关改为真开关，状态行显示真实计数（特征数/报表数/连接断开/丢弃/失败/超时）',
-  '设备绑定器的「连接设备」接真实现：临时广播 HID → 等配对 → 保存绑定 → 收掉广播',
-  '修正一批"鸿蒙做不到"的过时文案——BLE HID 外设其实已经实现，不再是能力缺失',
-  '修掉主窗口蓝牙开关的状态漂移：每轮从外设真实状态回读，被别处停掉时同步关闭输入路由',
-  '修复"只能在 DevEco Studio 里启动"：补上桌面启动入口声明（skills·home），点图标即可直接开',
-  '修复 AirPlay 黑屏根因：EGL 上下文此前被跨线程使用——现在 GL 调用全归专属渲染线程',
-  '修掉渲染侧假成功：swap 失败不再计入"画成功"，状态行的帧数现在是真的',
-  '渲染诊断新增 EGL 错误码与"上下文未就绪"计数，黑屏能一眼看出卡在哪一层',
-  '「刷新画面」不再假成功：真调 ABI，未挂载 surface 时如实报错',
-  '未实现功能统一灰化：录制推流/截图/全屏预览点击弹「敬请期待」',
-  '「调节画面」「更多设置」修正过时文案——原本只提示"待接入"，现在真的打开调节窗口',
+export class ChangelogRelease {
+  /** 版本号（与 app.json5 的 versionName 一致）。 */
+  readonly version: string;
+  /** 该版本的发布日期（YYYY-MM-DD）。 */
+  readonly date: string;
+  /** 该版本的变更条目（与 CHANGELOG.md 该节逐条对应）。 */
+  readonly items: string[];
+
+  constructor(version: string, date: string, items: string[]) {
+    this.version = version;
+    this.date = date;
+    this.items = items;
+  }
+}
+
+/**
+ * 变更说明（CHANGELOG.md 的镜像），**最新版本排在最前**。
+ * 关于页按版本分组：最新一版默认展开，旧版本默认收起，点版本行展开查看。
+ */
+const CHANGELOG_RELEASES: ChangelogRelease[] = [
+  new ChangelogRelease('1.0.40', '2026-10-02', [
+    '新增：半透明窗口 —— 对齐 Windows 11 原生深色观感，窗口底色半透明，UI 的 Fluent 半透明色板真正透到桌面',
+    '浓度可在界面选档 78% / 60% / 50% / 40%（默认 60%），点一下立即生效；失焦时窗口变主题实色而非变黑；开关一键回到原纯色背景',
+    '开关与浓度档位跨启动保留（@ohos.data.preferences 显式 putSync+flushSync 落盘；此前 PersistentStorage 在杀进程时来不及落盘）；窗口参数读数仅在开发者模式下显示',
+    '本条汇总 1.0.31–1.0.40：这些改动同属半透明这一个功能的迭代，对外只算一个新版本',
+  ]),
+  new ChangelogRelease('1.0.30', '2026-10-01', [
+    '新增：关于页「版本更新」改为按版本分组折叠——最新一版默认展开、旧版本默认收起，点版本行即可展开查看该版本的变更（参考微信更新日志）',
+    '各条变更归入其所属版本，不再把所有版本的条目混在一个平铺列表里',
+  ]),
+  new ChangelogRelease('1.0.29', '2026-10-01', [
+    '新增：开发者模式（调试入口）——「关于」页版本号连点 7 次开启，主界面空状态显示有线链路诊断（原生/系统 USB/USB 权限/环境诊断/驱动绑定/USB 驱动/窗口），再点一次关闭；经 AppStorage 跨窗口联动，非持久化（重启即失效）',
+    '修复：左侧面板收起后中间显示区不自拉伸——左右面板都关时整列连同间隔一并省略，中间以 layoutWeight(1) 占满剩余宽度（与上游 LeftPanelHost 折叠行为对齐）',
+    '调整：右侧「投屏设置」卡片顺序对齐原版——移除独立「应用模式」卡并折叠进「应用设置」，整体重排为 ①无线AirPlay ②有线投屏协议 ③画面与声音 ④蓝牙反控 ⑤视频应用投屏 ⑥应用设置 ⑦设置中心',
+  ]),
+  new ChangelogRelease('1.0.28', '2026-10-01', [
+    '修复：安装仍被拒 code 9568289（第二轮，真凶是 WRITE_IMAGEVIDEO）—— 该权限在 SDK 实为 system_basic（非 1.0.25 误标的 normal），同样需进签名 profile 的 acls。已与 ACCESS_DDK_USB 一并临时移出；截图改为存应用私有目录（filesDir/iPhoneMirror/Screenshots/，无需任何权限即可写），去掉相册写入权限后截图照样能用。代价：截图不再进系统相册（文件管理里取走），USB 有线采集仍暂不可用',
+  ]),
+  new ChangelogRelease('1.0.27', '2026-10-01', [
+    '修复：安装被拒 code 9568289——ACCESS_DDK_USB（system_basic 权限）需进签名 profile 的 acls，自签调试 profile 拿不到。已临时移出该权限声明，应用可正常安装；AirPlay 镜像/截图/全屏/日志/蓝牙反控均不受影响，仅 USB 有线采集暂不可用（需在 AGC 把该权限加进受限权限并换 profile 后恢复）',
+  ]),
+  new ChangelogRelease('1.0.26', '2026-10-01', [
+    '修复：关于页「实时日志」此前永远空白——原生日志默认写到系统 temp 目录，应用沙箱读不到。现已在启动时把它重定向到应用沙箱（filesDir/iPhoneMirror/Logs/startup.log），日志框与「打开日志目录」都能看到内容（需先有一次投屏/AirPlay 等原生写入）',
+  ]),
+  new ChangelogRelease('1.0.25', '2026-09-30', [
+    '新增：截图 —— 点预览快捷条/主投屏面板的「截图」按钮，截当前预览画面存相册（首次需授权相册写入）；SURFACE XComponent 在个别版本上可能截不到内容（得黑图即没截到）',
+    '新增：全屏预览 —— 点「全屏预览」按钮把主窗口切到沉浸全屏（隐藏状态栏/导航栏），再点退出',
+    '截图/全屏预览可用性改为「有画面时可用」（复用 can_use_visual_tools 并排除独立窗口开着的情况），不再恒灰/敬请期待；未实现清单仅剩「录制与推流」',
+  ]),
+  new ChangelogRelease('1.0.24', '2026-09-29', [
+    '反控改为显式标注「实验性」：预览快捷条按钮文案由「蓝牙反向控制已广播」改成「蓝牙反控（实验）已广播」——「已广播」只说明 GATT 服务起来了，不代表能用',
+    '蓝牙反控卡片标题下新增一行橙色加粗声明：「实验性功能（开发中）：反向控制仍在实现阶段，本版本不保证可用……」',
+    '「等待连接 / 已连接」提示窗口新增成熟度声明行（上游没有这一条），显示在 5 步配对清单之前；「已连接」标题改为「蓝牙反向控制已开启（实验）」',
+    '短摘要行与设置面板状态行同步加「（实验·开发中）」：避免把 订阅1 这个读数读成"功能成了"',
+    'README / SUPPORT / 项目简介与两份 issue 模板同步写入「反控仍在实现阶段、不保证可用」；SUPPORT 新增 § 〇 实验性功能专节',
+    '本条只改文案与文档，未改协议层、未改任何 HID 行为',
+  ]),
+  new ChangelogRelease('1.0.23', '2026-09-24', [
+    '蓝牙反控卡片新增一行「主机 读N 写N 订阅S + 已配对X台(命中)」短摘要：fontSize 12 + 加粗 + 订阅1绿其它橙，第一眼就能看出"iPhone 端配置 vs 投递问题"',
+    '状态行长串诊断改为可换行（maxLines=10）—— 此前单行截断后用户只看到「蓝牙反控已广播」一句话，「复制诊断」按钮在卡片底也找不到',
+    '空态占位从「当前未开启蓝牙反向控制。」改成「当前未开启蓝牙反向控制（点上方按钮启用）」——少一个句号都容易被当成"功能坏了"',
+    '修完后的 0 错 0 嫌：types 0 错（3 警告 = napi 28014）、alias 0 嫌',
+  ]),
+  new ChangelogRelease('1.0.22', '2026-09-24', [
+    '修复「iPhone 上始终不出现系统指针」的根因：GATT 服务端漏了应答义务 —— 官方规定收到读取特征值请求必须调用 sendResponse，我们此前一个读请求都没应答',
+    '补齐 characteristicRead / descriptorRead / descriptorWrite 应答，并在带响应的写入里也应答；应答统一带请求自带的 deviceId/transId/offset',
+    '此前 iOS 读 Report Map（HID 描述符）会无声超时 ⇒ 建不出 HID 设备 ⇒ 手机不出现指针，且对端不给任何错误提示',
+    '新增「主机侧交互账本」：读N / 写N / 订阅0-1 / 应答失败N，可直接区分「手机没来枚举」与「来了但不订阅」',
+    '新增「复制诊断」按钮：一次点击把输入侧 + HID 侧整段真值写进剪贴板，便于把现场报回开发者',
+    '新增「与 iPhone 配对」按钮：鸿蒙 GattProperties 没有「要求加密」这一项，只能用主动配对补上 iOS 对 HID 的加密要求',
+    '协议模式 / 控制点属性放宽成「写 + 免应答写」都收，避免另一种写法的 ATT 请求被栈直接拒掉（我们这侧连回调都不会有）',
+    '去掉挂在 Report Map 上的 Report Reference 描述符（它只属于 Report 特征，与上游对齐）',
+    '引导文案更正为上游用户手册的准确路径：iPhone 上「设置 → 辅助功能 → 触控 → 辅助触控」开启，并在该页「设备 → 蓝牙设备」配对（不开辅助触控 iOS 不显示指针）',
+    '核对确认：Report Map 与上游逐字节相同（189 字节）、HID Information 同值、广播已带 0x1812',
+  ]),
+  new ChangelogRelease('1.0.21', '2026-09-22', [
+    '定位「指针藏了但手机不动」的根因：鸿蒙发通知只能按 UUID 定位特征，而 5 个 Report 特征共用 0x2A4D，投递落点由协议栈决定',
+    'HID 布局改为默认「单 Report 特征 + 载荷首字节带 report id」，0x2A4D 只剩一个实例，投递不再有歧义',
+    '设置面板新增「HID 布局」一行与切换按钮，可在单特征 / 多特征之间对照，一次切换即可证伪布局问题',
+    '打开独立窗口时不再顺手关掉蓝牙反控（原来会经历停广播→重建服务→iPhone 重连，而独立窗口正是要操控手机的窗口）',
+    '独立窗口条带读数改成「必定可见」：不再因为通道没起来就返回空串，未启用 / 待机 / 接管 都给出可读真值',
+    '读数新增布局与广播-连接两格（如「待机 单特征 广1连0」），广播着而手机没连上这一格从此看得见',
+  ]),
+  new ChangelogRelease('1.0.20', '2026-09-22', [
+    '修复构建失败：ArkTS 不做「布尔别名收窄」，判空条件要直接写进使用它的那个 if（原写法 tsc 能过、真构建报 10605999）',
+    '新增自检脚本 tools/check_alias_narrowing.py，专门扫这类「靠布尔别名收窄」的写法（修完 0 处嫌疑）',
+    '修复键盘反控静默失效：取焦点的标识要用 .id() 而不是 .key()（后者在新版 SDK 上不再作为可寻址标识）',
+    '焦点的真值改由输入层的 onFocus/onBlur 回报（requestFocus 返回 void，没有成功失败可读）；接管中没焦点时栏上显示「无焦点」',
+  ]),
+  new ChangelogRelease('1.0.19', '2026-09-22', [
+    '修「独立窗口里指针藏了却操控不了」：新增原始位移可用性探针，原始计数恒为 0 时自动改走绝对坐标差分',
+    '画面区容器上再挂一份事件接口做兜底；同一事件被两处各收一次时按事件指纹去重，不会发两遍',
+    '画面区尺寸改用统一的 length_to_vp 解析，不再因为带单位的字符串算成 0（那会让差分一步都算不出来）',
+    '独立窗口栏上新增反控读数：移/原/送/鼠 四段账，缺哪段就指向哪段的问题',
+    '独立窗口补 500ms 状态轮询，主窗口不在前台时这边的接管态不再停在过期值上',
+    '接管成立即把键盘焦点要过来，不再依赖「先点一下画面」',
+    '状态行新增「协议N」：iOS 写下的协议模式，是它认下这台 HID 设备的握手证据',
+  ]),
+  new ChangelogRelease('1.0.18', '2026-09-22', [
+    '修复「独立窗口」「刷新画面」等按钮不实时刷新：旧写法把状态当参数传给 @Builder，而它按值传参不参与动态刷新',
+    '同一族的四格统计（分辨率/帧率/延迟/音频）不再永远停在首帧的「—」',
+    '画面调节窗口的四个数值跟着滑杆实时变化，此前拖动数字不动',
+    '工具条上的蓝牙状态文案与设置面板里的蓝牙状态行现在都跟着真实状态变',
+    '设备列表的选中高亮改为确定性行为：选中态与连接状态进 ForEach 的 key，点一下必定移动',
+  ]),
+  new ChangelogRelease('1.0.17', '2026-09-22', [
+    '鼠标放到画面上就能操控：接管层常驻，进入画面即接管、移开即释放，不用再先去找开关',
+    '蓝牙通道改为惰性启动：第一次把鼠标放到画面上时才申请权限、开广播，不再一开应用就弹框',
+    '接管期间隐藏本地指针，免得屏幕上两个指针各走各的；状态行显示「★操控中」',
+    '指针移动改用鼠标硬件原始位移（rawDelta），不再受窗口边缘挡住、光标跑出窗口的影响',
+    'rawDelta 取不到时自动退回旧算法，降级次数显示在状态行（可判断这台设备支不支持）',
+    '独立预览窗口接入反向控制：此前该窗口完全没有输入层，而它才是日常真正在用的那个',
+    '排除三种不该接管的场合，且画面一到位就自动接管（不必把鼠标移开再移回来）',
+    '「停止蓝牙反向控制」不再被自动启动立刻推翻；外设启动加了并发守卫',
+  ]),
+  new ChangelogRelease('1.0.16', '2026-09-21', [
+    '修复镜像卡顿：解码从网络收包线程上摘下，交给专属解码线程；积压时丢最旧的包，丢帧数直接可见',
+    '修复投屏声音断续发闷：音频欠载门限只在首次起播拦一次，起播后有多少放多少，不再周期性整块静音',
+    '修复蓝牙反控误判「特征数为 0」：注册后回读改为双路交叉印证 + 沉降重试，失败时带出重试次数与 SDK 等级',
+  ]),
+  new ChangelogRelease('1.0.15', '2026-09-21', [
+    '独立窗口只保留一条栏：系统标题栏与系统三键区都已关掉，不再出现两套按钮',
+    '独立窗口的栏不再压住手机画面：改为预留条带，且随窗口等比缩放',
+    '独立窗口的栏去掉「放大」键，只保留关闭与最小化（对齐 macOS 左上角三键）',
+    '独立窗口的长故障文案移到主窗口显示，栏上只留短提示，不再挤掉画面',
+  ]),
+  new ChangelogRelease('1.0.14', '2026-09-21', [
+    '修复构建失败：独立窗口 Ability 的窗口下限写法不合规（windowSize 不是 abilities 的字段）',
+  ]),
+  new ChangelogRelease('1.0.13', '2026-09-21', [
+    '独立窗口改为独立 Ability：主窗口最小化后它照样显示，不再跟着一起消失',
+    '独立窗口新增可隐藏的三键浮层栏（最小化/放大/关闭），鼠标移到顶部浮出、移开自动隐藏，可设常驻',
+    '独立窗口只能等比例放大缩小：按源帧宽高比锁定，画面不会被拉变形',
+  ]),
+  new ChangelogRelease('1.0.12', '2026-09-21', [
+    '修复投屏没有声音：AirPlay 音频此前只计数、没接到播放器，现在交给 OHAudio 真播放',
+    '音频接了 iPhone 侧音量与 flush，状态行直说「已播 N 帧 / 未收到数据 / 未出声：原因」',
+    '修复「蓝牙控制无法启动：特征数为 0」的误判：回读接口是本机不支持的新 API，异常被当成了没注册',
+    '蓝牙状态行区分「特征 N/9」与「特征未知(回读不可用)」；回读失败不再拦启动，只报隐患',
+  ]),
+  new ChangelogRelease('1.0.11', '2026-09-20', [
+    '新增「按真实 iPhone/iPad 外形适配」：按机型匹配圆角与曲线，Home 键机型保持直角',
+    '独立窗口新增「圆角」开关，拖动与缩放后轮廓仍按机型贴合（原版在右键菜单里）',
+  ]),
+  new ChangelogRelease('1.0.10', '2026-09-20', [
+    '修复蓝牙反向控制报 201 Permission denied：蓝牙权限是「运行时授权」，此前只声明没申请',
+    '修复「独立窗口」按钮恒灰、点了只回"该操作需先开始投屏"：AirPlay 镜像不经过 USB 采集状态机',
+    '修复无线镜像时独立窗口打不开：改为按上游统一设备模型，退回用 AirPlay 客户端名开窗',
+    '修复关闭独立窗口后主窗口一片黑：渲染器只有一个 surface，关窗时必须清账再无条件重挂',
+  ]),
+  new ChangelogRelease('1.0.9', '2026-09-20', [
+    '新增独立预览窗口：画面可移到独立窗口，主窗口原位显示「已在独立窗口打开」圆形提示',
+    '独立窗口按原版规格：720×900 起、最小 320×240、可缩放、首开取工作区 82%、按内容宽高比锁定',
+    '独立窗口无需改 C++：渲染器只有一个 EGLSurface，开窗即把它重挂到新窗口的 XComponent',
+    '新增蓝牙反向控制：真 BLE HID 外设（GATT Server + 广播），iPhone 能搜到、能配对、能收发鼠标滚轮',
+    '反控坐标按渲染器实测帧尺寸换算并剔除黑边——不是拿界面上写的分辨率硬算',
+    '蓝牙反控开关改为真开关，状态行显示真实计数（特征数/报表数/连接断开/丢弃/失败/超时）',
+    '设备绑定器的「连接设备」接真实现：临时广播 HID → 等配对 → 保存绑定 → 收掉广播',
+    '修正一批"鸿蒙做不到"的过时文案——BLE HID 外设其实已经实现，不再是能力缺失',
+    '修掉主窗口蓝牙开关的状态漂移：每轮从外设真实状态回读，被别处停掉时同步关闭输入路由',
+  ]),
+  new ChangelogRelease('1.0.8', '2026-09-20', [
+    '修复"只能在 DevEco Studio 里启动"：补上桌面启动入口声明（skills·home），点图标即可直接开',
+  ]),
+  new ChangelogRelease('1.0.7', '2026-09-20', [
+    '修复 AirPlay 黑屏根因：EGL 上下文此前被跨线程使用——现在 GL 调用全归专属渲染线程',
+    '修掉渲染侧假成功：swap 失败不再计入"画成功"，状态行的帧数现在是真的',
+    '渲染诊断新增 EGL 错误码与"上下文未就绪"计数，黑屏能一眼看出卡在哪一层',
+    '「刷新画面」不再假成功：真调 ABI，未挂载 surface 时如实报错',
+  ]),
+  new ChangelogRelease('1.0.6', '2026-09-20', [
+    '未实现功能统一灰化：录制推流/截图/全屏预览点击弹「敬请期待」',
+    '「调节画面」「更多设置」修正过时文案——原本只提示"待接入"，现在真的打开调节窗口',
+  ]),
 ];
-/** 「本次更新」区块标题。 */
-const S_WHATS_NEW: string = '本次更新';
+
+/** 最新版本号（CHANGELOG_RELEASES[0]）；「版本更新」默认展开这一版。 */
+const LATEST_RELEASE_VERSION: string = CHANGELOG_RELEASES[0].version;
+
+/** 「最新」标记文案（标在最新版本的版本行上）。 */
+const S_LATEST_TAG: string = '最新';
+/** 「版本更新」区块标题（按版本分组折叠，参考微信更新日志）。 */
+const S_WHATS_NEW: string = '版本更新';
+
+/**
+ * 单个版本的变更分组（「版本更新」里的一项）。
+ * 参考微信更新日志：版本行可点，展开/收起该版本的变更列表；
+ * 最新版本（isLatest）默认展开，其余默认收起。
+ */
+@Component
+struct ChangelogGroup {
+  @Prop version: string = '';
+  @Prop date: string = '';
+  @Prop items: string[] = [];
+  @Prop isLatest: boolean = false;
+  @State expanded: boolean = false;
+
+  aboutToAppear(): void {
+    this.expanded = this.isLatest;
+  }
+
+  build(): void {
+    Column() {
+      Row() {
+        Text(this.version)
+          .fontSize(13)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(TEXT);
+        Text(this.date)
+          .fontSize(11)
+          .fontColor(MUTED_TEXT)
+          .margin({ left: 8, top: 1 });
+        if (this.isLatest) {
+          Text(S_LATEST_TAG)
+            .fontSize(10)
+            .fontColor('#FFFFFF')
+            .backgroundColor(ACCENT)
+            .borderRadius(4)
+            .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+            .margin({ left: 8 });
+        }
+        Blank();
+        FluentSymbol({
+          iconName: this.expanded ? 'ChevronUp20' : 'ChevronDown20',
+          iconSize: 16,
+          iconColor: MUTED_TEXT,
+        });
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
+      .padding({ top: 11, bottom: 11 })
+      .onClick((): void => {
+        try {
+          this.expanded = !this.expanded;
+        } catch (error) {
+          hilog.warn(DOMAIN, TAG, '版本分组展开/收起失败: %{public}s',
+            (error as BusinessError).message);
+        }
+      });
+
+      if (this.expanded) {
+        ForEach(this.items, (item: string): void => {
+          Row() {
+            Text('•')
+              .fontSize(12)
+              .fontColor(ACCENT)
+              .margin({ right: 8 });
+            Text(item)
+              .fontSize(12)
+              .fontColor(MUTED_TEXT)
+              .lineHeight(18)
+              .layoutWeight(1);
+          }
+          .width('100%')
+          .alignItems(VerticalAlign.Top)
+          .margin({ bottom: 4 });
+        }, (item: string): string => item);
+      }
+    }
+    .width('100%');
+  }
+}
 
 const S_UPDATE_STATUS_TITLE: string = '更新状态';                   // UpdateStatusTitle
 const S_UPDATE_STATUS_READY: string = '可随时检查 GitHub Release 更新。';          // UpdateStatusReady
@@ -530,7 +702,14 @@ function read_log_tail(ctx: common.Context | null): string {
     if (names.length === 0) {
       return '';
     }
-    const path: string = directory + '/' + names[names.length - 1];
+    // 原生 Core 现在固定写 startup.log（见 EntryAbility.onCreate 的 setLogFile 重定向）。
+    // 优先选它；万一出现日志轮转产生的 startup.log.1 等，也不要被它"按文件名排在后面"
+    // 而误读旧文件。兜底仍取列表最后一个，保持原行为。
+    let chosen: string = names[names.length - 1];
+    if (names.indexOf('startup.log') >= 0) {
+      chosen = 'startup.log';
+    }
+    const path: string = directory + '/' + chosen;
     const text: string = fileIo.readTextSync(path);
     // 原版 TextBox 高度 180，取尾部即可（超出部分由滚动条承担）。
     return text.length > 8000 ? text.substring(text.length - 8000) : text;
@@ -611,6 +790,14 @@ struct AboutWindow {
   @State allowMirrorFallback: boolean = true;
   @State notifyStableReleases: boolean = true;
   @State notifyPrereleaseReleases: boolean = false;
+  /**
+   * 开发者模式（调试入口，非持久化）：连点上方版本号 7 次开启，再点一次关闭。
+   * 开启后主界面空状态会显示有线链路诊断（原生/系统 USB/权限/环境/驱动/窗口）。
+   * 经 AppStorage 由 @StorageLink 跨窗口联动（关于子窗这里写 ↔ 主窗 Index 读）。
+   */
+  @StorageLink(DEVELOPER_MODE_KEY) devMode: boolean = false;
+  /** 版本号连点计数，达到 7 即触发开发者模式开启；未开启时每点一次 +1。 */
+  @State versionTapCount: number = 0;
   private logTimer: number = -1;
 
   /**
@@ -795,7 +982,29 @@ struct AboutWindow {
               .fontWeight(FontWeight.Medium)
               .fontColor(MUTED_TEXT)
               .width('100%')
-              .margin({ top: 4 });
+              .margin({ top: 4 })
+              .onClick((): void => {
+                // 开发者模式调试入口：连点版本号 7 次开启，已开启时再点一次关闭。
+                // 整段 try 包住：点击回调里抛异常没人接管，会把整个应用带崩。
+                try {
+                  if (this.devMode) {
+                    // 已开启 → 再点一次即关闭，并重置计数。
+                    this.devMode = false;
+                    AppStorage.setOrCreate<boolean>(DEVELOPER_MODE_KEY, false);
+                    this.versionTapCount = 0;
+                  } else {
+                    this.versionTapCount += 1;
+                    if (this.versionTapCount >= 7) {
+                      this.devMode = true;
+                      AppStorage.setOrCreate<boolean>(DEVELOPER_MODE_KEY, true);
+                      this.versionTapCount = 0;
+                    }
+                  }
+                } catch (error) {
+                  hilog.warn(DOMAIN, TAG, '版本号连点处理失败: %{public}s',
+                    (error as BusinessError).message);
+                }
+              });
             Text(S_DESCRIPTION)
               .fontSize(12)
               .fontColor(MUTED_TEXT)
@@ -810,24 +1019,17 @@ struct AboutWindow {
         .width('100%')
         .alignItems(VerticalAlign.Center);
 
-        // ── 本次更新（CHANGELOG 镜像）────────────────────────────────────
+        // ── 版本更新（按版本分组折叠，参考微信更新日志）──────────────────
+        // 最新一版默认展开，旧版本默认收起；点版本行展开/收起该版本变更。
         section_title(S_WHATS_NEW);
-        ForEach(CHANGELOG_ITEMS, (item: string): void => {
-          Row() {
-            Text('•')
-              .fontSize(12)
-              .fontColor(ACCENT)
-              .margin({ right: 8 });
-            Text(item)
-              .fontSize(12)
-              .fontColor(MUTED_TEXT)
-              .lineHeight(18)
-              .layoutWeight(1);
-          }
-          .width('100%')
-          .alignItems(VerticalAlign.Top)
-          .margin({ bottom: 4 });
-        }, (item: string): string => item);
+        ForEach(CHANGELOG_RELEASES, (rel: ChangelogRelease): void => {
+          ChangelogGroup({
+            version: rel.version,
+            date: rel.date,
+            items: rel.items,
+            isLatest: rel.version === LATEST_RELEASE_VERSION,
+          });
+        }, (rel: ChangelogRelease): string => rel.version);
 
         // Border Height 1 / BorderSoftBrush / Margin 0,20
         Column()

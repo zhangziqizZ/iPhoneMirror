@@ -38,7 +38,7 @@
 
 1. `AppScope/app.json5` 递增 `versionName` 与 `versionCode`（`versionCode` = 主*1000000 + 次*1000 + 修订）
 2. `CHANGELOG.md` 顶部加一节
-3. `entry/src/main/ets/pages/windows/AboutWindow.ets` 的 `CHANGELOG_ITEMS` 常量同步
+3. `entry/src/main/ets/pages/windows/AboutWindow.ets` 的 `CHANGELOG_RELEASES` 常量同步（按版本分组，最新一版默认展开）
 4. 本地跑通两条自检（见 § 三）
 
 ### 1.3 禁止假成功
@@ -194,8 +194,8 @@ ArkTS 编译器**不会**做这类收窄，tsc 能过但 ArkTS 真构建会报 *
 - [ ] 没动任何上游文件（`cpp/Core/`、`cpp/types/libim_core/`、`third_party/`）
 - [ ] `versionName` / `versionCode` 都递增了
 - [ ] `CHANGELOG.md` 顶部加了一节
-- [ ] `CHANGELOG_ITEMS` 常量同步了
-- [ ] `tools/check_arkts_types.py .` 0 错 3 警告
+- [ ] `CHANGELOG_RELEASES` 常量同步了（按版本分组）
+- [ ] `tools/check_arkts_types.py .` 0 错（警告仅 napi 28014）
 - [ ] `tools/check_alias_narrowing.py .` 0 嫌
 - [ ] 真机编译通过、跑通主流程
 - [ ] 没塞 print / 没改函数行为 / 没动上游变量名

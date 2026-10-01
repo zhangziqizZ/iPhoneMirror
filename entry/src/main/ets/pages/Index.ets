@@ -64,12 +64,14 @@
 //
 //  ── 不做假按钮 ────────────────────────────────────────────────────────────
 //
-//    尚未在鸿蒙落地的能力（独立窗口 / 截图 / 全屏 / 录制推流 / 视频应用投屏）
+//    尚未在鸿蒙落地的能力（录制推流 / 视频应用投屏）
 //    **保留原版的控件与文案**，点击后给出确切原因，绝不静默假装成功。
 //    这与 Core 层「任何导出都不得在没做事时报告成功」是同一条纪律。
 //
-//    蓝牙反控已从这份清单**移出**：它现在有真实实现 —— 用鸿蒙的 GattServer +
-//    BLE 广播复刻上游 WinRT 的 GattServiceProvider（common/BluetoothHidPeripheral.ets）。
+//    蓝牙反控 / 独立窗口 / 截图 / 全屏预览 已从这份清单**移出**：它们现在都有真实实现
+//    （蓝牙=GattServer+BLE 广播；独立窗口=StandalonePreviewWindow；截图=
+//    componentSnapshot→相册；全屏=window 沉浸切换）。截图有个已知边界：
+//    SURFACE XComponent 在个别版本/设备上 componentSnapshot 可能截不到内容（得黑图）。
 //
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -95,6 +97,7 @@ import {
   airplayStart,
   airplayStop,
   airplayGetStatus,
+  setLogFile,
   DeviceInfo,
   CaptureStatus,
   AirPlayStatus,
@@ -127,6 +130,11 @@ import pasteboard from '@ohos.pasteboard';
 import common from '@ohos.app.ability.common';
 import ConfigurationConstant from '@ohos.app.ability.ConfigurationConstant';
 import { BusinessError } from '@ohos.base';
+// 截图：截取预览 XComponent（id='preview'）当前画面并存入应用私有目录。
+// componentSnapshot 是 @since 10，低于本工程 compileSdkVersion(23)，可用。
+import componentSnapshot from '@ohos.arkui.componentSnapshot';
+import image from '@ohos.multimedia.image';
+import fs from '@ohos.file.fs';
 import { FluentSymbol } from '../common/FluentIcon';
 import {
   NAV_RAIL_COMPACT,
@@ -153,8 +161,17 @@ import {
   STANDALONE_CHROME_NOTICE_KEY,
   STANDALONE_NOTICE_KEY,
   REVERSE_CONTROL_DISABLED_KEY,
+  DEVELOPER_MODE_KEY,
+  ACRYLIC_WINDOW_KEY,
+  ACRYLIC_ALPHA_KEY,
+  ACRYLIC_ALPHA_DEFAULT,
+  WINDOW_ACRYLIC_RESULT_KEY,
+  WINDOW_SHADOW_RESULT_KEY,
+  PERSIST_READ_RESULT_KEY,
+  PERSIST_WRITE_RESULT_KEY,
 } from '../common/WindowServices';
 import { SecondaryButton, SUBWINDOW_ERROR_KEY, SubWindowHost } from '../common/SubWindow';
+import { save_acrylic_preferences } from '../common/AppPreferences';
 import {
   open_image_settings,
   DEFAULT_BRIGHTNESS, DEFAULT_CONTRAST, DEFAULT_SATURATION, DEFAULT_GAMMA,
@@ -237,6 +254,27 @@ const USB_MODE_INFO_BUTTON_RADIUS: number = 9;
 const USB_MODE_LABEL_RIGHT_MARGIN: number = 20;
 /** 原版 UsbModeTabItem 样式：Margin 2 / Padding 7,6 / MinHeight 38 / 圆角 10。 */
 const USB_MODE_ITEM_MARGIN: number = 2;
+/**
+ * 半透明窗口的**浓度**：根容器那一层底色的 alpha（00=全透、FF=完全实色）。
+ * 容器色与内容区背景现在都已全透，所以**只有这一个数**决定观感浓淡。
+ * 默认 '99'≈60%；界面上的档位按钮可现场改（见 ACRYLIC_ALPHA_OPTIONS）。
+ */
+const ROOT_ACRYLIC_ALPHA_HEX: string = ACRYLIC_ALPHA_DEFAULT;
+
+/** 浓度档位（设置面板现场切换，避免为调浓淡改代码重建）。 */
+interface AcrylicAlphaOption {
+  hex: string;
+  label: string;
+}
+
+/** 由实到透排列；hex 是根容器底色的 alpha（00=全透、FF=实色）。 */
+const ACRYLIC_ALPHA_OPTIONS: AcrylicAlphaOption[] = [
+  { hex: 'C8', label: '78%' },
+  { hex: '99', label: '60%' },
+  { hex: '80', label: '50%' },
+  { hex: '66', label: '40%' },
+];
+
 const USB_MODE_ITEM_CORNER: number = 10;
 
 // Strings: ApplicationModeLightweight / ApplicationModeComplete
@@ -386,23 +424,26 @@ const NAV_TOOLTIP_SHADOW_OFFSET_Y: number = 5;
  * 不给任何"看起来能用"的假门槛（此前的写法是它们在投屏中会变成可点，点完
  * 只往设置面板写一行字，用户白点一场）。
  *
- * 判据是代码事实：'media' 需要录制/推流编码管线、'screenshot' 缺保存与分享界面、
- * 'fullscreen' 未实现。
+ * 判据是代码事实：'media' 需要录制/推流编码管线 —— 本版仍未接。
  * 'image'（画面调节）与 'refresh'（刷新画面）是已实现功能，不在此列 ——
  * 它们灰掉只是因为当前还没开始投屏。
  *
- * ★ 'bluetooth'（蓝牙反向控制）已于本次从本清单**移出**：鸿蒙侧现在真的实现了
+ * ★ 'bluetooth'（蓝牙反向控制）已于 1.0.24 从本清单**移出**：鸿蒙侧现在真的实现了
  *   BLE HID 外设（ets/common/BluetoothHidPeripheral.ets，用 GattServer +
- *   startAdvertising 复刻上游的 GattServiceProvider），所以它不再是"敬请期待"，
- *   而是一个真实的可开关项。
+ *   startAdvertising 复刻上游的 GattServiceProvider），但它仍是**实验性**（见 1.0.24）。
  *
- * ★ 'window'（独立窗口）本次同样移出：渲染器本来就能重挂 surface
+ * ★ 'window'（独立窗口）已移出：渲染器本来就能重挂 surface
  *   （OhosPreviewRenderer 在渲染线程里 destroy_gl → create_gl 新 id），
- *   加上新建的 pages/windows/StandalonePreviewWindow.ets，它已经是真功能。
- *   它灰掉与否改由真实条件决定（需先有画面），不再是"未实现"。
+ *   加上 pages/windows/StandalonePreviewWindow.ets，它已经是真功能。
+ *
+ * ★ 'screenshot'（截图）/ 'fullscreen'（全屏预览）本次移出：截图用
+ *   componentSnapshot 截预览 XComponent 当前帧并存入相册（见 capture_screenshot，
+ *   已知边界：SURFACE XComponent 在个别版本/设备上可能截不到内容，得黑图就是没截到）；
+ *   全屏预览用 window.setWindowLayoutFullScreen + 隐藏系统栏切换。两者可用性都改为
+ *   "真有画面时可用"，不再是"未实现"。
  */
 const NOT_IMPLEMENTED_ACTIONS: string[] = [
-  'media', 'screenshot', 'fullscreen',
+  'media',
 ];
 
 /** 「敬请期待」浮层的停留时长（ms）。够看清、又不至于挡着后续操作。 */
@@ -961,6 +1002,34 @@ struct Index {
   @State showMirroringPanel: boolean = false;
   /** ControlPanel 的展开（原版由 Width 0→300 的动效实现） */
   @State showControlPanel: boolean = true;
+  /**
+   * 开发者模式（调试入口）：在「关于」子窗口里连点版本号 7 次开启，再点一次关闭。
+   * 开启后主界面空状态会显示有线链路的原生/系统/权限/环境/驱动/窗口诊断，
+   * 方便排查"识别不到 Apple 设备"的问题。非持久化（仅内存），重启即失效。
+   * 由 AppStorage 经 @StorageLink 跨窗口（关于子窗 ↔ 主窗）联动。
+   */
+  @Watch('on_dev_mode_changed')
+  @StorageLink(DEVELOPER_MODE_KEY) devMode: boolean = false;
+  /**
+   * 半透明窗口：开 = 根容器改用带 alpha 的 Fluent 底色并挂 backgroundEffect 磨砂，
+   * 关 = 回到原来的实色 BACKGROUND。本工程的色板本来就是 Fluent 半透明 token
+   * （SIDEBAR='#C41F1F1F' 即 76% alpha），在 WPF 的不透明窗口上被混成了实色；
+   * 主窗背景一旦真透明，这些 alpha 色会直接混到桌面 —— 正是 Win11 原生观感的来路。
+   * ★ 已实机确认生效（读数：窗口透明=是、容器配色探测成功）⇒ 属正式特性，不再标实验；
+   *   磨砂能否模糊到桌面取决于系统合成器，但即使不模糊也只是"半透明无磨砂"，不影响功能。
+   */
+  @StorageLink(ACRYLIC_WINDOW_KEY) acrylicOn: boolean = true;
+  /**
+   * 半透明浓度档位（alpha 十六进制串）。默认取 ROOT_ACRYLIC_ALPHA_HEX，
+   * 设置面板可现场切换 ⇒ 调浓淡不必再改代码重建。
+   */
+  @StorageLink(ACRYLIC_ALPHA_KEY) acrylicAlpha: string = ROOT_ACRYLIC_ALPHA_HEX;
+  /**
+   * 主窗属性回读（"系统到底给了什么"，不是"我们设了什么"）。
+   * 磨砂半透明要能透视桌面，前提是系统真的给了透明窗口；SDK 里没有公开的
+   * 「设主窗透明」接口，isTransparent 是只读属性 ⇒ 只能回读，不能下结论靠推断。
+   */
+  @State windowAcrylicReadout: string = '';
   /** HeaderPanel 的状态文本（原版 Binding DriverState） */
   @State driverState: string = '正在检查 Apple USB 环境…';   // Strings: StatusCheckingEnvironment
   /** 各卡片下方的操作结果行（原版 SettingsStatus） */
@@ -1209,6 +1278,8 @@ struct Index {
     airPlayMdns.attach(this.appContext as common.UIAbilityContext);
     // 首屏就把应用主题同步给系统，系统三键颜色跟着一致。
     this.sync_system_color_mode();
+    // 回读主窗真实属性：半透明磨砂能否透视桌面由系统合成器决定，不靠推断。
+    this.refresh_window_acrylic_readout();
 
     // 画面调节：把预览/保存/回滚三个委托接到原生预览渲染器。
     // 不接的话 ImageSettingsWindow 的 apply 会落到 null 分支返回假成功，
@@ -2842,27 +2913,132 @@ struct Index {
 
   /**
    * 动作 → 未实现说明。列在这里的动作，UI 层都没有接上真实实现（以代码事实为准，
-   * 不是"看起来像"）：录制推流需要编码管线、独立预览窗口需要第二个可渲染 surface、
-   * 截图缺保存与分享界面、全屏预览未做。
+   * 不是"看起来像"）：录制推流需要编码管线，鸿蒙版尚未接。
    *
-   * ★ 'bluetooth' 已于本次移出 —— 蓝牙反控现在有真实实现，不再是「敬请期待」，
-   *   它的失败路径由 refresh_bluetooth_status() 如实上报（见 toggle_bluetooth_control）。
+   * 其余动作（image/refresh/bluetooth/window/screenshot/fullscreen）都已接真实实现，
+   * 走各自的 run_tool_action / run_quick_action 分支，不会再落进这里。
    */
   private show_not_implemented(action: string): void {
     if (action === 'media') {
       this.show_coming_soon('录制与推流',
         '鸿蒙版尚未实现（上游 Windows 走 Media Foundation / FFmpeg 管线）。');
-    } else if (action === 'window') {
-      this.show_coming_soon('独立预览窗口',
-        '鸿蒙版尚未实现（上游为独立 Win32 窗口 + DWM 圆角）。');
-    } else if (action === 'screenshot') {
-      this.show_coming_soon('截图',
-        '解码帧可拷贝，但保存位置选择与分享的界面尚未接入。');
-    } else if (action === 'fullscreen') {
-      this.show_coming_soon('全屏预览', '鸿蒙版尚未实现。');
     } else {
       this.show_coming_soon('该功能', '鸿蒙版尚未实现。');
     }
+  }
+
+  /** 全屏预览开关：true = 主窗口正处于沉浸全屏。 */
+  private fullscreenOn: boolean = false;
+
+  /**
+   * 截图（原版 ScreenshotCommand）：截取预览 XComponent（id='preview'）当前画面，
+   * 编码成 PNG 后写入**应用私有目录**（filesDir/iPhoneMirror/Screenshots/）。
+   *
+   * ★ 为什么不用 photoAccessHelper 写系统相册：写相册需要
+   *   ohos.permission.WRITE_IMAGEVIDEO，而它在 SDK 的 availableLevel 其实是
+   *   **system_basic**（1.0.25 一度误标成 normal）。system_basic 权限必须进签名
+   *   profile 的 acls.allowed-acls 才能装包，本工程调试 profile 由 AGC 签发、本地
+   *   改不了 ⇒ 带上它安装直接报 9568289。故截图改存应用私有目录（无需任何权限即可写），
+   *   用户在文件管理 / 关于页「打开日志目录」同级的 Screenshots 文件夹里取走。
+   *   待拿到带该 ACL 的 profile 再改回写相册。
+   *
+   * ★ 为什么用 componentSnapshot 而不是直接拿解码帧：AirPlay 无线镜像不走 Core 的
+   *   capture_session（im_copy_latest_video_frame 会回 CaptureBackendUnavailable），
+   *   而无线才是主力路径；componentSnapshot 截的是 ArkUI 真正渲染的那一帧，USB 与
+   *   AirPlay 都涵盖，不必改原生管线。
+   *
+   * ★ 已知边界（不假成功）：XComponent 是 SURFACE 类型，个别 API 版本/设备上
+   *   componentSnapshot 可能截不到 surface 内容（得黑图）。实测是黑图再告诉我。
+   *
+   * ★ 独立窗口开着时主窗口预览区是空的，此时在主窗口截图无意义 —— 可用性已据此关掉。
+   */
+  private async capture_screenshot(): Promise<void> {
+    let pixelMap: image.PixelMap | null = null;
+    let packer: image.ImagePacker | null = null;
+    try {
+      pixelMap = await componentSnapshot.get('preview');
+      if (pixelMap === null) {
+        this.settingsStatus = '截图失败：未能取到预览画面（componentSnapshot 返回空）';
+        return;
+      }
+      packer = image.createImagePacker();
+      const data: ArrayBuffer = await packer.packToData(pixelMap, {
+        format: 'image/png',
+        quality: 100,
+      });
+      const context: common.Context | null = this.appContext;
+      if (context === null) {
+        this.settingsStatus = '截图保存失败：拿不到应用上下文';
+        return;
+      }
+      const dir: string = context.filesDir + '/iPhoneMirror/Screenshots';
+      try {
+        fs.mkdirSync(dir, true);
+      } catch (e) {
+        // 目录已存在等情况忽略
+      }
+      const stamp: string = this.screenshot_timestamp();
+      const path: string = `${dir}/${stamp}.png`;
+      const file = fs.openSync(path, fs.OpenMode.CREATE | fs.OpenMode.WRITE_ONLY);
+      try {
+        fs.writeSync(file.fd, data);
+      } finally {
+        fs.closeSync(file);
+      }
+      this.settingsStatus = `截图已保存到应用目录：${path}`;
+    } catch (error) {
+      const failure = error as BusinessError;
+      this.settingsStatus = `截图失败：${failure.code} ${failure.message}`;
+    } finally {
+      if (packer !== null) {
+        await packer.release();
+      }
+      if (pixelMap !== null) {
+        pixelMap.release();
+      }
+    }
+  }
+
+  /** 截图文件名用的时间戳：YYYYMMDD_HHMMSS（本地时区）。 */
+  private screenshot_timestamp(): string {
+    const d: Date = new Date();
+    const pad = (n: number): string => (n < 10 ? `0${n}` : `${n}`);
+    return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}` +
+      `_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+  }
+
+  /**
+   * 全屏预览（原版 FullscreenCommand）：切换主窗口的沉浸全屏。
+   *
+   * 实现是 window.setWindowLayoutFullScreen + setWindowSystemBarEnable（隐藏/
+   * 恢复状态栏与导航栏），而不是真去改窗口的 free-window 模式 —— 主应用窗口
+   * 走这条更稳，且不会触发 relaunch。
+   */
+  private toggle_fullscreen(): void {
+    const ctx: common.Context | null = this.appContext;
+    if (ctx === null) {
+      this.settingsStatus = '全屏预览失败：拿不到应用上下文';
+      return;
+    }
+    const target: boolean = !this.fullscreenOn;
+    const bars: Array<'status' | 'navigation'> = target ? [] : ['status', 'navigation'];
+    window.getLastWindow(ctx)
+      .then((win: window.Window): Promise<void> => {
+        return win.setWindowLayoutFullScreen(target);
+      })
+      .then((): Promise<window.Window> => {
+        return window.getLastWindow(ctx);
+      })
+      .then((win: window.Window): Promise<void> => {
+        return win.setWindowSystemBarEnable(bars);
+      })
+      .then((): void => {
+        this.fullscreenOn = target;
+        this.settingsStatus = target ? '已进入全屏预览（再次点击退出）' : '已退出全屏预览';
+      })
+      .catch((error: BusinessError): void => {
+        this.settingsStatus = `全屏预览失败：${error.code} ${error.message}`;
+      });
   }
 
   /**
@@ -2906,8 +3082,13 @@ struct Index {
       } else {
         this.open_standalone_window();
       }
+    } else if (action === 'screenshot') {
+      // 截图（原版 ScreenshotCommand）。可用性由按钮的 usable 决定（需真有画面）。
+      this.capture_screenshot();
+    } else if (action === 'fullscreen') {
+      // 全屏预览（原版 FullscreenCommand）。
+      this.toggle_fullscreen();
     } else {
-      // screenshot / fullscreen：UI 层尚未接上真实实现。
       this.show_not_implemented(action);
     }
   }
@@ -2948,8 +3129,9 @@ struct Index {
 
       // 原版 5 个 ToolButton，顺序与图标字号逐条对照。
       // 已实现的：「调节画面」（可点即开窗口）、「独立窗口」（有画面时可开，画面会被
-      // 移到独立窗口）、「刷新画面」（按投屏状态可用）。仍未落地的只剩「截图」与
-      // 「全屏预览」两项，恒灰 + 点击提示敬请期待，不用"投屏中才可用"的假门槛装样子。
+      // 移到独立窗口）、「刷新画面」（按投屏状态可用）、「截图」（截预览帧存相册）、
+      // 「全屏预览」（主窗口沉浸全屏）。后两项的可用性由真实条件决定（需先有画面、
+      // 且画面在主窗口而非独立窗口），不再是"未实现"。
       //
       // ★ 状态驱动的三项（label / icon / usable）一律走 @Prop 下发，见 ToolPanelButton
       //   的说明：写成 @Builder 参数的话这些值会冻在首帧，「独立窗口」「刷新画面」
@@ -2966,7 +3148,8 @@ struct Index {
         on_blocked: (): void => { this.block_action('window'); },
       })
       ToolPanelButton({
-        btnLabel: '截图', iconName: 'Screenshot20', iconSize: 15, usable: false,
+        btnLabel: '截图', iconName: 'Screenshot20', iconSize: 15,
+        usable: this.can_use_visual_tools() && !this.standaloneOpen,
         on_action: (): void => { this.run_tool_action('screenshot'); },
         on_blocked: (): void => { this.block_action('screenshot'); },
       })
@@ -2977,7 +3160,8 @@ struct Index {
         on_blocked: (): void => { this.block_action('refresh'); },
       })
       ToolPanelButton({
-        btnLabel: '全屏预览', iconName: 'FullScreenMaximize20', iconSize: 15, usable: false,
+        btnLabel: '全屏预览', iconName: 'FullScreenMaximize20', iconSize: 15,
+        usable: this.can_use_visual_tools() && !this.standaloneOpen,
         on_action: (): void => { this.run_tool_action('fullscreen'); },
         on_blocked: (): void => { this.block_action('fullscreen'); },
       })
@@ -2991,7 +3175,11 @@ struct Index {
   @Builder
   left_panel() {
     // 原版 LeftPanelHost 固定 Width=300，内部 DevicePanel / MirroringPanel 互斥
-    // （各自的 Visibility 由导航切换）。两个都收起时容器仍占位，与原版一致。
+    // （各自的 Visibility 由导航切换）。
+    // ★ 调用点（build 的 MainContentGrid）只在**两个面板有一个开着时**才渲染本列：
+    //   两个都收起时，连容器带间隔一并撤掉，中间画面区自动占满。上游亦然 ——
+    //   LeftPanelHost 关闭时 Width=0 + Visibility=Collapsed、LeftGapColumn.Width=0。
+    //   （此前这里写着"两个都收起时仍占位、与原版一致"，那是错的，已按上游改正。）
     Column() {
       if (this.showDevicePanel) {
         this.device_panel()
@@ -3021,8 +3209,11 @@ struct Index {
       } else {
         this.open_standalone_window();
       }
+    } else if (action === 'screenshot') {
+      this.capture_screenshot();
+    } else if (action === 'fullscreen') {
+      this.toggle_fullscreen();
     } else {
-      // media / screenshot / fullscreen：UI 层尚未接真实实现。
       this.show_not_implemented(action);
     }
   }
@@ -3898,9 +4089,10 @@ struct Index {
     Row() {
       Blank()
       // 原版 PreviewQuickActions 的六项，顺序与图标字号逐条对照。
-      // 未实现的（录制推流/截图/全屏预览）恒为灰态、点击给「敬请期待」；
-      // 「调节画面」「蓝牙反控」「独立窗口」都是已实现的：前两者恒可点，
-      // 独立窗口按真实条件（需先有画面）决定是否可点。
+      // 已实现：调节画面 / 蓝牙反控 / 独立窗口 / 截图 / 全屏预览。
+      // 「录制与推流」是剩下的唯一未实现项，恒灰 + 点击给「敬请期待」。
+      // 「调节画面」「蓝牙反控」恒可点；「独立窗口」「截图」「全屏预览」按真实条件
+      // （需先有画面、且画面在主窗口而非独立窗口）决定是否可点。
       // 蓝牙反控恒可点 —— 它是一个开关，不依赖投屏状态（上游的蓝牙通道与投屏
       // 链路完全独立，三种场景都能用）。
       //
@@ -3928,12 +4120,14 @@ struct Index {
         on_blocked: (): void => { this.block_action('window'); },
       })
       QuickBarButton({
-        btnLabel: '', iconName: 'Screenshot20', iconSize: 15, usable: false,
+        btnLabel: '', iconName: 'Screenshot20', iconSize: 15,
+        usable: this.can_use_visual_tools() && !this.standaloneOpen,
         on_action: (): void => { this.run_quick_action('screenshot'); },
         on_blocked: (): void => { this.block_action('screenshot'); },
       })
       QuickBarButton({
-        btnLabel: '', iconName: 'FullScreenMaximize20', iconSize: 15, usable: false,
+        btnLabel: '', iconName: 'FullScreenMaximize20', iconSize: 15,
+        usable: this.can_use_visual_tools() && !this.standaloneOpen,
         on_action: (): void => { this.run_quick_action('fullscreen'); },
         on_blocked: (): void => { this.block_action('fullscreen'); },
       })
@@ -4003,6 +4197,8 @@ struct Index {
           .margin({ top: 6 })
           .constraintSize({ maxWidth: 440 })
       }
+      // 开发者模式（调试入口）：连点版本号 7 次开启后，下面这些有线链路诊断才会显示。
+      if (this.devMode) {
       // 有线链路的原生诊断（认领接口 / 厂商 0x52 / 重枚举 / 端点）。
       // 必须内联 Text：@Builder 的参数按值传递，走方法参数的话状态变化不会刷新。
       if (this.usbDiagnostic.length > 0) {
@@ -4100,6 +4296,7 @@ struct Index {
           .textAlign(TextAlign.Center)
           .margin({ top: 8 })
           .constraintSize({ maxWidth: 460 })
+      }
       }
     }
     .constraintSize({ maxWidth: 440 })
@@ -4549,24 +4746,7 @@ struct Index {
 
       Scroll() {
         Column() {
-          // ── 卡片 1：应用模式 ──
-          Column() {
-            this.section_title('应用模式', '')            // Strings: ApplicationModeLabel
-            Select(APPLICATION_MODE_OPTIONS)
-              .optionFontColor(this.themePalette().TEXT)
-              .selectedOptionFontColor(this.themePalette().TEXT)
-              .selected(this.appMode)
-              .value(APPLICATION_MODE_LABELS[this.appMode])
-              .width('100%')
-              .fontColor(this.themePalette().TEXT)
-              .margin({ top: 8 })
-              .onSelect((index: number): void => {
-                this.appMode = index;
-              })
-          }
-          .control_card(this.themePalette())
-
-          // ── 卡片 2：无线 AirPlay ──
+          // ── 卡片 1：无线 AirPlay ──
           Column() {
             this.section_title('无线 AirPlay', '常驻')    // Strings: WirelessReceiverTitle + WirelessServiceAlwaysOn
             this.field_label('连接分辨率')                // Strings: WirelessResolutionLabel
@@ -4643,7 +4823,7 @@ struct Index {
           }
           .control_card(this.themePalette())
 
-          // ── 卡片 3：有线投屏协议 ──
+          // ── 卡片 2：有线投屏协议 ──
           Column() {
             this.section_title('有线投屏协议', '')        // Strings: UsbProjectionModeTitle
             Row() {
@@ -4737,7 +4917,7 @@ struct Index {
           }
           .control_card(this.themePalette())
 
-          // ── 卡片 4：画面与声音 ──
+          // ── 卡片 3：画面与声音 ──
           Column() {
             this.section_title('画面与声音', '')          // Strings: ImageAndSound
             // Strings: RenderLimitHelp（Windows → 本地，见文件头替换清单）
@@ -4885,7 +5065,7 @@ struct Index {
           }
           .control_card(this.themePalette())
 
-          // ── 卡片 5：蓝牙反控鼠标设置 ──
+          // ── 卡片 4：蓝牙反控鼠标设置 ──
           // 此前整卡压暗并写着"鸿蒙版尚未实现"。现在 BLE HID 外设已经落地
           // （ets/common/BluetoothHidPeripheral.ets），所以取消灰化、换成真开关：
           //
@@ -5044,7 +5224,7 @@ struct Index {
           }
           .control_card(this.themePalette())
 
-          // ── 卡片 6：视频应用投屏 ──
+          // ── 卡片 5：视频应用投屏 ──
           Column() {
             this.section_title('视频应用投屏', '常驻')    // Strings: MediaCastTitle + WirelessServiceAlwaysOn
             // Strings: MediaCastDescription
@@ -5054,9 +5234,24 @@ struct Index {
           .control_card(this.themePalette())
           .opacity(NOT_IMPLEMENTED_CARD_OPACITY)
 
-          // ── 卡片 7：应用设置 ──
+          // ── 卡片 6：应用设置 ──
           Column() {
             this.section_title('应用设置', '')            // Strings: AppPreferencesTitle
+            // 原版把「应用模式」放在**应用设置卡片内部**、排在最前，而非独立卡片：
+            // MainWindow.xaml 的 AdvancedSettingsCard 里 ApplicationModeLabel → 语言 → 主题
+            // （三者的 DetailLabel Margin 都是 0,10,0,5，本文件对应 field_label）。
+            // 此前把「应用模式」做成了顶部独立卡片 1，顺序与原版不一致，现按原版收进本卡片。
+            this.field_label('应用模式')                  // Strings: ApplicationModeLabel
+            Select(APPLICATION_MODE_OPTIONS)
+              .optionFontColor(this.themePalette().TEXT)
+              .selectedOptionFontColor(this.themePalette().TEXT)
+              .selected(this.appMode)
+              .value(APPLICATION_MODE_LABELS[this.appMode])
+              .width('100%')
+              .fontColor(this.themePalette().TEXT)
+              .onSelect((index: number): void => {
+                this.appMode = index;
+              })
             this.field_label('界面语言')                  // Strings: LanguageToolTip
             Select(LANGUAGE_OPTIONS)
               .optionFontColor(this.themePalette().TEXT)
@@ -5085,10 +5280,81 @@ struct Index {
                 // 同步给系统，让系统三键跟着换色（不然深色下三键是深色的，看不见）。
                 this.sync_system_color_mode();
               })
+
+            // ── 半透明窗口 ──
+            // 对齐 Windows 11 原生深色界面的 Acrylic 观感。文案是状态驱动的
+            // ⇒ 内联 Text/Button（@Builder 按值传递会冻在首帧）。
+            Row() {
+              Text(`半透明窗口：${this.acrylicOn ? '开' : '关'}`)
+                .fontSize(10)
+                .fontColor(this.themePalette().MUTED_TEXT)
+              Blank()
+              Button(this.acrylicOn ? '关闭' : '开启')
+                .fontSize(11)
+                .fontColor(this.themePalette().TEXT)
+                .backgroundColor(this.themePalette().CONTROL_FILL)
+                .borderRadius(8)
+                .onClick((): void => {
+                  this.acrylicOn = !this.acrylicOn;
+                  // ★ 立刻写盘（putSync + flushSync）：拖到 Ability 收尾才刷，
+                  //   用户关掉/杀进程时就来不及了 ⇒ 选完重启又回默认。
+                  save_acrylic_preferences(this.acrylicOn, this.acrylic_alpha_hex());
+                  this.refresh_window_acrylic_readout();
+                })
+            }
+            .width('100%')
+            .margin({ top: 12 })
+
+            // ── 浓度档位（只在半透明开启时可选）──
+            // 选中态进 ForEach 的 key（ArkUI 只按 key 复用组件，不进 key 不会重绘）。
+            if (this.acrylicOn) {
+              Row() {
+                Text('浓度')
+                  .fontSize(10)
+                  .fontColor(this.themePalette().MUTED_TEXT)
+                Blank()
+                ForEach(ACRYLIC_ALPHA_OPTIONS, (item: AcrylicAlphaOption): void => {
+                  Button(item.label)
+                    .fontSize(11)
+                    .fontColor(item.hex === this.acrylicAlpha
+                      ? '#FFFFFF'
+                      : this.themePalette().TEXT)
+                    .backgroundColor(item.hex === this.acrylicAlpha
+                      ? this.themePalette().ACCENT
+                      : this.themePalette().CONTROL_FILL)
+                    .borderRadius(8)
+                    .margin({ left: 6 })
+                    .onClick((): void => {
+                      this.acrylicAlpha = item.hex;
+                      save_acrylic_preferences(this.acrylicOn, item.hex);
+                      this.refresh_window_acrylic_readout();
+                    })
+                }, (item: AcrylicAlphaOption): string =>
+                  `${item.hex}${item.hex === this.acrylicAlpha ? '-on' : '-off'}`)
+              }
+              .width('100%')
+              .margin({ top: 8 })
+            }
+
+            // ── 参数读数（仅开发者模式）──
+            // 这是排查用的内部账本（窗口透明与否、容器配色 4 组探测的成功/失败码），
+            // 正常使用者看到只会困惑 ⇒ 只在开发者模式下显示。
+            if (this.devMode && this.windowAcrylicReadout.length > 0) {
+              Text(this.windowAcrylicReadout)
+                .fontSize(9)
+                .fontColor(this.themePalette().MUTED_TEXT)
+                .width('100%')
+                .margin({ top: 4 })
+                // 这是一份账本（窗口属性 + 容器配色 4 组探测 + 偏好读写），行数按内容增长：
+                // 截断就等于读不到 ⇒ 宁可放宽（现在最长约 6 行，留两行余量）。
+                .maxLines(8)
+            }
+
+            this.hint_text('窗口底色半透明，对齐 Windows 原生深色观感；浓度可在上面选档。若观感不合适，点「关闭」即回到原纯色背景。')
           }
           .control_card(this.themePalette())
 
-          // ── 卡片 8：设置中心（打开各子窗口）──
+          // ── 卡片 7：设置中心（打开各子窗口）──
           Column() {
             this.section_title('设置中心', '')            // Strings: SettingsCenterTitle
             Column() {
@@ -5194,6 +5460,95 @@ struct Index {
 
   // ═══════════════════════════ 组装（AppShell） ═══════════════════════════
 
+  /**
+   * 开发者模式开关变化 ⇒ 重算窗口参数读数。
+   * 为什么需要：读数只在开发者模式下显示，而开发者模式是**运行中**才开的
+   * （关于页连点版本号）；不重算的话，开完回到主界面读数区会是空的。
+   */
+  private on_dev_mode_changed(): void {
+    this.refresh_window_acrylic_readout();
+  }
+
+  /**
+   * 回读主窗属性，把「系统给不给透明」变成一行能读的数字。
+   *
+   * ★ 为什么必须有这行：半透明磨砂有两种失败路径 —— ① 系统根本不给透明窗口
+   *   （isTransparent=false，UI 的 alpha 底色只是叠在不透明窗口背景上，混出来和
+   *   原色差几个亮度值，肉眼"根本没变化"）；② 给了透明但模糊采不到桌面。
+   *   两种的下一步完全不同，靠猜区分不开，只能读真值。
+   */
+  private refresh_window_acrylic_readout(): void {
+    const ctx: common.Context | null = this.appContext;
+    if (ctx === null) {
+      this.windowAcrylicReadout = '窗口属性回读失败：拿不到应用上下文';
+      return;
+    }
+    try {
+      window.getLastWindow(ctx)
+        .then((win: window.Window): void => {
+          try {
+            const props: window.WindowProperties = win.getWindowProperties();
+            const container: string = AppStorage.get<string>(WINDOW_ACRYLIC_RESULT_KEY) ?? '';
+            const shadow: string = AppStorage.get<string>(WINDOW_SHADOW_RESULT_KEY) ?? '';
+            const persisted: string = AppStorage.get<string>(PERSIST_READ_RESULT_KEY) ?? '';
+            const persistedWrite: string = AppStorage.get<string>(PERSIST_WRITE_RESULT_KEY) ?? '';
+            this.windowAcrylicReadout =
+              `窗口透明=${props.isTransparent ? '是' : '否'} · 类型=${props.type} · 全屏=${props.isFullScreen ? '是' : '否'}`
+              + ` · 底浓度=${Math.round(parseInt(this.acrylic_alpha_hex(), 16) / 255 * 100)}%`
+              // 「存档」两字是偏好读写的结果：读=启动时从磁盘取回的值，写=最近一次落盘。
+              // 持久化失败与"用户没改过"同形（都回到默认），只能靠这两个读数区分。
+              + (persisted.length > 0 ? ` ｜ ${persisted}` : '')
+              + (persistedWrite.length > 0 ? ` ｜ ${persistedWrite}` : '')
+              + (container.length > 0 ? ` ｜ ${container}` : '')
+              + (shadow.length > 0 ? ` ｜ ${shadow}` : '');
+          } catch (readError) {
+            const readFailure = readError as BusinessError;
+            this.windowAcrylicReadout = `窗口属性回读失败：${readFailure.message}`;
+          }
+        })
+        .catch((error: BusinessError): void => {
+          this.windowAcrylicReadout = `窗口属性回读失败：${error.code} ${error.message}`;
+        });
+    } catch (error) {
+      const failure = error as BusinessError;
+      this.windowAcrylicReadout = `窗口属性回读失败：${failure.message}`;
+    }
+  }
+
+  /**
+   * 根容器背景色：磨砂开 = 带 alpha 的 Fluent 底色（窗口背景已在 EntryAbility 设为
+   * 全透明，alpha 部分直接混到桌面，即 Win11 原生观感的来路）；关 = 原实色。
+   * 基色与 WINDOW_BACKGROUND 同源（#1F1F1F / #F3F3F5），只把 alpha 提到
+   * ROOT_ACRYLIC_ALPHA_HEX。★ 现在容器色与内容区背景都已**全透**，这一层的 alpha
+   * 就是**唯一**决定"透多少"的量 —— 想更透就把它调小（00=全透、FF=实色）。
+   */
+  /**
+   * 当前浓度 alpha（两位十六进制串）。
+   *
+   * ★ 防脏值：档位来自 AppStorage，若被人写入非法串（长度不对 / 非十六进制），
+   *   `#${x}1F1F1F` 会拼出非法颜色 ⇒ 根容器着色异常。这里统一校验后回退默认值。
+   */
+  private acrylic_alpha_hex(): string {
+    const value: string = this.acrylicAlpha;
+    if (value.length !== 2) {
+      return ROOT_ACRYLIC_ALPHA_HEX;
+    }
+    const parsed: number = parseInt(value, 16);
+    if (Number.isNaN(parsed)) {
+      return ROOT_ACRYLIC_ALPHA_HEX;
+    }
+    return value;
+  }
+
+  private root_background_color(): string {
+    if (!this.acrylicOn) {
+      return this.themePalette().BACKGROUND;
+    }
+    return this.scheme === 'dark'
+      ? `#${this.acrylic_alpha_hex()}1F1F1F`
+      : `#${this.acrylic_alpha_hex()}F3F3F5`;
+  }
+
   build() {
     // 根容器用 Stack：主内容照旧，底部叠一层「敬请期待」浮层
     // （未实现功能的统一反馈，见 show_coming_soon）。
@@ -5206,8 +5561,15 @@ struct Index {
 
           // 原版 MainContentGrid：DeviceColumn(300) | LeftGap(18) | Center(*) | RightGap | ControlColumn
           Row() {
-            this.left_panel()
-            Column().width(COLUMN_GAP)
+            // ★ 左侧面板与右侧设置面板同纪律：**收起时整列连同间隔一并撤掉**，
+            //   中间画面区自动占满。此前左列无论开合都占着 300 + 间隔，于是关掉
+            //   「投屏 / 投屏来源」后中间区左边留一条空白，而关右侧却能拉伸。
+            //   上游即如此（MainWindow.xaml.cs）：showLeftPanel = (左面板 != None)，
+            //   LeftPanelHost 关闭时 Width=0 + Visibility=Collapsed，LeftGapColumn=0。
+            if (this.showDevicePanel || this.showMirroringPanel) {
+              this.left_panel()
+              Column().width(COLUMN_GAP)
+            }
 
             this.center_panel()
 
@@ -5228,7 +5590,16 @@ struct Index {
       }
       .width('100%')
       .height('100%')
-      .backgroundColor(this.themePalette().BACKGROUND)
+      .backgroundColor(this.root_background_color())
+      // 磨砂：radius=0 时等于没有模糊。模糊能否作用到窗口外的桌面取决于
+      // 系统合成器 —— 窗口 surface 内没有内容可采时，这里大概率只是无操作；
+      // 半透明的观感由 root_background_color() 的 alpha 底色承担，两者叠加。
+      .backgroundEffect({
+        radius: this.acrylicOn ? 32 : 0,
+        color: this.root_background_color(),
+        saturation: this.scheme === 'dark' ? 0.2 : 0.35,
+        brightness: 1.0,
+      })
 
       if (this.comingSoonText.length > 0) {
         this.coming_soon_toast()

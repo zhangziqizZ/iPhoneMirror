@@ -164,21 +164,20 @@
     //   将来若真要在 ArkTS 侧调 bindDriverWithDeviceId，得先在 AGC 申请 profile 时
     //   勾选该受限权限并填服务端 bundleName，再把这条加回来。
     //
-    // 保留的两个 USB 权限级别不同、对 ACL 的要求也完全不同（最容易搞错的地方）：
+    // USB 相关两条权限级别、对 ACL 的要求完全不同（最容易搞错的地方）：
     //   ACCESS_DDK_USB                    system_basic + provisionEnable=true
-    //                                     → 必须进 allowed-acls，当前 profile 已放行
+    //                                     → **必须**进签名 profile 的 allowed-acls。
+    //                                     自签/调试 profile（本工程 .p7b 由 AGC 签发、
+    //                                     本地改不了）拿不到这条 ACL ⇒ 装包直接 9568289。
+    //                                     故 2026-10-01 起**临时移出** requestPermissions：
+    //                                     让应用能装、AirPlay 镜像可用；待拿到带该 ACL
+    //                                     的 profile 再放回（届时 USB 有线采集恢复，
+    //                                     原生 OH_Usb_* 不再回权限错）。移出期间 USB 不可用，
+    //                                     但原生会如实把权限错写进已修好的日志。
     //   ACCESS_EXTENSIONAL_DEVICE_DRIVER  normal + provisionEnable=false
     //                                     → 声明即授权，**不需要** ACL
     //                                     驱动扩展里的 deviceManager.queryDevices 用它
     "requestPermissions": [
-      {
-        "name": "ohos.permission.ACCESS_DDK_USB",
-        "reason": "$string:usb_ddk_perm_reason",
-        "usedScene": {
-          "abilities": ["EntryAbility", "DriverExtAbility"],
-          "when": "always"
-        }
-      },
       {
         "name": "ohos.permission.ACCESS_EXTENSIONAL_DEVICE_DRIVER",
         "reason": "$string:usb_driver_ext_perm_reason",
@@ -235,7 +234,36 @@
           "abilities": ["EntryAbility"],
           "when": "always"
         }
-      }
+      },
+      {
+        // 半透明窗口（实验，对齐 Win11 Acrylic 观感）：PC 窗口管理器的「窗口容器配色」
+        // 与「窗口阴影开关」这两个 API 需要它。
+        //
+        // ★ 级别与授权方式（已核 PermissionDefinitions.json，两个字段都要读）：
+        //   availableLevel  = normal          ← 不是 system_basic
+        //   grantMode       = system_grant    ← 声明即授权，不用弹窗
+        //   provisionEnable = false           ← **不需要**签名 profile 的 acls.allowed-acls
+        // ⇒ 与 ACCESS_DDK_USB / WRITE_IMAGEVIDEO（system_basic + provisionEnable=true）
+        //   不是一回事：加这一条**不会**触发 9568289，自签 profile 同样有效。
+        //
+        // ★ 纠正 2026-10-01 的错误结论：当时查到 isTransparent 是只读属性就下了
+        //   "SDK 没有设主窗透明的接口"的判断 —— 错在只查了属性名，没查这个权限管哪些
+        //   API。它管的正是 setWindowContainerColor / setWindowShadowEnabled（均 @since 20，
+        //   SystemCapability.Window.SessionManager），这才是透明窗口的入口。
+        "name": "ohos.permission.SET_WINDOW_TRANSPARENT",
+        "reason": "$string:window_transparent_perm_reason",
+        "usedScene": {
+          "abilities": ["EntryAbility"],
+          "when": "always"
+        }
+      },
+      // ★ 2026-10-01 纠错 + 临时移出 ohos.permission.WRITE_IMAGEVIDEO：
+      //   它的 availableLevel 实为 **system_basic**（非此前误标的 normal），必须进签名
+      //   profile 的 acls.allowed-acls 才能装包；本工程调试 profile 由 AGC 签发、本地
+      //   改不了 ⇒ 带上它安装直接 9568289。故与 ACCESS_DDK_USB 一并临时移出，让应用能装。
+      //   截图功能改为存应用私有目录（filesDir/iPhoneMirror/Screenshots/，无需权限），
+      //   待拿到带该 ACL 的 profile 再放回本声明、并把 capture_screenshot 改回写相册。
+      //   （string.json 里的 imagevideo_perm_reason 暂留作放回时的 reason。）
     ]
   }
 }

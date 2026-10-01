@@ -32,6 +32,9 @@ local.properties
 workspace.xml
 
 # ─── 临时 / 编辑器 ───
+# Python 字节码缓存（tools/*.py 运行时产生，曾有一个 .pyc 混进未跟踪文件）
+__pycache__/
+*.pyc
 *.log
 *.swp
 *.swo

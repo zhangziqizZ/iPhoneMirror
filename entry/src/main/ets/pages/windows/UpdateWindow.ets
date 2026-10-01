@@ -143,8 +143,8 @@ export const ARG_KEY_READ_ONLY: string = 'im.update.readOnlyPreview';
 export const RESULT_KEY_LATER: string = 'im.update.remindLater';
 export const RESULT_KEY_OPENED: string = 'im.update.releasePageOpened';
 
-const FALLBACK_RELEASE_URL: string = 'https://github.com/RayrenSX/iPhoneMirror/releases';
-const GITHUB_URL: string = 'https://github.com/RayrenSX/iPhoneMirror';
+const FALLBACK_RELEASE_URL: string = 'https://github.com/zhangziqizZ/iPhoneMirror/releases';
+const GITHUB_URL: string = 'https://github.com/zhangziqizZ/iPhoneMirror';
 
 /** Strings（逐键标注）。 */
 const S_TITLE: string = '发现新版本';                 // UpdateWindowTitle

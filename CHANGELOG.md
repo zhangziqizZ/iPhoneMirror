@@ -3,11 +3,163 @@
 > 鸿蒙移植版的变更说明。**每次改动都要**：① 递增 `AppScope/app.json5` 的
 > `versionName`（以及 `versionCode`）；② 在本文件顶部加一节，写清新增功能或
 > 修复的 bug；③ 同步更新 `entry/src/main/ets/pages/windows/AboutWindow.ets`
-> 里的 `CHANGELOG_ITEMS` 常量（关于页「本次更新」区块读它，因为打包进 App 的
-> 资源无法随包读取本文件）。
+> 里的 `CHANGELOG_RELEASES` 常量（关于页「版本更新」区块按版本分组折叠读取它，
+> 因为打包进 App 的资源无法随包读取本文件）。
 >
 > 版本号规则：`主.次.修订`（semver）。功能/修复 → 修订位 +1；较大功能 → 次位 +1。
 > `versionCode` = 主*1000000 + 次*1000 + 修订。
+
+## 1.0.40（2026-10-02）
+
+### 新增：半透明窗口（Acrylic）—— 对齐 Windows 11 深色观感
+
+> 本节汇总 1.0.31–1.0.39：这些改动都属于**同一个功能**的迭代（含中间两次纠错与一次实机探测），
+> 对外只算一个新版本，中间不再单列。
+
+- 窗口底色半透明，UI 里本来就是 Fluent 半透明 token 的色板（如侧栏 `#C41F1F1F`）真正透到桌面。
+  浓度可在「投屏设置 → 应用设置 → 半透明窗口」下选档：**78% / 60% / 50% / 40%**，默认 **60%**，
+  点一下立即生效；开关一键回到原纯色背景。
+- **开关与浓度档位跨启动保留**（`@ohos.data.preferences` 显式 `putSync` + `flushSync` 落盘）。
+  此前用 `PersistentStorage.persistProp` 实测在用户直接关掉/杀进程时来不及落盘 ⇒ 选完重启又回
+  默认值；改用 `dataPreferences` 每次改动即时写盘（详见 `entry/src/main/ets/common/AppPreferences.ets`）。
+  开发者模式则**有意**保持非持久化（调试入口，每次启动都该是关闭态）。
+- **真正入口是「窗口容器配色」，不是窗口背景色**：`setWindowContainerColor()` +
+  `setWindowShadowEnabled()`（均 @since 20，SessionManager），配
+  `ohos.permission.SET_WINDOW_TRANSPARENT`（normal + system_grant ⇒ 声明即授权、**不需 ACL**，
+  自签 profile 同样有效）。`setWindowBackgroundColor()` 只是**窗口内**的兜底色，系统合成器
+  不认它的 alpha ⇒ 单靠它做不出透视 —— 这正是最初"改了却根本没变化"的原因。
+- **官方约束**：`setWindowContainerColor()` **不支持将非焦点态下的主窗口背景设为透明**
+  ⇒ `inactiveColor` 必须是不透明色，否则返回 **401**（该码不在 `@throws` 列表内，是框架层参数
+  校验直接拒的 ⇒ 别照着 `@throws` 列表排除可能性）。启动时做 4 组分级探测、逐组记录成功或
+  失败码，**最后一次成功的组合生效**；账本与 `窗口透明=是/否` 等参数读数**仅在开发者模式下**
+  显示在设置面板（正常使用者看到只会困惑）。
+- 失焦时容器色取**主题实色**（深 `#FF1F1F1F` / 浅 `#FFF3F3F5`）而不是探测用的纯黑
+  ⇒ 失焦窗口变实色、不发黑，与 Win11 一致。
+- 实机已确认生效（读数：窗口透明=是、容器配色探测成功）⇒ **转为正式特性**，界面不再标
+  「实验」；磨砂模糊能否采到桌面取决于系统合成器，最坏只是"半透明无磨砂"，不影响功能。
+## 1.0.30（2026-10-01）
+
+### 新增：关于页「版本更新」改为按版本分组折叠（参考微信更新日志）
+
+- 最新一版默认展开，旧版本默认收起；点版本行即可展开/收起查看该版本的变更。
+- 各条变更归入其所属版本，不再把所有版本的条目混在一个平铺列表里。
+
+## 1.0.29（2026-10-01）
+
+### 新增：开发者模式（调试入口，连点版本号 7 次开启）
+
+「关于」页的版本号改为可点击：连点 7 次开启开发者模式，主界面空状态随即显示
+有线链路诊断（原生 / 系统 USB / USB 权限 / 环境诊断 / 驱动绑定 / USB 驱动 / 窗口）；
+再次点击版本号即关闭。`devMode` 经 `AppStorage`（`DEVELOPER_MODE_KEY`）由 `@StorageLink`
+跨窗口（关于子窗 ↔ 主窗）联动，非持久化（仅内存，重启即失效），与上游「调试开关」语义一致。
+
+### 修复：左侧面板收起后中间显示区不自拉伸
+
+原版 `MainWindow.xaml.cs` 在 `showMirroring/showDevices` 都为 false 时会把
+`LeftPanelHost` 整列宽度置 0 并 `Visibility.Collapsed`。鸿蒙版此前始终保留左侧列占位，
+导致关闭「投屏 / 投屏来源」后中间画面区不拉伸（关闭右侧面板却能拉伸）。
+现改为：左右两个面板都关闭时**整列连同间隔一并省略**，中间 `center_panel` 以
+`layoutWeight(1)` 自然占满剩余宽度；与上游行为对齐。
+
+### 调整：右侧「投屏设置」卡片顺序对齐原版
+
+上游 `ControlTitle="投屏设置"` 的卡片顺序是：① 无线 AirPlay ② 有线投屏协议
+③ 画面与声音 ④ 蓝牙反控鼠标设置 ⑤ 视频应用投屏 ⑥ 应用设置（**应用模式在该卡片内**，
+不是独立卡片）⑦ 设置中心。此前鸿蒙版把「应用模式」单列成一张卡片、顺序也不对。
+现已移除独立「应用模式」卡，将其折叠进「应用设置」卡内，并整体按原版重排为 7 张卡。
+
+* 同步：`app.json5` → 1.0.29 / 1000029；本文件新增本节；`AboutWindow.ets` 的
+  `CHANGELOG_ITEMS` 新增对应条目。
+
+## 1.0.28（2026-10-01）
+
+### 修复：安装失败 code 9568289（第二轮——真正的拦路石是 WRITE_IMAGEVIDEO）
+
+第一次（1.0.27）移出 `ACCESS_DDK_USB` 后安装仍被拒，说明还有别的 `system_basic`
+权限在拦。查证 SDK 的 `PermissionDefinitions.json`：真正的根因是
+`ohos.permission.WRITE_IMAGEVIDEO`——它的 `availableLevel` 实为 **`system_basic`**
+（1.0.25 一度误标成 `normal` 才把它写进 `requestPermissions`、还顺手申请了相册写入）。
+
+* 把 `WRITE_IMAGEVIDEO` 从 `entry/src/main/module.json5` 的 `requestPermissions`
+  **临时移出**（与 `ACCESS_DDK_USB` 一并），安装不再被权限授予关拦下。
+* **截图改为存应用私有目录**：`capture_screenshot()` 不再经 `photoAccessHelper` 写系统相册，
+  而是 `componentSnapshot` 截预览帧 → 编码 PNG → 写
+  `filesDir/iPhoneMirror/Screenshots/YYYYMMDD_HHMMSS.png`。应用私有目录无需任何权限即可写，
+  因此去掉 `WRITE_IMAGEVIDEO` 后截图照样能用。
+* 代价：截图不再进系统相册，用户在「文件管理 / 关于页打开日志目录」同级的 `Screenshots`
+  文件夹里取走；USB 有线采集仍暂不可用（需带该 ACL 的 profile）。
+* 影响范围核对：`normal` 级权限（INTERNET / KEEP_BACKGROUND_RUNNING / ACCESS_BLUETOOTH /
+  ACCESS_EXTENSIONAL_DEVICE_DRIVER）均不需 ACL，移出两条 `system_basic` 后安装通过。
+* 恢复相册写入：拿到含 `WRITE_IMAGEVIDEO` ACL 的 profile 后，放回 `requestPermissions`
+  声明并把 `capture_screenshot` 改回写相册即可（string.json 里 `imagevideo_perm_reason` 已留作 reason）。
+* 同步：`app.json5` → 1.0.28 / 1000028；`module.json5`（移除声明）/ `Index.ets`（截图改存应用目录）已改。
+
+## 1.0.27（2026-10-01）
+
+### 修复：安装失败 code 9568289（签名 profile 缺 ACCESS_DDK_USB 的 ACL）
+
+装包被拒：`9568289 = ERR_APPINSTALL_GRANT_REQUEST_PERMISSIONS_FAILED`。根因是
+`ohos.permission.ACCESS_DDK_USB`（`system_basic` 级）必须进签名 profile 的
+`acls.allowed-acls`，而本工程当前调试 profile（`.p7b`，AGC 签发、本地不可改）没有它。
+
+* 把 `ACCESS_DDK_USB` 从 `entry/src/main/module.json5` 的 `requestPermissions`
+  **临时移出**。其余 5 条权限均为 `normal` 级、不需 ACL，故移出后安装不再被拦。
+* 影响：USB 有线采集暂时不可用（原生 `OH_Usb_*` 会回权限错，UI 显示「未发现设备」，
+  且已修好的日志会如实记录）；**AirPlay 无线镜像 / 截图 / 全屏 / 日志 / 蓝牙反控**
+  全部不受影响、可正常安装使用。
+* 恢复 USB：在 AGC 把 `ohos.permission.ACCESS_DDK_USB` 加进受限权限(acl)、重新下载
+  `.p7b` 替换后放回 `requestPermissions` 即可（详见 module.json5 注释）。
+
+## 1.0.26（2026-10-01）
+
+### 修复：关于页「实时日志」始终空白（原生日志路径错配）
+
+根因：原生 `Core/src/Logging.cpp` 默认把诊断日志写到**系统 temp 目录**
+（`iPhoneMirror-capture.log`），而关于页的读取器 `read_log_tail()` 只读应用沙箱
+`filesDir/iPhoneMirror/Logs/`。鸿蒙应用沙箱读不到系统 temp，于是日志框永远空着、
+「打开日志目录」也是空文件夹。
+
+* **原生侧新增重定向出口**：`Logging.cpp` 增加内部 `g_path_override` 覆盖路径，
+  `configured_path()` 优先用它；新增公开 `set_log_file_override()` → C ABI
+  `im_set_log_file()` → NAPI `setLogFile()`（已同步 `types/libim_core/Index.d.ts`）。
+  `set_log_file_override()` 会关闭当前已打开的日志文件，让下一次写入按新路径
+  （应用沙箱）重新打开，因此即使在 `im_initialize()` 之后调用也有效。
+* **ArkTS 侧**：`EntryAbility.onCreate` 在最早时机（早于任何原生写入）调用
+  `setLogFile(filesDir + '/iPhoneMirror/Logs/startup.log')`，把原生日志落进沙箱。
+  沙箱目录由原生 `create_directories` 自动创建。
+* **读取器加固**：`read_log_tail()` 优先选 `startup.log`（原生固定文件名），避免日志轮转
+  产生的 `startup.log.1` 被误读。
+* 注意：日志内容在**首次原生写入**（开始投屏 / AirPlay / 任意原生诊断）之后才会出现，
+  这是预期行为——没有会话就没有可记的日志。
+* 同步：`app.json5` → 1.0.26 / 1000026；`module.json5` / `string.json` 无变化。
+
+## 1.0.25（2026-09-30）
+
+### 补齐原版两处功能：截图、全屏预览
+
+对照原版（WPF + Linux 移植）的功能清单，把此前"恒灰 + 敬请期待"的两项接上真实实现：
+
+* **截图**：预览快捷条与主投屏面板各有一颗「截图」按钮，点一下截下当前预览画面（预览
+  XComponent，`id='preview'`），编码为 PNG 后写入系统相册。首次会弹「相册写入」授权框
+  （`ohos.permission.WRITE_IMAGEVIDEO`，normal + user_grant，与蓝牙权限同纪律：声明不等于
+  已授权，由 `ensure_media_permission()` 在点击时申请）。保存成功/失败都如实写进设置面板状态行，
+  不假成功。（⚠️ 更正：1.0.28 起「写入系统相册」已改为存**应用私有目录**——详见 1.0.28；
+  原因：`WRITE_IMAGEVIDEO` 实为 `system_basic` 权限、自签调试 profile 拿不到 ACL，已临时移出该声明，
+  故截图不再进相册，改存 `filesDir/iPhoneMirror/Screenshots/`）
+  * ★ 已知边界（已在按钮可用性 / 文案里标明，不骗人）：预览是 `XComponent(SURFACE)`，
+    个别 API 版本 / 设备上 `componentSnapshot` 可能截不到 surface 内容（存下来是黑图）。
+    若你实测是黑图，告诉我，我再加一条原生帧拷贝路径（`OhosPreviewRenderer` 留帧 + NAPI）。
+  * 独立窗口开着时主窗口预览区是空的（渲染器已挪到独立窗口），此时主窗口截图无意义，
+    按钮按此关掉可用性。
+* **全屏预览**：预览快捷条与主投屏面板各有一颗「全屏预览」按钮，点一下把主窗口切到沉浸
+  全屏（隐藏状态栏 / 导航栏），再点退出。用 `window.setWindowLayoutFullScreen` +
+  `setWindowSystemBarEnable` 实现，不碰 free-window 模式，不会触发 relaunch。
+* **可用性口径**：两项都从"恒灰"改为"有画面时可用"（复用 `can_use_visual_tools()`，并额外排除
+  独立窗口开着的情况），与「独立窗口」「刷新画面」同一套状态驱动逻辑，不再用"未实现"假门槛。
+* **未实现清单收窄**：`NOT_IMPLEMENTED_ACTIONS` 仅剩 `media`（录制与推流）—— 它要编码管线，
+  本版仍未接。其余（image/refresh/bluetooth/window/screenshot/fullscreen）均已接真实实现。
+* 同步：`app.json5` → 1.0.25 / 1000025；`module.json5` 新增 `WRITE_IMAGEVIDEO` 权限声明；
+  `base/element/string.json` 新增 `imagevideo_perm_reason`。
 
 ## 1.0.24（2026-09-29）
 

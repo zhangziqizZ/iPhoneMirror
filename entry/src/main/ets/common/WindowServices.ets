@@ -406,6 +406,66 @@ export const STANDALONE_CHROME_NOTICE_KEY: string = 'im.standalone.chromeNotice'
 export const REVERSE_CONTROL_DISABLED_KEY: string = 'im.reverseControl.disabled';
 
 /**
+ * 开发者模式（在关于页连点版本号 7 次开启；开启后再点一下关闭）。
+ *
+ * ★ 为什么走 AppStorage 而不是各写一个成员变量：开关在**关于子窗口**里点，效果却要
+ *   落在**主窗口**的空态诊断区（那批 USB 服务 / DDK 权限 / 环境诊断 / 驱动绑定文字
+ *   只给开发者看）。两个窗口跑在同一进程，@StorageLink 才能做到"一处点、另一处立刻变"。
+ * ★ 仅本次运行有效（不落盘）：重启回到非开发者模式 —— 与"这是个调试入口"的定位一致，
+ *   也免得普通用户误开后，每次启动都被一堆底层诊断刷屏。
+ */
+export const DEVELOPER_MODE_KEY: string = 'im.developerMode';
+
+/**
+ * 半透明窗口（磨砂观感）开关 —— 对齐 Windows 11 原生深色界面的 Acrylic/Mica 观感。
+ *
+ * ★ 已实机确认生效（读数：窗口透明=是、容器配色探测成功）⇒ 正式特性，不再标「实验」。
+ *   磨砂能否模糊到桌面取决于系统合成器，但最坏只是"半透明无磨砂"，不影响任何功能；
+ *   观感不合意可一键关闭（关闭 = 回到原纯色背景）。
+ * ★ 这两个键**跨启动保留**（`EntryAbility.onCreate` 里由 `AppPreferences` 从
+ *   `@ohos.data.preferences` 读回来）—— 用户选了开关/浓度，重启却回到默认值，等于没保存。
+ *   （对比 `DEVELOPER_MODE_KEY`：那是调试入口，**有意**不持久化，每次启动都回到关闭。）
+ * ★ 试过 `PersistentStorage.persistProp`，**实机仍不保留**：它的落盘时机不在我们手里，
+ *   用户直接关掉/杀进程时来不及 ⇒ 换成显式 putSync + flushSync（见 `AppPreferences.ets`）。
+ */
+export const ACRYLIC_WINDOW_KEY: string = 'im.acrylicWindow';
+
+/**
+ * 浓度的**默认值**（'99' ≈ 60%，00=全透、FF=实色）。
+ *
+ * ★ 为什么不放在 Index.ets：`EntryAbility` 注册持久化时要用它作默认值，而 Index 是页面
+ *   文件、被 Ability 引用会把整份 UI 拖进启动路径 ⇒ 放这里做唯一事实来源。
+ */
+export const ACRYLIC_ALPHA_DEFAULT: string = '99';
+
+/**
+ * 半透明窗口的**浓度档位**（根容器底色的 alpha 十六进制，00=全透、FF=实色）。
+ *
+ * ★ 为什么要有这个键：容器色与内容区背景都全透之后，根容器那层底色的 alpha 是
+ *   **唯一**决定浓淡的量。做成运行时可选档位，用户就不必为"再透一点"改代码重建。
+ */
+export const ACRYLIC_ALPHA_KEY: string = 'im.acrylicAlpha';
+
+/**
+ * 半透明窗口两项调用的**结果**（EntryAbility 写入，设置面板读数显示）。
+ * 为什么要回传而不是让页面猜：setWindowContainerColor / setWindowShadowEnabled 的失败
+ * 路径有四种（201 权限 / 801 设备不支持 / 1300002 窗口状态 / 1300004 未授权），观感上
+ * 全是"没变化"，只有把错误码读出来才能区分"权限没声明"与"这设备根本不支持"。
+ */
+export const WINDOW_ACRYLIC_RESULT_KEY: string = 'im.acrylicResult';
+export const WINDOW_SHADOW_RESULT_KEY: string = 'im.shadowResult';
+
+/**
+ * 偏好持久化（`AppPreferences.ets`）的**读 / 写结果** —— 设置面板读数行显示。
+ *
+ * ★ 为什么"保存"这件事也要摊到读数上： Persistence 失败的表现和用户没改过**同形**
+ *   （都是"回到默认"），只有把每次读写的结果读出来，才能区分「没打开偏好存储」、
+ *   「读了用了旧值」、「写成功但没落盘」——否则只能靠猜。
+ */
+export const PERSIST_READ_RESULT_KEY: string = 'im.persistReadResult';
+export const PERSIST_WRITE_RESULT_KEY: string = 'im.persistWriteResult';
+
+/**
  * 顶部条带高度 ÷ 窗口宽度 —— **单一口径**，Ability 与页面共用。
  *
  * ── 为什么是"按宽度取比例"而不是固定 40vp ────────────────────────────────────
