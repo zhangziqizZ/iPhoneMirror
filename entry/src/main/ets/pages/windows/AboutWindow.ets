@@ -161,7 +161,7 @@ import common from '@ohos.app.ability.common';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { bundleManager, Want } from '@kit.AbilityKit';
 import { UIContext } from '@kit.ArkUI';
-import { fileIo } from '@kit.CoreFileKit';
+import { fileIo, ReadTextOptions } from '@kit.CoreFileKit';
 import {
   SubWindowShell, SubWindowHost, SecondaryButton, PrimaryButton, RoundedTextBox,
   section_title, hint_text,
@@ -242,6 +242,13 @@ export class ChangelogRelease {
  * 点开**（用户 2026-10-02 晚间更正：上一版把旧版做成了不可展开，点不开）。
  */
 const CHANGELOG_RELEASES: ChangelogRelease[] = [
+  new ChangelogRelease('1.0.47', '2026-10-02', [
+    '修复：切换语言仍然卡顿 —— 根因是 i18n.System.setAppPreferredLanguage()：官方口径写明它会让应用收到配置更新、由框架触发整个页面树 rebuild（社区另有"调用后卡死"报告），而它对本项目零收益（每个字都来自自带词典，没有一处读系统资源）。交互路径已不再调用它，系统层对齐挪到启动时（三道闸：每进程一次、现值相同不写、失败静默）',
+    '修复：整窗每 500ms 无差别重建 —— 轮询把状态对象换成新引用就等于"变了"，哪怕字段一模一样也会重渲染整棵树（主窗 362 处翻译 + 全部布局测量）。现改为逐字段比较后再赋值',
+    '修复：翻译函数每次调用都读一次全局存储 —— 主窗每秒两次整树重渲染 × 362 处调用，等于每秒上千次；生效语言已改为缓存',
+    '修复：关于页「实时日志」每 500ms 整本读日志文件（startup.log 无上限增长，跑一阵就是几 MB，且全在 JS 主线程同步读）—— 改为只读尾部 16KB，刷新周期降到 1s，内容没变不重建',
+    '新增：开发者工具里切换语言后显示本次切换自身耗时（ms），卡不卡有数字可核对，不再靠感觉',
+  ]),
   new ChangelogRelease('1.0.46', '2026-10-02', [
     '修复：状态栏「分辨率/帧率/延迟」在 AirPlay 投屏时恒为「—」—— 此前只读 USB 采集状态机，AirPlay 镜像不经过它。现接真值：分辨率=解码器上报的实际流尺寸，帧率=轮询差分实测（EMA 平滑），延迟=C++ 侧实测「收包入队→解码出帧」（不含 iPhone 编码与网络前段）',
     '修复：音频格不再显示假数据 —— 改为渲染器回读的真实格式（如 48 kHz · 2 ch），没在播就如实「—」（此前只要开关开着就恒显 48 kHz · 2 ch）',
@@ -597,6 +604,11 @@ function cleanup_logs(ctx: common.Context | null): CleanupResult {
   return result;
 }
 
+/** 日志面板一次最多读多少**字节**（尾部）。文件再大也只读这么多。 */
+const LOG_TAIL_BYTES: number = 16 * 1024;
+/** 日志面板最终显示多少**字符**（对应原版 TextBox 高度 180 的可视量）。 */
+const LOG_TAIL_CHARS: number = 8000;
+
 /**
  * 平台替换 7：真做 —— 读诊断日志目录里最新一个日志文件的尾部。
  *
@@ -625,9 +637,28 @@ function read_log_tail(ctx: common.Context | null): string {
       chosen = 'startup.log';
     }
     const path: string = directory + '/' + chosen;
-    const text: string = fileIo.readTextSync(path);
+    // ★★ 只读尾部（1.0.47）：旧实现是 `readTextSync(path)` 整本读进来再截 8000 字。
+    //   startup.log 是**无上限增长**的（原生 Core 一直在写），跑一阵子就是几 MB；
+    //   而这个调用每 500ms 一次 ⇒ 每秒两次"读几 MB + 造一个几 MB 的字符串"，
+    //   全在 JS 主线程上同步跑 —— 这是"整个软件发闷"的底噪之一，且与投屏画质无关。
+    //   现在先 statSync 拿大小，再按 offset/length 只把尾部 16KB 读进来。
+    let size: number = 0;
+    try {
+      size = Number(fileIo.statSync(path).size);   // size 是 bigint，必须 Number() 折算
+    } catch (statError) {
+      hilog.warn(DOMAIN, TAG, 'stat 日志失败: %{public}s', (statError as BusinessError).message);
+      return '';
+    }
+    const wantBytes: number = size > LOG_TAIL_BYTES ? LOG_TAIL_BYTES : size;
+    const offset: number = size - wantBytes;
+    const options: ReadTextOptions = { offset: offset, length: wantBytes, encoding: 'utf-8' };
+    const text: string = fileIo.readTextSync(path, options);
+    // 从字节中间切开，首行大概率是半行 ⇒ 丢掉它，避免第一行永远是一截乱码。
+    const firstBreak: number = text.indexOf('\n');
+    const tailed: string = (offset > 0 && firstBreak >= 0)
+      ? text.substring(firstBreak + 1) : text;
     // 原版 TextBox 高度 180，取尾部即可（超出部分由滚动条承担）。
-    return text.length > 8000 ? text.substring(text.length - 8000) : text;
+    return tailed.length > LOG_TAIL_CHARS ? tailed.substring(tailed.length - LOG_TAIL_CHARS) : tailed;
   } catch (error) {
     hilog.warn(DOMAIN, TAG, 'read_log_tail 失败: %{public}s', (error as BusinessError).message);
     return '';
@@ -799,13 +830,16 @@ struct AboutWindow {
     }
     // 平台替换 7：原版 DispatcherTimer 500 ms 轮询 RefreshLogsAsync。
     // 回调里再包一层 try：定时器异常同样会终止应用（见 read_log_tail 的注释）。
+    // ★ 500ms → 1000ms（1.0.47）：日志面板要的是"看着在动"，不是逐帧同步。
+    //   配合 read_log_tail 的"只读尾部 16KB"和 refresh_logs 的"内容没变不赋值"，
+    //   把这一路从"每秒两次读几 MB + 重建 8000 字 Text"降到几乎无成本。
     this.logTimer = setInterval((): void => {
       try {
         this.refresh_logs();
       } catch (error) {
         hilog.warn(DOMAIN, TAG, '刷新日志失败: %{public}s', (error as BusinessError).message);
       }
-    }, 500);
+    }, 1000);
   }
 
   aboutToDisappear(): void {
@@ -852,7 +886,13 @@ struct AboutWindow {
   }
 
   private refresh_logs(): void {
-    this.logText = read_log_tail(this.ability_context());
+    const fresh: string = read_log_tail(this.ability_context());
+    // ★ 内容没变就别赋值：@State 一赋值就是整窗重渲染，而这里挂着一个 8000 字的
+    //   Text —— 每 500ms 无差别重建一次纯属白烧 CPU（投屏还在跑时日志一直在涨，
+    //   那时才真的需要刷新）。
+    if (fresh !== this.logText) {
+      this.logText = fresh;
+    }
   }
 
   /**

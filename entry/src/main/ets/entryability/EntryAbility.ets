@@ -9,7 +9,9 @@ import { vp_to_px_ratio } from '../common/SubWindow';
 import { BusinessError } from '@ohos.base';
 import { open_instance_conflict, InstanceConflictRequest } from '../pages/windows/InstanceConflictWindow';
 import { setLogFile } from 'libim_core.so';
-import { t, set_language, LANG_INDEX_KEY } from '../common/i18n';
+// ★ 只导入启动期要用的两个入口：`t()` 由页面自己导入，Ability 这里不用
+//   （留着未使用的导入在严格模式下就是噪声）。
+import { init_language, sync_system_language_at_launch } from '../common/i18n';
 
 const TAG: string = 'iPhoneMirror';
 
@@ -38,13 +40,18 @@ export default class EntryAbility extends UIAbility {
     //     /杀进程时来不及 ⇒ 现在换成显式 putSync + flushSync（见 AppPreferences.ets）。
     open_app_preferences(this.context);
     load_acrylic_preferences();
-    // ★ 界面语言：先注入上下文（set_language 靠它切系统层 setAppPreferredLanguage），
-    //   再把磁盘存档读回 AppStorage —— 与半透明同理，必须在任何 UI 装载**之前**，
-    //   否则 t() 首次读取会先建键，这里再写就变成普通更新、用户看到的还是默认值。
+    // ★ 界面语言：把磁盘存档读回 AppStorage —— 与半透明同理，必须在任何 UI 装载
+    //   **之前**，否则 t() 首次读取会先建键，这里再写就变成普通更新、用户看到的还是默认值。
     load_language_preference();
     // 反控接管时的指针偏好（默认保持可见，见 HIDE_POINTER_ON_TAKEOVER_KEY 的注释）。
     load_hide_pointer_preference();
-    set_language(AppStorage.get<number>(LANG_INDEX_KEY) ?? 0);
+    // ★ 读回存档后立刻把档位灌进 i18n 的缓存（否则首帧 t() 会用默认值建缓存；
+    //   且缓存必须在这里建立 —— 主窗每 500ms 整树重渲染，t() 每秒上千次，
+    //   不能每次都去读 AppStorage）。
+    init_language();
+    // ★ 系统层偏好语言对齐只在这里做一次：它会触发全局配置更新 + 整树 rebuild，
+    //   放在启动（UI 还没装载）成本为零；放在点击回调里就是"切一次语言卡一下"。
+    sync_system_language_at_launch();
     // 把原生 Core 的诊断日志重定向进应用沙箱，否则它默认写到系统 temp 目录
     // （iPhoneMirror-capture.log），应用读不到 ⇒ 关于页"实时日志"永远空白。
     // 必须在任何原生写入发生之前设置（im_initialize 会立即写首条会话头）。

@@ -156,7 +156,8 @@ import {
   show_developer_usb_preview,
 } from './CaptureStatusNoticeWindow';
 import { save_language_preference } from '../../common/AppPreferences';
-import { t, set_language, LANG_INDEX_KEY, active_lang, LANGUAGE_LABELS as I18N_LANG } from '../../common/i18n';
+import { t, set_language, LANG_INDEX_KEY, active_lang, language_switch_cost_ms,
+  LANGUAGE_LABELS as I18N_LANG } from '../../common/i18n';
 
 const TAG: string = 'im_developer_tools';
 const DOMAIN: number = 0x0100;
@@ -578,7 +579,12 @@ struct DeveloperToolsWindow {
       save_language_preference(index);
     }, 0);
     const label: string = I18N_LANG[active_lang()][index];
-    this.statusText = t('界面语言') + ' → ' + label;
+    // ★ 把切换自身耗时写出来：卡不卡要有数字，不能靠感觉（这也是给下一轮定位用的
+    //   读数之一 —— 若这里显示 0~2ms 而界面仍然顿，说明卡在 ArkUI 的整树重渲染，
+    //   不在我们的代码里；若显示几十 ms，那就是我们还在切换路径上干了重活）。
+    const cost: number = language_switch_cost_ms();
+    this.statusText = t('界面语言') + ' → ' + label
+      + (cost >= 0 ? `（切换耗时 ${cost} ms）` : '');
     this.refresh_diagnostics();
   }
 

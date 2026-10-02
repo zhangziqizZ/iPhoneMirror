@@ -880,6 +880,32 @@ struct DeviceRow {
   }
 }
 
+/**
+ * 两个状态快照是否**逐字段相同**（用于轮询时的"无事发生就不重建"）。
+ *
+ * ★ 为什么需要它（1.0.47）：`poll_status()` 每 500ms 把 `this.airplay` /
+ *   `this.capture` 换成 napi 返回的新对象。对 @State 来说**换了对象引用就等于变了**，
+ *   哪怕每个字段都一模一样，ArkUI 也会把这一页整棵树重渲染一遍 ——
+ *   主窗 362 处 `t()` + 全部布局测量，每秒两次，永不停止。空闲时（没在投屏）
+ *   这些字段确实一个都不变，却照样在重建，这就是"整个软件发闷"的底噪。
+ *
+ * ★ 为什么用 JSON 比：这两个对象是 napi 现造的普通对象，字段列表会随版本加，
+ *   手写逐字段比较漏一个就会让某个读数**永久冻结**（比多重建几次更糟，
+ *   因为它静默）。序列化比一次整树重建便宜两个数量级。
+ *
+ * ★ 比较失败（抛异常）时返回 false ⇒ 走"照旧赋值"的保守分支，宁可多重建也不冻屏。
+ */
+function status_snapshot_equal(a: Object | null, b: Object | null): boolean {
+  if (a === null || b === null) {
+    return a === null && b === null;
+  }
+  try {
+    return JSON.stringify(a) === JSON.stringify(b);
+  } catch (error) {
+    return false;
+  }
+}
+
 @Entry
 @Component
 struct Index {
@@ -1627,12 +1653,17 @@ struct Index {
       const failure = error as BusinessError;
       console.warn('iPhoneMirror mDNS pump failed:', failure.message);
     }
-    this.airplay = airplayGetStatus();
+    // ★ 只在快照**真的变了**时才换 @State 的引用：换了引用 = 整树重渲染，
+    //   而空闲时（没在投屏）这一整包字段一个都不会变，没必要每秒重建两次。
+    const apFresh: AirPlayStatus | null = airplayGetStatus();
+    if (!status_snapshot_equal(this.airplay, apFresh)) {
+      this.airplay = apFresh;
+    }
 
     // AirPlay 实测解码帧率：相邻两轮轮询的 decodedFrames 差分（500ms 轮询周期，
     // EMA 平滑抗抖动）。分辨率/延迟直接取状态里的实测值，只有帧率需要本地算。
     {
-      const apNow: AirPlayStatus | null = this.airplay;
+      const apNow: AirPlayStatus | null = apFresh;
       if (apNow !== null && apNow.running !== 0 && apNow.clients > 0) {
         const nowMs: number = Date.now();
         if (this.prevAirplayDecoded >= 0 && this.prevAirplayPollMs > 0) {
@@ -1654,8 +1685,12 @@ struct Index {
         this.prevAirplayPollMs = 0;
       }
     }
-    this.capture = getCaptureStatus();
-    const status: CaptureStatus | null = this.capture;
+    // 同上：USB 采集状态空闲时也不变，别用"新对象"骗 ArkUI 重建整棵树。
+    const capFresh: CaptureStatus | null = getCaptureStatus();
+    if (!status_snapshot_equal(this.capture, capFresh)) {
+      this.capture = capFresh;
+    }
+    const status: CaptureStatus | null = capFresh;
     // 状态查询本身失败（state < 0 是 JsGetCaptureStatus 如实给的 -1）不做跃迁判定。
     if (status === null || status.state < 0) {
       return;
@@ -5395,9 +5430,12 @@ struct Index {
               .fontColor(this.themePalette().TEXT)
               .onSelect((index: number): void => {
                 this.languageIndex = index;
+                // ★ set_language() 现在**只写内存**（AppStorage + 解析缓存），
+                //   不再碰 i18n.System.setAppPreferredLanguage() —— 那个调用会触发
+                //   全局配置更新 + 整树 rebuild，是"切一次语言卡一下"的根因。
+                //   系统层对齐挪到下次启动（EntryAbility.onCreate），成本为零。
                 set_language(index);
-                // 落盘（putSync+flushSync）延后一拍：别把磁盘 I/O 排在整树重渲染
-                // 前面 —— 语言切换的卡顿就是这类"顺手同步干重活"攒出来的。
+                // 落盘（putSync+flushSync）延后一拍：磁盘 I/O 别排在整树重渲染前面。
                 setTimeout((): void => {
                   save_language_preference(index);
                 }, 0);

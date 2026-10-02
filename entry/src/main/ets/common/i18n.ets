@@ -37,6 +37,31 @@ export const LANGUAGE_LABELS: Record<string, string[]> = {
  */
 let cached_system_lang: string = '';
 
+/**
+ * ★ 已解析出的「生效语言」缓存（1.0.47）。
+ *
+ * 为什么必须缓存：`t()` 在 build() 里被调用（主窗 362 处、关于窗 119 处…），
+ * 而主窗每 500ms 轮询要整树重渲染一次 ⇒ 不缓存时 `active_lang()` 里的
+ * `AppStorage.get()` 会被打上**每秒上千次**（AppStorage 是跨组件/跨窗口的全局
+ * 存储，读一次要比读普通变量贵得多）。缓存只在 `set_language()` / `init_language()`
+ * 里失效，其它任何路径改 AppStorage 都不会绕过它 —— 所以入口必须收在这两个函数上。
+ *
+ * 空串 = 还没解析过（首次调用时按 AppStorage 的档位算一次）。
+ */
+let resolved_lang: string = '';
+
+/** 上次语言切换的自身耗时（ms，-1 = 还没切过）。给开发者工具读数用，别靠感觉判断卡不卡。 */
+let last_switch_cost_ms: number = -1;
+
+/**
+ * 系统层偏好语言是否已在**本进程**同步过。
+ * ★ 只调一次：`i18n.System.setAppPreferredLanguage()` 会让应用收到
+ *   onConfigurationUpdated、**框架触发整个页面树 rebuild**（官方论坛口径），
+ *   社区还有"调用后 App 卡死、异常捕获不到"的报告 —— 这是个昂贵且有风险的调用，
+ *   绝不能放在点击回调里，也不该在一个进程里反复打。
+ */
+let system_lang_synced: boolean = false;
+
 function resolve_system_lang(): string {
   if (cached_system_lang !== '') {
     return cached_system_lang;
@@ -56,11 +81,12 @@ function resolve_system_lang(): string {
 }
 
 export function active_lang(): string {
-  const idx: number = AppStorage.get<number>(LANG_INDEX_KEY) ?? 1;
-  if (idx <= 0) {
-    return resolve_system_lang();
+  if (resolved_lang !== '') {
+    return resolved_lang;   // ★ 命中缓存：build() 里每秒上千次的调用走这一条
   }
-  return LANGUAGE_TAGS[idx] ?? 'zh-CN';
+  const idx: number = AppStorage.get<number>(LANG_INDEX_KEY) ?? 1;
+  resolved_lang = (idx <= 0) ? resolve_system_lang() : (LANGUAGE_TAGS[idx] ?? 'zh-CN');
+  return resolved_lang;
 }
 
 /** 简体中文 → 英文。占位符（%d/%s/{0}/·/×）原样保留。 */
@@ -526,28 +552,78 @@ export function t(zh: string): string {
 }
 
 /**
- * 切换语言档位。
+ * 切换语言档位（**这条路径必须保持"只写内存"**）。
  * @param index 0=跟随系统 1=简体 2=繁中(香港) 3=英文
  *
- * ★ 卡顿修复（1.0.46）：AppStorage 写入后下一帧就是整树重渲染（这是语言切换
- *   必要的成本），此时不能在同一个 onSelect 回调里再同步干重活 ——
- *   i18n.System.setAppPreferredLanguage() 是同步系统调用、还会触发系统层资源
- *   重载，放在这里会把刚触发的重渲染卡在半路。延后一拍再执行，界面先切。
+ * ★★ 卡顿真正的根因（1.0.47）—— 旧实现在这里（哪怕延后 50ms）调了
+ *   `i18n.System.setAppPreferredLanguage()`。官方口径：该调用会让应用收到
+ *   onConfigurationUpdated，**框架触发整个页面树 rebuild**；社区另有"调用后 App
+ *   卡死、异常捕获不到"的报告。
+ *   ⇒ 它不是"延后一拍"就能化解的开销，而是**一次全局重建**，且对我们**零收益**：
+ *     界面上每一个字都来自本文件的 `t()` 词典，没有任何一处读 `$r()` 资源，
+ *     系统层语言偏好改不改，用户看到的字一模一样。
+ *   ⇒ 结论：交互路径**不再调用**它。系统层对齐挪到下次启动时（见
+ *     `sync_system_language_at_launch()`），那一刻本来就要重建一次 UI，成本为零。
  */
 export function set_language(index: number): void {
+  const started: number = Date.now();
   AppStorage.setOrCreate<number>(LANG_INDEX_KEY, index);
-  const tag: string = LANGUAGE_TAGS[index];
-  if (tag && tag !== 'system') {
-    setTimeout((): void => {
-      try {
-        // ★ 静态方法：i18n.System.setAppPreferredLanguage（@since 20），不是 context 上的方法。
-        //   失败不影响运行时 t() 翻译（resources 里的串仍走各自 locale 文件），吞掉避免崩溃。
-        i18n.System.setAppPreferredLanguage(tag);
-      } catch (e) {
-        // 系统层切换失败不影响运行时 t() 翻译；吞掉避免崩溃。
-      }
-    }, 50);
+  if (index <= 0) {
+    cached_system_lang = '';              // 改回跟随系统：重新解析一次系统语言
+    resolved_lang = resolve_system_lang();
   } else {
-    cached_system_lang = '';   // 改回跟随系统：下次 t() 重新解析一次系统语言
+    resolved_lang = LANGUAGE_TAGS[index] ?? 'zh-CN';
   }
+  last_switch_cost_ms = Date.now() - started;
+}
+
+/**
+ * 启动时把 AppStorage 里的档位灌进缓存。
+ * ★ 必须在 UI 装载之前调（EntryAbility.onCreate）：否则首次 `t()` 会用默认值建缓存，
+ *   之后再读存档就变成了"改缓存"（虽然也能生效，但首帧是错的、且少了这次计时）。
+ */
+export function init_language(): void {
+  const index: number = AppStorage.get<number>(LANG_INDEX_KEY) ?? 0;
+  set_language(index);
+  last_switch_cost_ms = -1;   // 启动不算"用户切换"，别污染读数
+}
+
+/**
+ * 系统层偏好语言对齐 —— **只在启动时调一次**，绝不在点击回调里调。
+ *
+ * 为什么还要留这一步：系统提供的那部分界面（系统分享/选择器/日期控件等，若出现）
+ * 走的是系统资源，不受我们词典控制；让它们跟用户选的语言一致是合理的。
+ * 代价由"启动"承担（那时 UI 还没装载，重建成本为零），而不是由"点击"承担。
+ *
+ * ★★ 三道闸，缺一不可：
+ *   ① `system_lang_synced` —— 一个进程内只调一次；
+ *   ② 与 `getAppPreferredLanguage()` 现值比较 —— 已经一致就不写（写相同值也可能触发配置更新）；
+ *   ③ try/catch —— 该接口有卡死/异常捕获不到的社区报告，失败必须静默且不影响启动。
+ *   档位 0（跟随系统）用官方规定的 `'default'` 清除偏好（官方文档：清除后跟随系统，
+ *   且"该特性将在应用重新启动后生效"）。
+ */
+export function sync_system_language_at_launch(): void {
+  if (system_lang_synced) {
+    return;
+  }
+  system_lang_synced = true;
+  const index: number = AppStorage.get<number>(LANG_INDEX_KEY) ?? 0;
+  const target: string = (index <= 0) ? 'default' : (LANGUAGE_TAGS[index] ?? '');
+  if (target === '') {
+    return;
+  }
+  try {
+    if (i18n.System.getAppPreferredLanguage() === target) {
+      return;   // 已经一致：写一次相同值也可能触发一次全局重建，跳过
+    }
+    i18n.System.setAppPreferredLanguage(target);
+  } catch (e) {
+    // 系统层对齐失败只影响"系统提供的那部分界面"，我们自己的 t() 照样生效；
+    // 吞掉避免把启动带崩（★ 生命周期里抛出去异常没人接管 ⇒ 整个应用被结束）。
+  }
+}
+
+/** 上次语言切换自身耗时（ms）；-1 = 本次启动还没切过。用于开发者工具读数。 */
+export function language_switch_cost_ms(): number {
+  return last_switch_cost_ms;
 }
