@@ -1988,12 +1988,18 @@ struct Index {
           const head: string = '首帧头=' +
             d.firstInputB03.toString(16).padStart(8, '0') + ' ' +
             d.firstInputB47.toString(16).padStart(8, '0');
+          // 参数集本体，与首帧头分开看：首帧头是"参数集 + 首帧"拼完的样子，
+          // 集头才是 Configure 真正用的那一段（判断 SPS 在不在就看它）。
+          const cfgHead: string = '集头=' +
+            d.configHeadB03.toString(16).padStart(8, '0') + ' ' +
+            d.configHeadB47.toString(16).padStart(8, '0') +
+            (d.configures > 1 ? `(换了${d.configures}次)` : '');
           const feed: string =
             `真推${d.pushedInputs}(IDR${d.idrFrames}/标记${d.syncFlagged}/参数集${d.inbandParamSets})` +
             (d.pushFailures > 0 ? `、推送失败${d.pushFailures}(err${d.lastPushError})` : '') +
             (d.setattrFailures > 0 ? `、属性失败${d.setattrFailures}` : '') +
             `、末帧${d.lastInputSize}B/容量${d.inputCapacity}B`;
-          why = `已推 ${d.pushedInputs} 帧、callback=0、cfg=${d.lastConfigWidth}x${d.lastConfigHeight}(${cfgSrc})、${spsText}、${feed}、${head}、` +
+          why = `已推 ${d.pushedInputs} 帧、callback=0、cfg=${d.lastConfigWidth}x${d.lastConfigHeight}(${cfgSrc})、${spsText}、${feed}、${head}、${cfgHead}、` +
             `解码器=${d.decoderName || '未创建'}·档${d.strategy}/4·切换${d.strategySwitches}` +
             (d.inputTooLarge > 0 ? `、过大丢弃=${d.inputTooLarge}` : '');
         } else if (d.outputWithPixels === 0) {
@@ -2112,12 +2118,26 @@ struct Index {
         //   参数集>0 · 真推=0            → configure 之后一个 input_buffer 都没拿到
         //   真推>0 · 回调=0 / 有像素=0   → 解码器收了帧但不吐（档位/尺寸/喂帧方式）
         const d = ap.decoderDiag;
+        // ★ 参数集本体：00000001 67… = SPS 开头（正常）；…28… = 只有 PPS，SPS 缺席。
+        //   这一格是 1.0.45 新增的最关键证据 —— 上一轮黑屏的根就在这里。
+        const cfgHead: string =
+          `集头=` + d.configHeadB03.toString(16).padStart(8, '0') +
+          ' ' + d.configHeadB47.toString(16).padStart(8, '0');
+        // NAL 账本：slice 在涨而 IDR 恒 0 = 一直等不到关键帧；
+        //           slice/IDR 都是 0 且 none 在涨 = 帧里压根没有 H.264 结构。
+        const nalNote: string =
+          `slice${ap.videoNalSlice}/IDR${ap.videoNalIdr}/SPS${ap.videoNalSps}/PPS${ap.videoNalPps}/无NAL${ap.videoNalNone}`;
+        const paramNote: string =
+          `补全参数集帧内${ap.videoParamFromFrames}/包内${ap.videoParamFromConfig}` +
+          `·重配${ap.videoParamReconfigures}` +
+          (ap.videoWaitingParam > 0 ? `·缺集待解${ap.videoWaitingParam}` : '');
         const readout: string =
           `参数集${ap.videoConfigPackets}` +
           ` · 真推${d.pushedInputs}/回调${d.outputCallbacks}/有像素${d.outputWithPixels}` +
           ` · 太小${d.outputTooSmall} · SPS失败${d.spsParseFailures}` +
           ` · cfg=${d.lastConfigWidth}x${d.lastConfigHeight}` +
-          ` · 档${d.strategy}/4换${d.strategySwitches} · 丢${ap.videoQueueDropped}`;
+          ` · 档${d.strategy}/4换${d.strategySwitches} · 丢${ap.videoQueueDropped}` +
+          ` · ${nalNote} · ${paramNote} · ${cfgHead}`;
         return `iPhone 已连接 · 已收 ${ap.videoFrames} 帧但解码器 0 帧输出（解码链未通）` +
           ` · ${readout}${decodeErr}${audioNote}`;
       }

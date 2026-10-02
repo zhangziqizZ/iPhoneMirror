@@ -82,6 +82,22 @@ typedef struct ImAirPlayStats {
     //   解码器从未配置 ⇒ 所有数据帧在解码前就被丢掉（这是静默丢弃，无错误计数）。
     uint64_t video_config_packets;
     uint64_t video_decode_errors;
+    // ── 参数集自愈账（2026-10-02 黑屏实证后加）─────────────────────────────
+    // 配置包拼出来的参数集可能缺 SPS（实测头是 00 00 00 01 28 = PPS 开头），
+    // 所以 SPS/PPS 改为"凡是 NAL type 7/8 都收"，凑齐就重建解码器。判读：
+    //   param_from_frames > 0        → 参数集是从数据帧里补到的（配置包不可信）
+    //   waiting_param 一直涨         → 始终没凑齐，所以一帧都没敢送进解码器
+    //   nal_slice 涨 / nal_idr 恒 0  → 全是 P 帧、等不到关键帧
+    //   nal_none 涨                  → 连起始码都扫不出来：加密没解开 / 不是 H.264
+    uint64_t video_param_from_config;   // 从配置包收到（或更新）参数集的次数
+    uint64_t video_param_from_frames;   // 从数据帧里补到参数集的次数
+    uint64_t video_param_reconfigures;  // 因参数集变化而重建解码器的次数
+    uint64_t video_waiting_param;       // 因缺 SPS/PPS 而未被解码的数据帧数
+    uint64_t video_nal_slice;           // 含 slice NAL（type 1/5）的帧数
+    uint64_t video_nal_idr;             // 含 IDR（type 5）的帧数
+    uint64_t video_nal_sps;             // 含 SPS（type 7）的帧数
+    uint64_t video_nal_pps;             // 含 PPS（type 8）的帧数
+    uint64_t video_nal_none;            // 一个 NAL 都扫不出来的帧数
     // 最后一次 OnError 的错误码文本，例 "ohos avcodec error=14"。
     char video_decoder_last_error[IM_AIRPLAY_TEXT_MAX];
     int clients;                 // 当前连接数

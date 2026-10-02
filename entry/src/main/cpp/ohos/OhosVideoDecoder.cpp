@@ -95,6 +95,15 @@ struct DecoderDiag {
     std::atomic<std::uint64_t> setattr_failures{0};   // OH_AVBuffer_SetBufferAttr 失败次数
     std::atomic<std::int32_t> last_input_size{0};     // 最近一次实际交给解码器的字节数（含 in-band）
     std::atomic<std::int32_t> input_capacity{0};      // 解码器分配的输入缓冲容量（首次观测值）
+    // ── 参数集本体诊断（2026-10-02 加）────────────────────────────────────
+    // 之前只看得到"推给解码器的第一帧前 8 字节"，而那 8 字节是「参数集 + 首帧」
+    // 拼好的结果，看不出**参数集本身**长什么样。而这次黑屏的根离线里最要紧的
+    // 一格恰恰是它：00 00 00 01 67… = SPS 开头（正常），00 00 00 01 28… = PPS
+    // 开头（SPS 缺席，解码器永远解不出画面）。所以单独把 Configure 用的那段
+    // Codec Config 的头记下来，和 first_input_* 分开看。
+    std::atomic<std::uint32_t> config_head_b0_3{0};   // 参数集前 4 字节（大端打包）
+    std::atomic<std::uint32_t> config_head_b4_7{0};   // 参数集第 5-8 字节
+    std::atomic<std::uint64_t> configures{0};         // configure_annex_b 被调用的次数
 };
 // 解码器组件名（CreateByName 用的名字）。原子存不了字符串，用互斥锁保护的
 // 全局串——只在 create 时写、snapshot 时读，竞争概率可忽略。
@@ -507,6 +516,35 @@ public:
         codec_config_override_.assign(annex_b_codec_config.begin(),
             annex_b_codec_config.end());
         have_codec_config_override_ = !codec_config_override_.empty();
+        Diag().configures.fetch_add(1, std::memory_order_relaxed);
+        {
+            // 参数集头：一眼看出是 SPS 开头（00 00 00 01 67/64）还是 PPS 开头（28）。
+            const auto cb = [&](std::size_t k) -> std::uint32_t {
+                return k < codec_config_override_.size()
+                    ? codec_config_override_[k] : 0u;
+            };
+            Diag().config_head_b0_3.store((cb(0) << 24) | (cb(1) << 16) | (cb(2) << 8) | cb(3),
+                std::memory_order_relaxed);
+            Diag().config_head_b4_7.store((cb(4) << 24) | (cb(5) << 16) | (cb(6) << 8) | cb(7),
+                std::memory_order_relaxed);
+        }
+        // ★ 参数集可能在中途变好（SPS 后来才到）、也可能整个变掉（换分辨率、
+        //   会话重连）。
+        //   以前这里在 codec_ 已存在时直接复用旧解码器实例，新的参数集只写进
+        //   codec_config_override_ 却**从不生效**——create_locked() 里
+        //   `if (codec_ != nullptr) return;` 会把它整个跳过去。于是"补到了正确的
+        //   SPS/PPS"在 UI 上看起来毫无作用。现在先拆掉旧实例，让新参数集真正生效。
+        if (codec_ != nullptr) {
+            OH_VideoDecoder_Stop(codec_);
+            OH_VideoDecoder_Destroy(codec_);
+            codec_ = nullptr;
+        }
+        decoded_.clear();
+        pending_input_.clear();
+        have_input_buffer_ = false;
+        input_buffer_ = nullptr;
+        failed_ = false;
+        drain_complete_ = false;
         format_ = coremedia::FormatDescription{};
         format_.codec = static_cast<std::uint32_t>(
             hevc ? coremedia::VideoCodec::Hevc : coremedia::VideoCodec::H264);
@@ -1131,6 +1169,9 @@ extern "C" void im_video_decoder_diag(iPhoneMirror::media::DecoderDiagSnapshot* 
     out->setattr_failures     = d.setattr_failures.load(std::memory_order_relaxed);
     out->last_input_size      = d.last_input_size.load(std::memory_order_relaxed);
     out->input_capacity       = d.input_capacity.load(std::memory_order_relaxed);
+    out->config_head_b0_3     = d.config_head_b0_3.load(std::memory_order_relaxed);
+    out->config_head_b4_7     = d.config_head_b4_7.load(std::memory_order_relaxed);
+    out->configures           = d.configures.load(std::memory_order_relaxed);
     {
         std::lock_guard<std::mutex> name_lock(g_decoder_name_mutex);
         std::snprintf(out->decoder_name, sizeof(out->decoder_name), "%s",

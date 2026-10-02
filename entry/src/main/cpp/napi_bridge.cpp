@@ -698,6 +698,21 @@ napi_value JsAirPlayGetStatus(napi_env env, napi_callback_info /*info*/) {
     // 参数集包数：videoFrames 涨而它为 0 ⇒ 解码器从未被配置（SPS/PPS 没来）。
     set_f64(env, object, "videoConfigPackets",
         static_cast<double>(stats.video_config_packets));
+    // 参数集自愈账：分离"配置包可信"与"参数集是从数据帧里补来的"。
+    set_f64(env, object, "videoParamFromConfig",
+        static_cast<double>(stats.video_param_from_config));
+    set_f64(env, object, "videoParamFromFrames",
+        static_cast<double>(stats.video_param_from_frames));
+    set_f64(env, object, "videoParamReconfigures",
+        static_cast<double>(stats.video_param_reconfigures));
+    set_f64(env, object, "videoWaitingParam",
+        static_cast<double>(stats.video_waiting_param));
+    // NAL 账本：判断"流本身是不是 H.264、有没有关键帧"。
+    set_f64(env, object, "videoNalSlice", static_cast<double>(stats.video_nal_slice));
+    set_f64(env, object, "videoNalIdr", static_cast<double>(stats.video_nal_idr));
+    set_f64(env, object, "videoNalSps", static_cast<double>(stats.video_nal_sps));
+    set_f64(env, object, "videoNalPps", static_cast<double>(stats.video_nal_pps));
+    set_f64(env, object, "videoNalNone", static_cast<double>(stats.video_nal_none));
     set_f64(env, object, "videoDecodeErrors",
         static_cast<double>(stats.video_decode_errors));
     set_utf8(env, object, "videoDecoderLastError",
@@ -753,6 +768,11 @@ napi_value JsAirPlayGetStatus(napi_env env, napi_callback_info /*info*/) {
     set_i32("lastPushError", diag.last_push_error);
     set_i32("lastInputSize", diag.last_input_size);
     set_i32("inputCapacity", diag.input_capacity);
+    // 参数集本体（和 first_input_* 分开：前者是"参数集 + 首帧"拼好的结果，
+    // 而这里只看 Configure 用的那段 Codec Config —— 判断 SPS 在不在）。
+    set_u32("configHeadB03", diag.config_head_b0_3);
+    set_u32("configHeadB47", diag.config_head_b4_7);
+    set_u64("configures", diag.configures);
     set_utf8(env, decoderDiag, "decoderName", diag.decoder_name);
     napi_set_named_property(env, object, "decoderDiag", decoderDiag);
 

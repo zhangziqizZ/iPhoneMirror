@@ -84,6 +84,11 @@ struct DecoderDiagSnapshot {
     std::uint64_t setattr_failures{0};
     std::int32_t last_input_size{0};
     std::int32_t input_capacity{0};
+    // 参数集本体：Codec Config 的前 8 字节 + configure 次数（见 .cpp 说明）。
+    // 00 00 00 01 67… = SPS 开头（正常）；00 00 00 01 28… = 只有 PPS，SPS 缺席。
+    std::uint32_t config_head_b0_3{0};
+    std::uint32_t config_head_b4_7{0};
+    std::uint64_t configures{0};
     char decoder_name[96]{0};            // 实际创建的解码器组件名（含 hw/sw 标记）
 };
 

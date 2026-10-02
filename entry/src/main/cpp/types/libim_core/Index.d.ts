@@ -194,6 +194,9 @@ export interface DecoderDiag {
   lastPushError: number;       // 最近一次 push 失败的 OH_AVErrCode
   lastInputSize: number;       // 最近一次真正交给解码器的字节数（含 in-band 参数集）
   inputCapacity: number;       // 解码器分配的输入缓冲容量（0 = 从未拿到过缓冲）
+  configHeadB03: number;       // Configure 用的参数集前 4 字节（00000001 67 = SPS 开头；…28 = 只有 PPS）
+  configHeadB47: number;       // 参数集第 5-8 字节
+  configures: number;          // configure_annex_b 调用次数（>1 = 中途换过参数集并重建解码器）
   decoderName: string;         // 实际创建的解码器组件名（含 hw/sw 标记）
 }
 
@@ -271,6 +274,17 @@ export interface AirPlayStatus {
   decodedFrames: number;      // 已真正解出并送到预览的帧数（≠ videoFrames：解码链是否通的判据）
   videoQueueDropped: number;  // 因解码跟不上收包被丢弃的旧视频包数（>0 = 会掉帧，但延迟不累积）
   videoConfigPackets: number; // 收到的 SPS/PPS 参数集包数（0 = 解码器从未被配置）
+  // 参数集自愈账：SPS/PPS 不再只认配置包，凡是 NAL type 7/8 都收。
+  videoParamFromConfig: number;  // 从配置包收到（或更新）参数集的次数
+  videoParamFromFrames: number;  // 从数据帧里补到参数集的次数（>0 = 配置包不可信）
+  videoParamReconfigures: number;// 因参数集变化重建解码器的次数
+  videoWaitingParam: number;     // 因没凑齐 SPS+PPS 而没敢解码的数据帧数
+  // NAL 账本：流本身是不是 H.264 / 有没有关键帧。
+  videoNalSlice: number;         // 含 slice（type 1/5）的帧数
+  videoNalIdr: number;           // 含 IDR（type 5）的帧数（0 = 等不到关键帧）
+  videoNalSps: number;           // 含 SPS（type 7）的帧数
+  videoNalPps: number;           // 含 PPS（type 8）的帧数
+  videoNalNone: number;          // 一个 NAL 都扫不出来的帧数（>0 = 加密没解开/不是 H.264）
   videoDecodeErrors: number; // OH_VideoDecoder::OnError 累计次数
   videoDecoderLastError: string; // 最近一次 OnError 的错误码文本
   decoderDiag: DecoderDiag;      // 解码链断点定位（pushed/callbacks/size 等）

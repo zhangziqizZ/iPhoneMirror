@@ -17,6 +17,9 @@ entry/oh_modules/
 # ─── 工具脚本产物（可随时重新生成） ───
 # tools/try_compile.sh 与 tools/shim_selftest.sh 的产物
 .build-check/
+# tools/check_arkts_types.py 导出的 SDK 符号定义快照（每次自检重新生成）
+tools/_sdefs.json
+tools/_all_sdefs.json
 # typescript@4.9.5 SDK 内置 ets-loader 缓存在用户家目录，
 # 不在仓库里。但若有 .tsbuildinfo 之类的本地缓存也忽略
 *.tsbuildinfo

@@ -151,6 +151,145 @@ bool ContainsIdr(const std::vector<std::uint8_t> &bytes) {
     return false;
 }
 
+// ───────────────── 参数集自愈：从哪里拿到 SPS/PPS 都算 ─────────────────
+//
+// 背景（2026-10-02 黑屏实证）：配置包（raop frame_type==0）拼出来的 Annex-B
+// 头是 `00 00 00 01 28 …` —— 0x28 是 **PPS**（NAL type 8），说明这一包里
+// **根本没有 SPS**。而我们此前是"配置包一来就 configure、然后无条件放行数据帧"，
+// 于是一整个会话都用一个缺 SPS 的参数集去解，解码器永远吐不出像素：
+// videoFrames 一直涨、pushedInputs 一直涨、callback 恒为 0、OnError 恒为 0，
+// 四档策略全试完也一样（它们共用同一份坏参数集，换档不可能有用）。
+//
+// 自愈的办法不是去猜配置包为什么会缺 SPS（有可能是 iPhone 端换成 avcC/in-band
+// 的分法、也有可能是 vendored 的 avcC 解析错了位），而是**不再依赖它作为唯一
+// 来源**：任何一帧进来都扫一遍 NAL，见到 type 7/8 就收进参数集缓存；只要缓存
+// 内容变了、且 SPS/PPS 齐了，就带着新的参数集重建解码器。含义是：
+//   * 配置包缺 SPS，但数据帧里带（iPhone 常在 IDR 前自带 SPS/PPS）→ 自动救回来；
+//   * 参数集中途变化（换分辨率、旋转、重连）→ 自动跟着变；
+//   * 全流都没有 SPS → 数据本身有问题（多半加密/错位/不是 H.264），那是另一码事，
+//     靠下面的"NAL 账本"看出来，不再闷在本地猜。
+std::vector<std::uint8_t> g_param_sps;   // 缓存的 SPS（不含起始码）
+std::vector<std::uint8_t> g_param_pps;   // 缓存的 PPS（不含起始码）
+// 参数集来源计数（判读：来自帧 = 配置包不可信但流本身是好的）
+std::atomic<uint64_t> g_param_from_config{0};
+std::atomic<uint64_t> g_param_from_frames{0};
+std::atomic<uint64_t> g_param_reconfigures{0};
+// 因"还没凑齐 SPS+PPS"而没敢送进解码器的数据帧数（旧实现这里是静默丢弃）
+std::atomic<uint64_t> g_frames_waiting_param{0};
+
+// Annex-B 逐个 NAL 回调。fn(type, payload_begin, payload_end)。兼容 3/4 字节起始码。
+template <typename Fn>
+void ForEachNal(const std::vector<std::uint8_t> &bytes, Fn &&fn) {
+    const std::size_t size = bytes.size();
+    std::size_t i = 0;
+    while (i + 3 < size) {
+        if (bytes[i] != 0x00 || bytes[i + 1] != 0x00) { ++i; continue; }
+        std::size_t sc_len = 0;
+        if (bytes[i + 2] == 0x01) {
+            sc_len = 3;
+        } else if (i + 3 < size && bytes[i + 2] == 0x00 && bytes[i + 3] == 0x01) {
+            sc_len = 4;
+        } else {
+            ++i;
+            continue;
+        }
+        const std::size_t begin = i + sc_len;
+        if (begin >= size) break;
+        std::size_t end = size;
+        for (std::size_t j = begin + 1; j + 3 < size; ++j) {
+            if (bytes[j] != 0x00 || bytes[j + 1] != 0x00) continue;
+            if (bytes[j + 2] == 0x01 ||
+                (bytes[j + 2] == 0x00 && bytes[j + 3] == 0x01)) {
+                end = j;
+                break;
+            }
+        }
+        fn(static_cast<std::uint8_t>(bytes[begin] & 0x1Fu), begin, end);
+        i = end;
+    }
+}
+
+// ── NAL 账本：每一数据帧里出现了哪些 NAL type（按帧计数，不按 NAL 计数）──
+// 这几个数是判断"流本身有没有问题"的唯一窗口：
+//   nal_slice 涨而 nal_idr 恒 0  → 一整段 P 帧等不到关键帧（解码器合理不输出）
+//   nal_slice 恒 0              → 帧里连一个 slice 都没有
+//                                  ⇒ 多半是加密没解开 / AVCC→Annex-B 错位 / 不是 H.264
+//   nal_none 涨                 → 扫不到任何起始码，同上，且更确定
+std::atomic<uint64_t> g_nal_slice{0};
+std::atomic<uint64_t> g_nal_idr{0};
+std::atomic<uint64_t> g_nal_sps{0};
+std::atomic<uint64_t> g_nal_pps{0};
+std::atomic<uint64_t> g_nal_none{0};   // 一个 NAL 都扫不出来的帧数
+
+// 扫一帧：填 NAL 账本，顺手把碰到的 SPS/PPS 收进缓存。
+// 返回 true = 参数集内容发生了变化（调用方据此重建解码器）。
+bool SweepPacketForNals(const std::vector<std::uint8_t> &bytes, bool from_config) {
+    bool saw_nal = false;
+    bool saw_slice = false;
+    bool saw_idr = false;
+    bool saw_sps = false;
+    bool saw_pps = false;
+    bool changed = false;
+    ForEachNal(bytes, [&](std::uint8_t type, std::size_t begin, std::size_t end) {
+        saw_nal = true;
+        const std::vector<std::uint8_t> nal(bytes.begin() + static_cast<std::ptrdiff_t>(begin),
+            bytes.begin() + static_cast<std::ptrdiff_t>(end));
+        switch (type) {
+            case 1u:
+                saw_slice = true;
+                break;
+            case 5u:
+                saw_slice = true;
+                saw_idr = true;
+                break;
+            case 7u:
+                saw_sps = true;
+                if (nal != g_param_sps) {
+                    g_param_sps = nal;
+                    changed = true;
+                }
+                break;
+            case 8u:
+                saw_pps = true;
+                if (nal != g_param_pps) {
+                    g_param_pps = nal;
+                    changed = true;
+                }
+                break;
+            default:
+                break;
+        }
+    });
+    if (!saw_nal) {
+        g_nal_none.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    if (saw_slice) g_nal_slice.fetch_add(1, std::memory_order_relaxed);
+    if (saw_idr) g_nal_idr.fetch_add(1, std::memory_order_relaxed);
+    if (saw_sps) g_nal_sps.fetch_add(1, std::memory_order_relaxed);
+    if (saw_pps) g_nal_pps.fetch_add(1, std::memory_order_relaxed);
+    if (changed) {
+        (from_config ? g_param_from_config : g_param_from_frames)
+            .fetch_add(1, std::memory_order_relaxed);
+    }
+    return changed;
+}
+
+// 把缓存里的 SPS/PPS 拼成 Annex-B 的 Codec Config（00 00 00 01 SPS 00 00 00 01 PPS）。
+std::vector<std::uint8_t> BuildParamSetBytes() {
+    std::vector<std::uint8_t> out;
+    const auto append = [&out](const std::vector<std::uint8_t> &nal) {
+        out.push_back(0x00);
+        out.push_back(0x00);
+        out.push_back(0x00);
+        out.push_back(0x01);
+        out.insert(out.end(), nal.begin(), nal.end());
+    };
+    append(g_param_sps);
+    append(g_param_pps);
+    return out;
+}
+
 std::mutex g_video_queue_mutex;
 std::condition_variable g_video_queue_cv;
 std::deque<MirrorPacket> g_video_queue;
@@ -388,26 +527,43 @@ void RaopAudioSetVolume(void * /*cls*/, void * /*session*/, float volume,
 // 线程只入队"一节的说明）。因此它绝不取 g_mutex —— im_airplay_stop 是持 g_mutex
 // join 本线程的，取锁就会互等。
 void ProcessMirrorPacket(const MirrorPacket &packet) {
-    if (packet.is_config) {
-        // SPS/PPS 参数集（raop 已拼成 Annex-B：00 00 00 01 SPS 00 00 00 01 PPS）。
-        // 宽高给提示值，真实分辨率由 OH_VideoDecoder 的 OnStreamChanged 上报后自动纠正。
-        if (!g_video_decoder) {
-            g_video_decoder = make_ohos_video_decoder(DecoderPreference::Auto);
+    // ① 先扫 NAL：既填账面，也把流里自带的 SPS/PPS 收成"现行参数集"。
+    //    配置包同样扫 —— 它本来就该带参数集，收不到就是收不到，不替它假设。
+    const bool param_changed = SweepPacketForNals(packet.bytes, packet.is_config);
+
+    // ② 参数集齐了就（重新）配置解码器。以前只有配置包能触发 configure，而且
+    //    配置包来了就无条件放行数据帧 —— 配的是一份缺 SPS 的参数集时，整个会话
+    //    都卡在"喂得进去、吐不出来"。现在以"手里是否有一份完整参数集"为准。
+    if (param_changed || !g_video_configured) {
+        if (!g_param_sps.empty() && !g_param_pps.empty()) {
+            if (!g_video_decoder) {
+                g_video_decoder = make_ohos_video_decoder(DecoderPreference::Auto);
+            }
+            const std::vector<std::uint8_t> param_bytes = BuildParamSetBytes();
+            try {
+                g_video_decoder->configure_annex_b(
+                    std::span<const std::uint8_t>(param_bytes.data(), param_bytes.size()),
+                    1920, 1080, false);
+                g_video_configured = true;
+                g_param_reconfigures.fetch_add(1, std::memory_order_relaxed);
+            } catch (const std::exception &e) {
+                SetError(e.what());
+                g_video_configured = false;
+                return;
+            }
         }
-        try {
-            g_video_decoder->configure_annex_b(
-                std::span<const std::uint8_t>(packet.bytes.data(), packet.bytes.size()),
-                1920, 1080, false);
-            g_video_configured = true;
-        } catch (const std::exception &e) {
-            SetError(e.what());
-            g_video_configured = false;
-        }
-        return;
     }
 
-    // 尚未完成 SPS/PPS 配置的帧直接丢，避免解码器因缺少参数集而一帧都解不出。
-    if (!g_video_configured || !g_video_decoder) return;
+    // 配置包到此为止：它只负责携带参数集，本身不是一帧，不该送进解码器。
+    if (packet.is_config) return;
+
+    // 还没凑齐参数集的数据帧只能等（解码器没有 SPS/PPS 解不出任何东西），
+    // 但这一路以前是**静默丢弃**——UI 上只看得见"收到了却不解码"，看不出
+    // 为什么。补上计数后它就是"缺参数集"的直接证据。
+    if (!g_video_configured || !g_video_decoder) {
+        g_frames_waiting_param.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
     std::vector<iPhoneMirror::media::DecodedFrame> frames;
     try {
         frames = g_video_decoder->decode_annex_b(
@@ -623,6 +779,11 @@ void ShutdownLocked() {
     StopVideoDecodeThread();
     g_video_decoder.reset();
     g_video_configured = false;
+    // 参数集缓存也是"上一会话的东西"：不清的话，下次连上来若先收到坏参数集，
+    // 会拿上一台的 SPS/PPS 去解这一台的流（配得上就出野画面，配不上就全黑）。
+    // 这里已在 g_mutex 里、且解码线程已 join，动这些变量没有竞争。
+    g_param_sps.clear();
+    g_param_pps.clear();
 
     // 音频流也要收掉：OHAudio 的音轨是系统资源，留着会在下次启动时占着端点。
     // 注意此时已持 g_mutex，而音频回调只用 g_audio_mutex ⇒ 不会互等。
@@ -798,6 +959,17 @@ int im_airplay_start(const char *name, const char *password) {
     g_decoded_frames.store(0);
     g_video_decode_errors.store(0);
     g_video_queue_dropped.store(0);
+    // 参数集/NAL 账本同属"会话级"账：跨会话不清会误导下一次判读
+    // （典型症状：上一轮缺 SPS 的计数挂在今天的分母里）。
+    g_param_from_config.store(0);
+    g_param_from_frames.store(0);
+    g_param_reconfigures.store(0);
+    g_frames_waiting_param.store(0);
+    g_nal_slice.store(0);
+    g_nal_idr.store(0);
+    g_nal_sps.store(0);
+    g_nal_pps.store(0);
+    g_nal_none.store(0);
     {
         std::lock_guard<std::mutex> err_lock(g_video_decoder_error_lock);
         g_video_decoder_last_error.clear();
@@ -863,6 +1035,17 @@ void im_airplay_get_stats(ImAirPlayStats *out) {
     out->decoded_frames = g_decoded_frames.load(std::memory_order_relaxed);
     out->video_queue_dropped = g_video_queue_dropped.load(std::memory_order_relaxed);
     out->video_decode_errors = iPhoneMirror::media::im_video_decoder_errors();
+    // 参数集自愈账（见上面"参数集自愈"一节的注释）
+    out->video_param_from_config = g_param_from_config.load(std::memory_order_relaxed);
+    out->video_param_from_frames = g_param_from_frames.load(std::memory_order_relaxed);
+    out->video_param_reconfigures = g_param_reconfigures.load(std::memory_order_relaxed);
+    out->video_waiting_param = g_frames_waiting_param.load(std::memory_order_relaxed);
+    // NAL 账本：判断"流本身有没有问题"的唯一窗口
+    out->video_nal_slice = g_nal_slice.load(std::memory_order_relaxed);
+    out->video_nal_idr = g_nal_idr.load(std::memory_order_relaxed);
+    out->video_nal_sps = g_nal_sps.load(std::memory_order_relaxed);
+    out->video_nal_pps = g_nal_pps.load(std::memory_order_relaxed);
+    out->video_nal_none = g_nal_none.load(std::memory_order_relaxed);
     {
         std::lock_guard<std::mutex> err_lock(g_video_decoder_error_lock);
         std::snprintf(out->video_decoder_last_error, sizeof(out->video_decoder_last_error), "%s",
