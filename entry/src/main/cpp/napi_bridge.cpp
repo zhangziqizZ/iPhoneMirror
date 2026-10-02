@@ -682,6 +682,7 @@ napi_value JsAirPlayGetStatus(napi_env env, napi_callback_info /*info*/) {
     set_f64(env, object, "audioOpenFailures",
         static_cast<double>(stats.audio_open_failures));
     set_f64(env, object, "audioRendererActive", stats.audio_renderer_active);
+    set_f64(env, object, "audioGain", static_cast<double>(stats.audio_gain));
     set_utf8(env, object, "audioFormat", stats.audio_format);
     set_utf8(env, object, "audioError", stats.audio_error);
     set_f64(env, object, "videoFrames", static_cast<double>(stats.video_frames));
@@ -713,6 +714,11 @@ napi_value JsAirPlayGetStatus(napi_env env, napi_callback_info /*info*/) {
     set_f64(env, object, "videoNalSps", static_cast<double>(stats.video_nal_sps));
     set_f64(env, object, "videoNalPps", static_cast<double>(stats.video_nal_pps));
     set_f64(env, object, "videoNalNone", static_cast<double>(stats.video_nal_none));
+    // 重同步账本 + 队列即时深度（1.0.48 丢帧策略配套）
+    set_f64(env, object, "videoResyncs", static_cast<double>(stats.video_resyncs));
+    set_f64(env, object, "videoResyncFrames", static_cast<double>(stats.video_resync_frames));
+    set_f64(env, object, "videoResyncTimeouts", static_cast<double>(stats.video_resync_timeouts));
+    set_f64(env, object, "videoQueueDepth", static_cast<double>(stats.video_queue_depth));
     // 端到端延迟实测（收包入队 → 解码出帧，EMA；0 = 尚无出帧样本）
     set_f64(env, object, "videoLatencyMs", static_cast<double>(stats.video_latency_ms));
     set_f64(env, object, "videoDecodeErrors",

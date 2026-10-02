@@ -268,6 +268,7 @@ export interface AirPlayStatus {
   audioFlushes: number;       // iPhone 下发的 flush 次数（暂停/切歌/seek）
   audioOpenFailures: number;  // 建流失败次数（>0 时看 audioError）
   audioRendererActive: number; // 1 = 音频流已建立且处于播放态
+  audioGain: number;          // 当前线性增益 0..1（RAOP dB 换算后；0 = iPhone 侧静音）
   audioFormat: string;        // 当前音频格式，例 "44100Hz/2ch/16bit"
   audioError: string;         // 最近一次建流/播放失败原因（空 = 无错）
   videoFrames: number;        // 已收到的视频帧数（尚未解码）
@@ -285,6 +286,11 @@ export interface AirPlayStatus {
   videoNalSps: number;           // 含 SPS（type 7）的帧数
   videoNalPps: number;           // 含 PPS（type 8）的帧数
   videoNalNone: number;          // 一个 NAL 都扫不出来的帧数（>0 = 加密没解开/不是 H.264）
+  // 重同步账本（1.0.48 起丢帧策略 = "丢到下一个 IDR 为止"，修"花成一坨"）
+  videoResyncs: number;          // 进入"等 IDR"重同步的次数（>0 = 解码曾跟不上实时）
+  videoResyncFrames: number;     // 重同步期间被跳过的数据帧数
+  videoResyncTimeouts: number;   // 等 IDR 超 2s 放弃的次数（>0 = 关键帧间隔太长）
+  videoQueueDepth: number;       // 导出瞬间的解码队列深度
   videoLatencyMs: number;        // 端到端延迟实测 ms：收包入队→解码出帧（EMA；0=尚无出帧样本）
   videoDecodeErrors: number; // OH_VideoDecoder::OnError 累计次数
   videoDecoderLastError: string; // 最近一次 OnError 的错误码文本

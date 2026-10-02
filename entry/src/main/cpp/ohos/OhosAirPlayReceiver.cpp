@@ -38,6 +38,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdio>
@@ -316,6 +317,14 @@ bool g_video_thread_running{false};
 bool g_video_thread_stop{false};
 // 因积压被丢弃的视频包数。>0 = 解码跟不上收包（会掉帧，但延迟不累积）。
 std::atomic<uint64_t> g_video_queue_dropped{0};
+// ★ 重同步（等 IDR）账本 —— 1.0.48 丢帧策略从"丢单个非 IDR 帧"改为
+//   "丢到下一个 IDR 为止"的配套（丢 P 帧会打断参考链 ⇒ 花屏）。
+std::atomic<bool> g_video_wait_idr{false};          // 正在等 IDR（等待期间数据帧不入队）
+std::atomic<std::int64_t> g_video_wait_started_ms{0};
+constexpr std::int64_t kResyncGiveupMs = 2000;      // 等 IDR 超时：恢复解码，宁可花屏不冻结
+std::atomic<uint64_t> g_video_resyncs{0};           // 进入"等 IDR"的次数（>0 = 解码曾跟不上）
+std::atomic<uint64_t> g_video_resync_frames{0};     // 重同步期间被跳过的数据帧数
+std::atomic<uint64_t> g_video_resync_timeouts{0};   // 等 IDR 超时放弃次数（>0 = 关键帧间隔太长）
 
 std::mutex g_log_mutex;
 std::string g_last_log;
@@ -533,11 +542,23 @@ void RaopAudioFlush(void * /*cls*/, void * /*session*/,
 
 void RaopAudioSetVolume(void * /*cls*/, void * /*session*/, float volume,
     const char * /*remoteName*/, const char * /*remoteDeviceId*/) {
-    const float clamped = std::clamp(volume, 0.0F, 1.0F);
-    g_audio_volume.store(clamped, std::memory_order_relaxed);
+    // ★ RAOP 的 volume 单位是 **dB**（raop_rtp.c:586-593 已把它钳到 [-144, 0]）：
+    //   0 = 满刻度，-144 = 静音。旧实现 `clamp(volume, 0, 1)` 把几乎所有负值钳成
+    //   0.0 增益 —— 而 iPhone 在连接建立时必报一次音量 ⇒ 从第一次报音量起，
+    //   流就永远静音（这就是"还没声音"的根因，画面正常以后才暴露出来）。
+    //   换算口径对齐上游 iPhoneMirror（WirelessHost.cpp
+    //   airplay_decibels_to_linear_gain）：iPhone 音量滑条走 -30..0 dB，
+    //   线性映射到 0..1；-30 以下一律 0。
+    float gain;
+    if (!std::isfinite(volume) || volume <= -30.0F) {
+        gain = 0.0F;
+    } else {
+        gain = std::clamp((volume + 30.0F) / 30.0F, 0.0F, 1.0F);
+    }
+    g_audio_volume.store(gain, std::memory_order_relaxed);
     std::lock_guard<std::mutex> lock(g_audio_mutex);
     if (g_audio_renderer) {
-        g_audio_renderer->set_volume(clamped);
+        g_audio_renderer->set_volume(gain);
     }
 }
 
@@ -642,6 +663,9 @@ void StartVideoDecodeThread() {
     std::lock_guard<std::mutex> lock(g_video_queue_mutex);
     if (g_video_thread_running) return;
     g_video_queue.clear();
+    // 上个会话若停在"等 IDR"状态，新会话必须从干净状态起步，否则开头的
+    // 数据帧全被当重同步跳掉（表现：连上后画面黑/卡好几秒才出）。
+    g_video_wait_idr.store(false, std::memory_order_relaxed);
     g_video_thread_stop = false;
     try {
         g_video_thread = std::thread(VideoDecodeLoop);
@@ -693,37 +717,52 @@ void RaopVideoProcess(void * /*cls*/, h264_decode_struct *data,
     const std::uint8_t *first = reinterpret_cast<const std::uint8_t *>(data->data);
     packet.bytes.assign(first, first + static_cast<std::size_t>(data->data_len));
 
+    bool keep = true;
     {
         std::lock_guard<std::mutex> lock(g_video_queue_mutex);
-        if (!packet.is_config && g_video_queue.size() >= kMirrorQueueLimit) {
-            // 挑一个"代价最小"的包丢掉：从最旧的开始找第一个**非 IDR** 的数据帧。
-            // 为什么不是直接丢队首：队首可能正好是 IDR，丢它等于把后面一整段
-            // P 帧都作废（画面会花/停住好几秒）。全队都是 IDR 时才退让丢队首 ——
-            // 那种情形下不丢也会一直积压，越拖越慢。
-            auto victim = g_video_queue.end();
-            for (auto it = g_video_queue.begin(); it != g_video_queue.end(); ++it) {
-                if (it->is_config) continue;
-                if (ContainsIdr(it->bytes)) continue;
-                victim = it;
-                break;
-            }
-            if (victim == g_video_queue.end()) {
-                for (auto it = g_video_queue.begin(); it != g_video_queue.end(); ++it) {
-                    if (!it->is_config) {
-                        victim = it;
-                        break;
-                    }
+        if (!packet.is_config) {
+            // ★ 丢帧策略（1.0.48 重写）：**丢到下一个 IDR 为止**。
+            //   旧策略"丢最旧的非 IDR 帧"有个致命缺陷：被丢的 P 帧是后面所有帧的
+            //   参考基准，丢一个 = 后面解出的每一帧都拿着错误的参考 —— 表现就是
+            //   用户 2026-10-02 截图里"画面胡成一坨"（还在动、全是碎块、帧率也低，
+            //   因为坏帧大量占据了解码与渲染预算）。实时流里丢帧后想恢复正确画面
+            //   只有一条路：停到下一个 IDR（关键帧）重新同步。
+            if (g_video_wait_idr.load(std::memory_order_relaxed)) {
+                const std::int64_t waited = SteadyNowMs() -
+                    g_video_wait_started_ms.load(std::memory_order_relaxed);
+                if (ContainsIdr(packet.bytes)) {
+                    g_video_wait_idr.store(false, std::memory_order_relaxed);
+                } else if (waited >= kResyncGiveupMs) {
+                    // IDR 迟迟不来（个别会话关键帧间隔极长）：宁可继续出花屏
+                    // 也不能把画面永久冻住 —— 放弃等待恢复解码，并如实记账。
+                    g_video_wait_idr.store(false, std::memory_order_relaxed);
+                    g_video_resync_timeouts.fetch_add(1, std::memory_order_relaxed);
+                } else {
+                    g_video_resync_frames.fetch_add(1, std::memory_order_relaxed);
+                    keep = false;
                 }
             }
-            if (victim != g_video_queue.end()) {
-                g_video_queue.erase(victim);
-                g_video_queue_dropped.fetch_add(1, std::memory_order_relaxed);
+            // 队列满 = 解码跟不上实时：清队并进入"等 IDR"重同步。旧策略在这里
+            // 只丢一个包，参考链照样断 —— 这就是花屏的直接来源。
+            if (keep && g_video_queue.size() >= kMirrorQueueLimit) {
+                g_video_queue_dropped.fetch_add(
+                    static_cast<std::uint64_t>(g_video_queue.size()),
+                    std::memory_order_relaxed);
+                g_video_queue.clear();
+                g_video_resyncs.fetch_add(1, std::memory_order_relaxed);
+                g_video_wait_started_ms.store(SteadyNowMs(), std::memory_order_relaxed);
+                if (ContainsIdr(packet.bytes)) {
+                    g_video_wait_idr.store(false, std::memory_order_relaxed);
+                } else {
+                    g_video_wait_idr.store(true, std::memory_order_relaxed);
+                    g_video_resync_frames.fetch_add(1, std::memory_order_relaxed);
+                    keep = false;
+                }
             }
         }
-        // 新包总是入队（上面腾位时已经避开 IDR，新包若是 IDR 也照收不误）。
-        g_video_queue.push_back(std::move(packet));
+        if (keep) g_video_queue.push_back(std::move(packet));
     }
-    g_video_queue_cv.notify_one();
+    if (keep) g_video_queue_cv.notify_one();
 }
 
 void RaopConnected(void * /*cls*/, const char * /*remoteName*/,
@@ -991,6 +1030,12 @@ int im_airplay_start(const char *name, const char *password) {
     g_decoded_frames.store(0);
     g_video_decode_errors.store(0);
     g_video_queue_dropped.store(0);
+    // 重同步账本（1.0.48）：跨会话清零，否则上一轮"解码跟不上"的账挂进这一轮。
+    g_video_wait_idr.store(false, std::memory_order_relaxed);
+    g_video_wait_started_ms.store(0, std::memory_order_relaxed);
+    g_video_resyncs.store(0);
+    g_video_resync_frames.store(0);
+    g_video_resync_timeouts.store(0);
     // 参数集/NAL 账本同属"会话级"账：跨会话不清会误导下一次判读
     // （典型症状：上一轮缺 SPS 的计数挂在今天的分母里）。
     g_param_from_config.store(0);
@@ -1041,6 +1086,8 @@ void im_airplay_get_stats(ImAirPlayStats *out) {
     out->audio_bytes_fed = g_audio_bytes_fed.load(std::memory_order_relaxed);
     out->audio_flushes = g_audio_flushes.load(std::memory_order_relaxed);
     out->audio_open_failures = g_audio_open_failures.load(std::memory_order_relaxed);
+    // 当前生效的线性增益（RAOP dB 换算后；0 = iPhone 侧拉到 -30dB 以下/静音）
+    out->audio_gain = g_audio_volume.load(std::memory_order_relaxed);
     {
         // "有没有声音"必须能自证：audio_packets 只说明 raop 给了数据，
         // 真正出声的判据是渲染器报的 rendered_frames（写回调真把数据取走了）。
@@ -1068,6 +1115,15 @@ void im_airplay_get_stats(ImAirPlayStats *out) {
     out->video_config_packets = g_video_config_packets.load(std::memory_order_relaxed);
     out->decoded_frames = g_decoded_frames.load(std::memory_order_relaxed);
     out->video_queue_dropped = g_video_queue_dropped.load(std::memory_order_relaxed);
+    // 重同步账本 + 队列即时深度（判"解码是否跟得上"的第一眼读数）
+    out->video_resyncs = g_video_resyncs.load(std::memory_order_relaxed);
+    out->video_resync_frames = g_video_resync_frames.load(std::memory_order_relaxed);
+    out->video_resync_timeouts = g_video_resync_timeouts.load(std::memory_order_relaxed);
+    {
+        // 只在导出瞬间锁一下拿深度：队列互斥锁绝不能在收包线程外久持。
+        std::lock_guard<std::mutex> q_lock(g_video_queue_mutex);
+        out->video_queue_depth = static_cast<std::uint32_t>(g_video_queue.size());
+    }
     out->video_decode_errors = iPhoneMirror::media::im_video_decoder_errors();
     // 参数集自愈账（见上面"参数集自愈"一节的注释）
     out->video_param_from_config = g_param_from_config.load(std::memory_order_relaxed);

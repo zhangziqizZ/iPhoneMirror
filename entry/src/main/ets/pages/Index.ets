@@ -2126,6 +2126,7 @@ struct Index {
         return `AirPlay 解码器未产出像素：${why}`;
       }
       if (ap.decodedFrames > 0) {
+        const d = ap.decoderDiag;
         // 解码已通 → 断点只可能在「解码帧 → 上屏」这一段。渲染器那条链上的
         // 失败原本全是静默的，这里把每个分支都亮出来，一眼分辨是
         // "surface 没挂上" 还是 "挂了但每帧被丢" 还是 "画了但 EGL 层没生效"。
@@ -2150,7 +2151,16 @@ struct Index {
           // 遮罩是让开的 —— 等于失败原因根本看不到。
           (p.attachFailures > 0 && p.lastError.length > 0
             ? `、挂载失败=${p.lastError.substring(0, 80)}` : '');
-        return `AirPlay 解码器已生效：已解码 ${ap.decodedFrames} 帧；${render}`;
+        // 解码器身份（hw/sw）与重同步账本必须摊在第一行：帧率低/花屏的第一分叉
+        // 就是"软解扛不动 3440×1440"还是"硬解但收包/丢帧策略问题"。
+        const decode: string = `解码器=${d.decoderName.length > 0 ? d.decoderName : '未创建'}` +
+          `·档${d.strategy}/4换${d.strategySwitches}` +
+          `、队列${ap.videoQueueDepth}` +
+          (ap.videoResyncs > 0
+            ? `、重同步${ap.videoResyncs}次/跳${ap.videoResyncFrames}帧` +
+              (ap.videoResyncTimeouts > 0 ? `·超时${ap.videoResyncTimeouts}` : '')
+            : '');
+        return `AirPlay 解码器已生效：已解码 ${ap.decodedFrames} 帧；${decode}；${render}`;
       }
       return 'AirPlay 解码器已就绪，等待首帧';
     }
@@ -2291,7 +2301,13 @@ struct Index {
     }
     const format: string = ap.audioFormat.length > 0 ? ` ${ap.audioFormat}` : '';
     const underrun: string = ap.audioUnderruns > 0 ? ` · 欠载 ${ap.audioUnderruns}` : '';
-    return `音频播放中${format}（已播 ${ap.audioFramesPlayed} 帧）${underrun}`;
+    // 增益必须亮出来：RAOP 音量单位是 dB（-144..0），0.0 增益 = iPhone 侧
+    // 拉到 -30dB 以下/静音 —— 这与"数据在播但听不见"是两回事。
+    const gainPct: number = Math.round(ap.audioGain * 100);
+    const gain: string = gainPct <= 0
+      ? ' · 音量 0%（iPhone 侧静音或音量极低）'
+      : ` · 音量 ${gainPct}%`;
+    return `音频播放中${format}（已播 ${ap.audioFramesPlayed} 帧）${gain}${underrun}`;
   }
 
   /**

@@ -65,6 +65,7 @@ typedef struct ImAirPlayStats {
     uint64_t audio_flushes;         // iPhone 下发的 flush 次数（暂停/切歌/seek）
     uint64_t audio_open_failures;   // 建流失败次数（>0 时看 audio_error）
     int audio_renderer_active;      // 1 = 音频流已建立且处于播放态
+    float audio_gain;               // 当前线性增益（RAOP dB 换算后；0 = iPhone 侧静音/-30dB 以下）
     char audio_format[IM_AIRPLAY_TEXT_MAX]; // 当前音频格式，例 "44100Hz/2ch/16bit"
     char audio_error[IM_AIRPLAY_TEXT_MAX];  // 最近一次建流/播放失败原因
     uint64_t video_frames;       // 已收到的视频帧数（尚未解码）
@@ -98,6 +99,11 @@ typedef struct ImAirPlayStats {
     uint64_t video_nal_sps;             // 含 SPS（type 7）的帧数
     uint64_t video_nal_pps;             // 含 PPS（type 8）的帧数
     uint64_t video_nal_none;            // 一个 NAL 都扫不出来的帧数
+    // 重同步账本（1.0.48 起丢帧策略 = "丢到下一个 IDR 为止"）：
+    uint64_t video_resyncs;             // 进入"等 IDR"重同步的次数（>0 = 解码曾跟不上）
+    uint64_t video_resync_frames;       // 重同步期间被跳过的数据帧数
+    uint64_t video_resync_timeouts;     // 等 IDR 超 2s 放弃的次数（>0 = 关键帧间隔太长）
+    uint32_t video_queue_depth;         // 导出瞬间的解码队列深度
     // 端到端延迟实测（毫秒）：包进接收端队列 → 解码出帧，EMA 平滑。
     // 口径不含 iPhone 编码与网络前段（那段只有发送端知道）；
     // 0 = 尚无出帧样本。avg 涨到几百 ms = 解码跟不上实时（对照 video_queue_dropped）。
