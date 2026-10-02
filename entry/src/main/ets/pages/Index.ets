@@ -2159,8 +2159,24 @@ struct Index {
           (ap.videoResyncs > 0
             ? `、重同步${ap.videoResyncs}次/跳${ap.videoResyncFrames}帧` +
               (ap.videoResyncTimeouts > 0 ? `·超时${ap.videoResyncTimeouts}` : '')
+            : '') +
+          // ★ 解码器内部堆积（1.0.49）。videoQueueDepth 量的是"收包→解码线程"，
+          //   量不到"解码线程→解码器"那一段——延迟与帧率的真根因在那儿。
+          //   溢出>0 或解码耗时 > 一帧预算(16667µs) 都是"解码跟不上实时"的直证。
+          (ap.videoPendingOverflow > 0
+            ? `、★解码器内堆积${ap.videoPendingOverflow}次(峰值${ap.videoFillPeak})` : '') +
+          (ap.videoDecoderIdrRequests > 0
+            ? `、★内部溢出重同步${ap.videoDecoderIdrRequests}次` : '') +
+          (ap.videoDecodeUs > 0
+            ? `、解码耗时${(ap.videoDecodeUs / 1000).toFixed(0)}ms` +
+              (ap.videoDecodeUs > 16667 ? '(超一帧预算)' : '')
             : '');
-        return `AirPlay 解码器已生效：已解码 ${ap.decodedFrames} 帧；${decode}；${render}`;
+        // 判读指引：软解耗时超预算时直接给出结论，省得用户自己算。
+        const verdict: string = (ap.videoDecodeUs > 16667 &&
+          d.decoderName.indexOf('(sw)') >= 0)
+          ? '；★软解扛不住这个分辨率（本机无硬解可用或硬解档已试尽）'
+          : '';
+        return `AirPlay 解码器已生效：已解码 ${ap.decodedFrames} 帧；${decode}${verdict}；${render}`;
       }
       return 'AirPlay 解码器已就绪，等待首帧';
     }

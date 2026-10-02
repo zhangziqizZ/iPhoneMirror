@@ -719,6 +719,13 @@ napi_value JsAirPlayGetStatus(napi_env env, napi_callback_info /*info*/) {
     set_f64(env, object, "videoResyncFrames", static_cast<double>(stats.video_resync_frames));
     set_f64(env, object, "videoResyncTimeouts", static_cast<double>(stats.video_resync_timeouts));
     set_f64(env, object, "videoQueueDepth", static_cast<double>(stats.video_queue_depth));
+    // 解码器内部堆积（1.0.49）：延迟/帧率真根因所在的那一段。
+    set_f64(env, object, "videoPendingOverflow",
+        static_cast<double>(stats.video_pending_overflow));
+    set_f64(env, object, "videoFillPeak", static_cast<double>(stats.video_fill_peak));
+    set_f64(env, object, "videoDecoderIdrRequests",
+        static_cast<double>(stats.video_decoder_idr_requests));
+    set_f64(env, object, "videoDecodeUs", static_cast<double>(stats.video_decode_us));
     // 端到端延迟实测（收包入队 → 解码出帧，EMA；0 = 尚无出帧样本）
     set_f64(env, object, "videoLatencyMs", static_cast<double>(stats.video_latency_ms));
     set_f64(env, object, "videoDecodeErrors",

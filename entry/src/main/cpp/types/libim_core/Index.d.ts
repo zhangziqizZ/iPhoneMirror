@@ -291,6 +291,13 @@ export interface AirPlayStatus {
   videoResyncFrames: number;     // 重同步期间被跳过的数据帧数
   videoResyncTimeouts: number;   // 等 IDR 超 2s 放弃的次数（>0 = 关键帧间隔太长）
   videoQueueDepth: number;       // 导出瞬间的解码队列深度
+  // 解码器内部堆积（1.0.49）：延迟/帧率的真根因。videoQueueDepth 量的是
+  // "收包→解码线程"这一段，下面四项量的是"解码线程→解码器"那一段——
+  // 两段都得看，只看前者会以为一切正常。
+  videoPendingOverflow: number;    // 待推队列溢出次数（>0 = 解码跟不上实时）
+  videoFillPeak: number;           // 待推队列历史最大深度（只增不减）
+  videoDecoderIdrRequests: number; // 因内部溢出而触发的"等 IDR"次数
+  videoDecodeUs: number;           // 实测解码耗时 EMA（微秒，0 = 尚未量到）
   videoLatencyMs: number;        // 端到端延迟实测 ms：收包入队→解码出帧（EMA；0=尚无出帧样本）
   videoDecodeErrors: number; // OH_VideoDecoder::OnError 累计次数
   videoDecoderLastError: string; // 最近一次 OnError 的错误码文本

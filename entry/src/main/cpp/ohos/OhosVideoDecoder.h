@@ -89,10 +89,26 @@ struct DecoderDiagSnapshot {
     std::uint32_t config_head_b0_3{0};
     std::uint32_t config_head_b4_7{0};
     std::uint64_t configures{0};
+    // ── 延迟/帧率专项（2026-10-02 加）────────────────────────────────────
+    // pending_overflow > 0 = 解码器内部待推队列溢出过 = 解码跟不上实时。
+    // 这是延迟与帧率的关键读数：收包侧的 queue depth 只管"收包→解码线程"，
+    // 管不到"解码线程→解码器"这一段。
+    std::uint64_t pending_overflow{0};
+    std::uint32_t fill_peak{0};   // 待推队列历史最大深度（只增不减）
+    std::uint64_t needs_idr{0};   // 解码器请求宿主进入"等 IDR"（溢出后置位）
+    std::uint64_t sw_decode_us{0}; // 实测解码耗时 EMA（微秒，0=未量到）
     char decoder_name[96]{0};            // 实际创建的解码器组件名（含 hw/sw 标记）
 };
 
 // 解码链诊断（详见 .cpp 的实现）。out 为 null 时无操作。原子 relaxed 读。
 extern "C" void im_video_decoder_diag(DecoderDiagSnapshot* out);
+
+// 取出并清零"请宿主进入等 IDR"的请求位（exchange 语义）。
+//
+// 待推队列溢出意味着解码跟不上实时、已经丢帧、参考链已断 —— 此时宿主必须
+// 停止继续喂 P 帧，等下一个 IDR 重新同步，否则后面每帧都拿错参考（= 花屏）。
+// 消费即清是必须的：这是每帧都会读到的请求位，不清零会让宿主反复触发
+// "清队列 + 等 IDR"，把流锁死在等待态。
+extern "C" std::uint64_t im_video_decoder_take_needs_idr();
 
 } // namespace iPhoneMirror::media

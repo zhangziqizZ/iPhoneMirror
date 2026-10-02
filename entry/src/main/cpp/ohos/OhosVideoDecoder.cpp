@@ -104,6 +104,17 @@ struct DecoderDiag {
     std::atomic<std::uint32_t> config_head_b0_3{0};   // 参数集前 4 字节（大端打包）
     std::atomic<std::uint32_t> config_head_b4_7{0};   // 参数集第 5-8 字节
     std::atomic<std::uint64_t> configures{0};         // configure_annex_b 被调用的次数
+    // ── 延迟/帧率专项（2026-10-02 加）────────────────────────────────────
+    // pending_overflow > 0 = 解码器内部待推队列溢出过 = 解码跟不上实时，
+    // 这是延迟与帧率真正的读数（收包侧的 videoQueueDropped 只管 g_video_queue，
+    // 管不到解码器内部那个 deque）。fill_peak 记录本会话观测到的最大堆积深度，
+    // 用来区分"偶尔溢出"与"一直满"。
+    std::atomic<std::uint64_t> pending_overflow{0};   // 待推队列溢出次数
+    std::atomic<std::uint32_t> fill_peak{0};          // 待推队列历史最大深度
+    std::atomic<std::uint64_t> needs_idr{0};          // 解码器请求"等 IDR"（溢出后置位）
+    // 软件解码器实测解码耗时 EMA（微秒）。0 = 还没量到。用来直接回答
+    // "软解扛不扛得住这个分辨率"——不必再靠 fps 反推。
+    std::atomic<std::uint64_t> sw_decode_us{0};
 };
 // 解码器组件名（CreateByName 用的名字）。原子存不了字符串，用互斥锁保护的
 // 全局串——只在 create 时写、snapshot 时读，竞争概率可忽略。
@@ -416,6 +427,12 @@ bool annex_b_has_nal_type(std::span<const std::uint8_t> data, std::uint8_t want_
 
 #if IM_HAVE_OHOS_AVCODEC
 
+// ★ 2026-10-02 延迟/帧率专项（详见下面 decode_common 里的说明）：解码器内部
+//   待推队列的上限。与收包侧 kMirrorQueueLimit 同为 3，但**含义不同，别混**——
+//   那个管"收包线程 → 解码线程"，这个管"解码线程 → 解码器"。两处都得有上限，
+//   缺任何一个都会形成"生产快于消费"的正反馈，表现为延迟飙升 + 帧率塌陷。
+static constexpr std::size_t kMaxPendingInput = 3;
+
 class OhosVideoDecoder final : public IVideoDecoder {
 public:
     explicit OhosVideoDecoder(DecoderPreference preference)
@@ -469,7 +486,35 @@ public:
                     return {};
                 }
             }
+            // ★ 2026-10-02 延迟/帧率专项：这个 deque 以前**没有任何上限**。
+            //   pump_input_locked 一次只推一格，且只有解码器回调交回输入缓冲
+            //   （OnNeedInputBuffer）时才会推。软解 3440x1440 时解码一帧远超一帧
+            //   的时间间隔 ⇒ 生产快于消费 ⇒ 帧在这里无限堆积。
+            //
+            //   堆积的恶果是**正反馈**：decode_common 结尾 wait_for(50ms) 是阻塞
+            //   解码线程等输出的，队列越长单次等越久，队列更长。而收包侧的
+            //   kMirrorQueueLimit 只管 g_video_queue，管不到这里 —— 于是 1.0.48
+            //   的"等 IDR 重同步"对真正的堆积点完全无效（用户仍见 93ms 延迟 /
+            //   8.6fps）。这就是延迟与帧率的真根因。
+            //
+            //   上限取 3，与收包侧一致：解码只需 1 帧在途 + 2 帧缓冲即可掩盖
+            //   抖动，再多纯粹是延迟。超限时丢**最旧**的帧（保最新，保实时），
+            //   并记账 —— 但注意丢在这里同样会断参考链，所以由调用方
+            //   （OhosAirPlayReceiver）据此进入"等 IDR"，两处必须成对。
+            if (pending_input_.size() >= kMaxPendingInput) {
+                pending_input_.pop_front();
+                Diag().pending_overflow.fetch_add(1, std::memory_order_relaxed);
+                // 溢出即断参考链 ⇒ 请求宿主进入"等 IDR"。宿主必须真的照做，
+                // 否则这里丢的帧会让后面每帧都拿错参考（= 花屏）。
+                Diag().needs_idr.store(1, std::memory_order_relaxed);
+            }
             pending_input_.push_back(PendingInput{std::move(bytes), timestamp_100ns});
+            // 只增不减地记最大堆积深度：能区分"偶尔溢出"与"一直满"。
+            if (pending_input_.size() > Diag().fill_peak.load(std::memory_order_relaxed)) {
+                Diag().fill_peak.store(
+                    static_cast<std::uint32_t>(pending_input_.size()),
+                    std::memory_order_relaxed);
+            }
             pump_input_locked();
             // 策略链探帧：配置后推了 N 帧仍零输出回调 → 自动切下一档策略。
             if (strategy_chain_active_) {
@@ -481,9 +526,35 @@ public:
         // 1080p60 HW 解码冷启动（首 I 帧）常 >8ms，原值会让"解码成功但被超时丢弃"，
         // 表现为 present() 拿不到帧、画面黑。改 50ms 后再慢的解码器也能覆盖到首帧，
         // 后续帧因为解码器已 warm，产出基本在 16ms 内完成。
+        //
+        // ★ 2026-10-02：这个 50ms 其实是**帧率天花板**。解码慢于 50ms 的档位
+        //   （典型：软解 3440x1440，单帧 100ms+）每帧都要把 50ms 等满才返回，
+        //   于是 fps 被死死压在 1000/50 = 20fps 以下，再叠加 pending 堆积就更低。
+        //   现在按实测耗时 EMA 自适应放宽（上限 400ms），并把耗时如实记进诊断
+        //   —— 这样"软解扛不扛得住这个分辨率"有直接读数，不必再靠 fps 反推。
+        const std::uint64_t observed_us = Diag().sw_decode_us.load(std::memory_order_relaxed);
+        const std::int64_t wait_ms = observed_us == 0
+            ? 50
+            : std::clamp<std::int64_t>(
+                  static_cast<std::int64_t>(observed_us / 1000) + 20, 50, 400);
+        const auto wait_started = std::chrono::steady_clock::now();
         std::unique_lock lock(mutex_);
-        output_ready_.wait_for(lock, std::chrono::milliseconds(50),
+        output_ready_.wait_for(lock, std::chrono::milliseconds(wait_ms),
             [this] { return !decoded_.empty() || failed_; });
+        const bool got = !decoded_.empty();
+        const auto waited_us = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - wait_started).count();
+        lock.unlock();
+        // 只在"确实等到输出"时统计：超时返回的那次耗时是等待上限而非解码耗时，
+        // 混进去会把 EMA 越推越高、进而无限放宽等待（自反馈的假成功）。
+        if (got && waited_us > 0) {
+            const std::uint64_t prev = Diag().sw_decode_us.load(std::memory_order_relaxed);
+            const std::uint64_t sample = prev == 0
+                ? static_cast<std::uint64_t>(waited_us)
+                : (prev * 7 + static_cast<std::uint64_t>(waited_us)) / 8;
+            Diag().sw_decode_us.store(sample, std::memory_order_relaxed);
+        }
+        std::scoped_lock relock(mutex_);
         return take_decoded_locked();
     }
 
@@ -570,6 +641,7 @@ public:
         pushed_to_codec_ = 0;
         frames_since_create_ = 0;
         outputs_since_create_ = 0;
+        pixels_since_create_ = 0;
         Diag().strategy.store(0, std::memory_order_relaxed);
         ++generation_;
         create_locked();
@@ -636,11 +708,18 @@ private:
         SwDispSize,      // 软件解码器 + 显示尺寸
         Count
     };
-    static constexpr std::uint32_t kStrategyProbeFrames = 30;
+    // ★ 2026-10-02：探帧数从 30 降到 8。原来 30 帧在高分辨率下要等好几秒
+    //   （软解一帧 100ms+ 时 30 帧 = 3 秒以上），用户在这段时间里只看到
+    //   黑屏/卡住。而"这一档能不能用"其实看头几帧就有结论了：喂够 in-band
+    //   参数集 + 一个 IDR 之后还没有任何像素出来，就该换档了。
+    static constexpr std::uint32_t kStrategyProbeFrames = 8;
 
     void maybe_switch_strategy_locked() {
         if (!strategy_chain_active_) return;
-        if (outputs_since_create_ != 0) return; // 当前策略已有输出，不动
+        // 判据只看"真出像素"（pixels_since_create_），不看"有回调"。一个只会
+        // 吐空帧的档位不是可用档位——以前用 outputs_since_create_ 会在这种
+        // 档位上永久停下，档 2/3（软解）再也不会被试到。
+        if (pixels_since_create_ != 0) return; // 当前策略已出画面，不动
         if (frames_since_create_ < kStrategyProbeFrames) return;
         const int next = static_cast<int>(strategy_) + 1;
         if (next >= static_cast<int>(DecoderStrategy::Count)) return; // 全试完
@@ -656,6 +735,7 @@ private:
         pushed_to_codec_ = 0;
         frames_since_create_ = 0;
         outputs_since_create_ = 0;
+        pixels_since_create_ = 0;
         strategy_ = static_cast<DecoderStrategy>(next);
         Diag().strategy.store(static_cast<std::uint32_t>(strategy_),
             std::memory_order_relaxed);
@@ -755,9 +835,14 @@ private:
             failed_ = true;
             throw std::runtime_error("OH_VideoDecoder_Prepare/Start 失败");
         }
-        acceleration_ = preference_ == DecoderPreference::SoftwareCompatible
-            ? DecoderAcceleration::Software
-            : DecoderAcceleration::Hardware;
+        // ★ 这里以前写的是从 preference_ 推（SoftwareCompatible 才算软解），
+        //   那是**错的**：preference_ 是"用户偏好"，与策略链实际选中的档位无关。
+        //   策略链换到档 2/3（软解）后本字段仍报 Hardware —— 于是
+        //   decoderName 里的 "(sw)" 与 selected_decoder_is_hardware() 自相矛盾，
+        //   诊断读数会骗人（这正是"同一维度恒有两字段"要防的那类假成功）。
+        //   真值只有一个：这次建解码器时实际请求的 is_hw。
+        acceleration_ = is_hw ? DecoderAcceleration::Hardware
+                              : DecoderAcceleration::Software;
         logging::write(logging::Level::Info, "decoder",
             std::format("ohos avcodec decoder started {}x{} fps={}/{}", format_.width,
                 format_.height, fps_numerator_, fps_denominator_));
@@ -1028,7 +1113,16 @@ private:
         Diag().last_output_height.store(height, std::memory_order_relaxed);
 
         std::scoped_lock lock(self->mutex_);
-        ++self->outputs_since_create_; // 任何输出回调都算"解码器有反应"（含空/EOS）
+        // ★ 2026-10-02：只有**真正交出像素**才算"这一档能用"。
+        //   以前任何输出回调（含 attr.size 不足被丢的 output_too_small、含 EOS）
+        //   都自增 outputs_since_create_，而策略链判据正是
+        //   `outputs_since_create_ != 0 就停止切换` —— 于是一个只会吐空帧的
+        //   坏档位会被当成"成功"，链永远卡在上面不再往下试（档 2/3 永不使用）。
+        //   判据必须与"有没有画面"同维度，否则策略链在测一个它不该测的东西。
+        if (!pixels.empty()) {
+            ++self->outputs_since_create_;
+            ++self->pixels_since_create_;
+        }
         if (!pixels.empty()) {
             DecodedFrame frame;
             frame.width = width;
@@ -1073,6 +1167,9 @@ private:
     bool strategy_chain_active_{false};
     std::uint32_t frames_since_create_{0};
     std::uint32_t outputs_since_create_{0};
+    // ★ 只有真正交出像素的输出数。策略链判据用它（而不是 outputs_since_create_）
+    //   ——"解码器有回调"与"解码器能出画面"是两个维度，必须分开量。
+    std::uint32_t pixels_since_create_{0};
     std::uint32_t fps_numerator_{60};
     std::uint32_t fps_denominator_{1};
     std::uint32_t decoded_width_{};
@@ -1136,6 +1233,15 @@ extern "C" std::uint64_t im_video_decoder_errors() {
     return g_video_decoder_error_total.load(std::memory_order_relaxed);
 }
 
+// 取出并清零"请宿主进入等 IDR"的请求位（exchange 语义）。
+//
+// ★ 为什么必须消费即清，而不是让宿主直接读 needs_idr：这是个**请求位**，
+//   每帧都会读到。若不清零，解码线程每处理一帧都会重复触发一次
+//   "清队列 + 等 IDR"，等于把流锁死在等待态、永远等不到能推进的那一帧。
+extern "C" std::uint64_t im_video_decoder_take_needs_idr() {
+    return Diag().needs_idr.exchange(0, std::memory_order_relaxed);
+}
+
 extern "C" void im_video_decoder_diag(iPhoneMirror::media::DecoderDiagSnapshot* out) {
     if (out == nullptr) return;
     const DecoderDiag &d = Diag();
@@ -1172,6 +1278,10 @@ extern "C" void im_video_decoder_diag(iPhoneMirror::media::DecoderDiagSnapshot* 
     out->config_head_b0_3     = d.config_head_b0_3.load(std::memory_order_relaxed);
     out->config_head_b4_7     = d.config_head_b4_7.load(std::memory_order_relaxed);
     out->configures           = d.configures.load(std::memory_order_relaxed);
+    out->pending_overflow     = d.pending_overflow.load(std::memory_order_relaxed);
+    out->fill_peak            = d.fill_peak.load(std::memory_order_relaxed);
+    out->needs_idr            = d.needs_idr.load(std::memory_order_relaxed);
+    out->sw_decode_us         = d.sw_decode_us.load(std::memory_order_relaxed);
     {
         std::lock_guard<std::mutex> name_lock(g_decoder_name_mutex);
         std::snprintf(out->decoder_name, sizeof(out->decoder_name), "%s",

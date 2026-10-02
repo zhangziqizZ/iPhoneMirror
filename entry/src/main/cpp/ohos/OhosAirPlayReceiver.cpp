@@ -325,6 +325,11 @@ constexpr std::int64_t kResyncGiveupMs = 2000;      // 等 IDR 超时：恢复�
 std::atomic<uint64_t> g_video_resyncs{0};           // 进入"等 IDR"的次数（>0 = 解码曾跟不上）
 std::atomic<uint64_t> g_video_resync_frames{0};     // 重同步期间被跳过的数据帧数
 std::atomic<uint64_t> g_video_resync_timeouts{0};   // 等 IDR 超时放弃次数（>0 = 关键帧间隔太长）
+// ★ 因**解码器内部待推队列溢出**而触发的重同步次数（1.0.49 新增）。
+//   与 g_video_resyncs 分开记，因为触发源不同：那个是"收包队列满"（收包比解码快），
+//   这个是"解码器内部堆积"（解码比收包慢）。两者都 >0 才是真正的持续跟不上；
+//   只有 resyncs>0 而本项为 0，说明 1.0.48 的丢帧策略在管真正的瓶颈之外的地方。
+std::atomic<uint64_t> g_video_decoder_idr_requests{0};
 
 std::mutex g_log_mutex;
 std::string g_last_log;
@@ -602,6 +607,19 @@ void ProcessMirrorPacket(const MirrorPacket &packet) {
     if (!g_video_configured || !g_video_decoder) {
         g_frames_waiting_param.fetch_add(1, std::memory_order_relaxed);
         return;
+    }
+    // ★ 2026-10-02：解码器内部待推队列溢出 = 解码跟不上实时，那一刻它已经
+    //   丢掉了最旧的帧、参考链已断。这时候必须让**收包侧**也进入"等 IDR"，
+    //   否则新来的 P 帧继续喂进一个缺参考的解码器 —— 那正是"画面胡成一坨"。
+    //   1.0.48 只在收包队列满时等 IDR，而解码器内部那个 deque 溢出时收包队列
+    //   根本未必满（解码慢≠收包慢），所以那条路径一直漏着。
+    //   注意 needs_idr 是"消费即清"的请求位：这里清一次，下游只需响应一次。
+    if (iPhoneMirror::media::im_video_decoder_take_needs_idr() != 0) {
+        std::scoped_lock lock(g_video_queue_mutex);
+        g_video_wait_idr.store(true, std::memory_order_relaxed);
+        g_video_wait_started_ms.store(SteadyNowMs(), std::memory_order_relaxed);
+        g_video_queue.clear(); // 已断参考链的帧留着只会继续花屏
+        g_video_decoder_idr_requests.fetch_add(1, std::memory_order_relaxed);
     }
     std::vector<iPhoneMirror::media::DecodedFrame> frames;
     try {
@@ -1036,6 +1054,7 @@ int im_airplay_start(const char *name, const char *password) {
     g_video_resyncs.store(0);
     g_video_resync_frames.store(0);
     g_video_resync_timeouts.store(0);
+    g_video_decoder_idr_requests.store(0);
     // 参数集/NAL 账本同属"会话级"账：跨会话不清会误导下一次判读
     // （典型症状：上一轮缺 SPS 的计数挂在今天的分母里）。
     g_param_from_config.store(0);
@@ -1123,6 +1142,17 @@ void im_airplay_get_stats(ImAirPlayStats *out) {
         // 只在导出瞬间锁一下拿深度：队列互斥锁绝不能在收包线程外久持。
         std::lock_guard<std::mutex> q_lock(g_video_queue_mutex);
         out->video_queue_depth = static_cast<std::uint32_t>(g_video_queue.size());
+    }
+    // 解码器内部堆积（延迟/帧率真根因所在的那一段）。这里主动读一次解码器
+    // 诊断快照——它已经能报出待推队列溢出与实测解码耗时。
+    out->video_decoder_idr_requests =
+        g_video_decoder_idr_requests.load(std::memory_order_relaxed);
+    {
+        iPhoneMirror::media::DecoderDiagSnapshot diag{};
+        iPhoneMirror::media::im_video_decoder_diag(&diag);
+        out->video_pending_overflow = diag.pending_overflow;
+        out->video_fill_peak = diag.fill_peak;
+        out->video_decode_us = diag.sw_decode_us;
     }
     out->video_decode_errors = iPhoneMirror::media::im_video_decoder_errors();
     // 参数集自愈账（见上面"参数集自愈"一节的注释）

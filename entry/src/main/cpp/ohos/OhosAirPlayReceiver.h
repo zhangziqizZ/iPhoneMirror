@@ -104,6 +104,14 @@ typedef struct ImAirPlayStats {
     uint64_t video_resync_frames;       // 重同步期间被跳过的数据帧数
     uint64_t video_resync_timeouts;     // 等 IDR 超 2s 放弃的次数（>0 = 关键帧间隔太长）
     uint32_t video_queue_depth;         // 导出瞬间的解码队列深度
+    // ── 解码器内部堆积（1.0.49 新增）─────────────────────────────────────
+    // 延迟/帧率的真根因在这里：解码线程 → 解码器 之间还有一个待推队列，
+    // 它以前**没有上限**，解码慢于实时就无限堆积。上面那个 queue_depth 量的
+    // 是"收包 → 解码线程"，量不到这一段。
+    uint64_t video_pending_overflow;   // 待推队列溢出次数（>0 = 解码跟不上实时）
+    uint32_t video_fill_peak;          // 待推队列历史最大深度（只增不减）
+    uint64_t video_decoder_idr_requests; // 因内部溢出而触发的"等 IDR"次数
+    uint64_t video_decode_us;          // 实测解码耗时 EMA（微秒，0 = 未量到）
     // 端到端延迟实测（毫秒）：包进接收端队列 → 解码出帧，EMA 平滑。
     // 口径不含 iPhone 编码与网络前段（那段只有发送端知道）；
     // 0 = 尚无出帧样本。avg 涨到几百 ms = 解码跟不上实时（对照 video_queue_dropped）。
