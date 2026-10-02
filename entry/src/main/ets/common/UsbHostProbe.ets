@@ -20,6 +20,7 @@
 
 import { usbManager } from '@kit.BasicServicesKit';
 import { BusinessError } from '@ohos.base';
+import { t } from './i18n';
 
 const APPLE_VENDOR_ID: number = 0x05AC;
 /** 摘要里最多点名几台，避免一串设备名把状态行撑爆。 */

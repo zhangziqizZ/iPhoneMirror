@@ -3,11 +3,12 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
 import { setSystemDark, SYSTEM_DARK_KEY } from '../common/theme_manager';
 import { WINDOW_ACRYLIC_RESULT_KEY, WINDOW_SHADOW_RESULT_KEY } from '../common/WindowServices';
-import { open_app_preferences, load_acrylic_preferences } from '../common/AppPreferences';
+import { open_app_preferences, load_acrylic_preferences, load_language_preference } from '../common/AppPreferences';
 import { vp_to_px_ratio } from '../common/SubWindow';
 import { BusinessError } from '@ohos.base';
 import { open_instance_conflict, InstanceConflictRequest } from '../pages/windows/InstanceConflictWindow';
 import { setLogFile } from 'libim_core.so';
+import { t, set_language, LANG_INDEX_KEY } from '../common/i18n';
 
 const TAG: string = 'iPhoneMirror';
 
@@ -36,6 +37,11 @@ export default class EntryAbility extends UIAbility {
     //     /杀进程时来不及 ⇒ 现在换成显式 putSync + flushSync（见 AppPreferences.ets）。
     open_app_preferences(this.context);
     load_acrylic_preferences();
+    // ★ 界面语言：先注入上下文（set_language 靠它切系统层 setAppPreferredLanguage），
+    //   再把磁盘存档读回 AppStorage —— 与半透明同理，必须在任何 UI 装载**之前**，
+    //   否则 t() 首次读取会先建键，这里再写就变成普通更新、用户看到的还是默认值。
+    load_language_preference();
+    set_language(AppStorage.get<number>(LANG_INDEX_KEY) ?? 0);
     // 把原生 Core 的诊断日志重定向进应用沙箱，否则它默认写到系统 temp 目录
     // （iPhoneMirror-capture.log），应用读不到 ⇒ 关于页"实时日志"永远空白。
     // 必须在任何原生写入发生之前设置（im_initialize 会立即写首条会话头）。

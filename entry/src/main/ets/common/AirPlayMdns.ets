@@ -23,6 +23,7 @@ import {
   airplayReportService,
   AirPlayService,
 } from 'libim_core.so';
+import { t } from './i18n';
 
 // ArkTS 严格模式下对象字面量必须标成已声明类型，而 interface 类型的字面量
 // 也要走 class（arkts-no-untyped-obj-literals），所以给两个薄壳。

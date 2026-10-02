@@ -24,6 +24,7 @@
 // 用法：FluentSymbol({ iconName: 'PhoneDesktop24', iconSize: 20, iconColor: ACCENT })
 
 import { UIContext, display } from '@kit.ArkUI';
+import { t } from './i18n';
 
 /** 一个图标的绘制数据：视口尺寸（= 原 SVG 的 viewBox）与路径指令（= path d）。 */
 export class IconGlyph {

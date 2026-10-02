@@ -62,6 +62,7 @@ import {
 } from '../../common/SubWindow';
 import { TEXT, DIALOG_SURFACE, SETTINGS_SECTION_CORNER, SETTINGS_SECTION_PADDING } from '../../common/Theme';
 import { WindowServices, PromptRequest } from '../../common/WindowServices';
+import { t } from '../../common/i18n';
 
 const TAG: string = 'im_app_prompt';
 const DOMAIN: number = 0x0100;
@@ -77,10 +78,10 @@ const CARD_PADDING: number = 16;
 const BODY_MAX_HEIGHT: number = 300;
 
 /** Strings（逐键标注）。 */
-const S_CONTINUE: string = '继续';       // Continue
-const S_CLOSE: string = '关闭';          // Close
-const S_CANCEL: string = '取消';         // Cancel
-const S_PREVIEW_TITLE: string = '开发者提示预览';        // DeveloperPreviewPromptTitle
+const S_CONTINUE = (): string => t('继续');// Continue
+const S_CLOSE = (): string => t('关闭');// Close
+const S_CANCEL = (): string => t('取消');         // Cancel
+const S_PREVIEW_TITLE = (): string => t('开发者提示预览');// DeveloperPreviewPromptTitle
 const S_PREVIEW_BODY: string =
   '这是标准确认提示框的安全预览。确认和取消按钮不会执行应用操作。';  // DeveloperPreviewPromptBody
 
@@ -116,7 +117,7 @@ export function inform_then(ctx: common.Context, title: string, body: string,
  */
 export function open_prompt_preview(ctx: common.Context): void {
   open_prompt(ctx,
-    new PromptRequest(S_PREVIEW_TITLE, S_PREVIEW_BODY, true,
+    new PromptRequest(S_PREVIEW_TITLE(), S_PREVIEW_BODY, true,
       (confirmed: boolean): void => {}, null),
     false);
 }
@@ -146,7 +147,7 @@ struct AppPromptWindow {
   @State promptTitle: string = '';
   @State promptBody: string = '';
   /** 原版 ConfirmText：showCancel 时是「继续」，否则是「关闭」。 */
-  @State confirmText: string = S_CLOSE;
+  @State confirmText: string = S_CLOSE();
   /** 原版 CancelVisibility == Visible。 */
   @State showCancel: boolean = true;
 
@@ -162,7 +163,7 @@ struct AppPromptWindow {
       this.promptTitle = pending.title;
       this.promptBody = pending.body;
       this.showCancel = pending.showCancel;
-      this.confirmText = pending.showCancel ? S_CONTINUE : S_CLOSE;
+      this.confirmText = pending.showCancel ? S_CONTINUE() : S_CLOSE();
     }
     // 右上角 X 等价于「取消」（原版关闭按钮 Click=OnCancelClick）。
     SubWindowHost.register_close_hook(WINDOW_NAME, (): boolean => {
@@ -235,7 +236,7 @@ struct AppPromptWindow {
   actions() {
     if (this.showCancel) {
       SecondaryButton({
-        label: S_CANCEL,
+        label: S_CANCEL(),
         minButtonWidth: 92,
         on_action: (): void => { this.complete(false); },
       })

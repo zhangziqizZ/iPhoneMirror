@@ -126,6 +126,7 @@ import {
   ON_ACCENT, DIALOG_SURFACE,
 } from '../../common/Theme';
 import { FluentSymbol } from '../../common/FluentIcon';
+import { t } from '../../common/i18n';
 
 const TAG: string = 'im_capture_status_notice';
 const DOMAIN: number = 0x0100;
@@ -150,19 +151,19 @@ export enum CaptureNoticeKind {
 }
 
 /** Strings（逐键标注）。 */
-const S_CLOSE: string = '关闭';                              // Close
-const S_BADGE_ERROR: string = '投屏未能继续';                 // CaptureNoticeErrorBadge
-const S_BADGE_REVERSE_CONTROL: string = '反控未能继续';        // ReverseControlNoticeErrorBadge
-const S_BADGE_USB: string = 'USB 投屏配置未完成';              // CaptureNoticeUsbBadge
-const S_BADGE_STOPPED: string = '投屏已停止';                  // CaptureNoticeStoppedBadge
-const S_HINT_ERROR: string = '请检查设备和连接后重试';          // CaptureNoticeErrorHint
-const S_HINT_USB: string = '请重新插拔数据线后重试';            // CaptureNoticeUsbHint
-const S_HINT_STOPPED: string = '重启设备后可再次投屏';          // CaptureNoticeStoppedHint
+const S_CLOSE = (): string => t('关闭');// Close
+const S_BADGE_ERROR = (): string => t('投屏未能继续');// CaptureNoticeErrorBadge
+const S_BADGE_REVERSE_CONTROL = (): string => t('反控未能继续');// ReverseControlNoticeErrorBadge
+const S_BADGE_USB = (): string => t('USB 投屏配置未完成');// CaptureNoticeUsbBadge
+const S_BADGE_STOPPED = (): string => t('投屏已停止');// CaptureNoticeStoppedBadge
+const S_HINT_ERROR = (): string => t('请检查设备和连接后重试');// CaptureNoticeErrorHint
+const S_HINT_USB = (): string => t('请重新插拔数据线后重试');// CaptureNoticeUsbHint
+const S_HINT_STOPPED = (): string => t('重启设备后可再次投屏');// CaptureNoticeStoppedHint
 
 /** CaptureErrorGuidance 的三条用户动作文案（Strings 原文）。 */
-const S_ACTION_RESTART_DEVICE: string = '请重启 iPhone 或 iPad 后再试。';      // CaptureActionRestartDevice
-const S_ACTION_RECONNECT_DEVICE: string = '请保持设备解锁，重新插拔数据线后再试。'; // CaptureActionReconnectDevice
-const S_ACTION_RETRY: string = '请停止投屏后重新开始；仍失败时重新连接设备。';   // CaptureActionRetry
+const S_ACTION_RESTART_DEVICE = (): string => t('请重启 iPhone 或 iPad 后再试。');// CaptureActionRestartDevice
+const S_ACTION_RECONNECT_DEVICE = (): string => t('请保持设备解锁，重新插拔数据线后再试。');// CaptureActionReconnectDevice
+const S_ACTION_RETRY = (): string => t('请停止投屏后重新开始；仍失败时重新连接设备。');// CaptureActionRetry
 
 /** CaptureErrorGuidance.cs 的三个匹配标记（原文，大小写不敏感）。 */
 const NO_PING_MARKER: string = 'sent no PING';
@@ -195,12 +196,12 @@ export function is_usb_configuration_failure(diagnostic: string): boolean {
 /** CaptureErrorGuidance.UserMessage(string? diagnostic) */
 export function capture_error_guidance_message(diagnostic: string): string {
   if (is_no_ping_timeout(diagnostic)) {
-    return S_ACTION_RESTART_DEVICE;
+    return S_ACTION_RESTART_DEVICE();
   }
   if (is_usb_configuration_failure(diagnostic)) {
-    return S_ACTION_RECONNECT_DEVICE;
+    return S_ACTION_RECONNECT_DEVICE();
   }
-  return S_ACTION_RETRY;
+  return S_ACTION_RETRY();
 }
 
 // ───────────────────── 开窗入口（对应 xaml.cs 的 internal static 方法） ─────────────────────
@@ -213,7 +214,7 @@ export function capture_error_guidance_message(diagnostic: string): string {
 let pending_after_shown: (() => void) | null = null;
 
 /** 原版 ShowDeveloperPreview 用的设备名。 */
-const S_PREVIEW_DEVICE: string = '预览设备';                  // DeveloperPreviewDeviceName
+const S_PREVIEW_DEVICE = (): string => t('预览设备');// DeveloperPreviewDeviceName
 
 function open_notice(ctx: common.Context, title: string, body: string,
                      kind: CaptureNoticeKind, reverseControl: boolean,
@@ -281,7 +282,7 @@ export function show_capture_stopped_then(ctx: common.Context, title: string,
  *   单独调用这四个函数时请自行 catch。
  */
 export function show_developer_error_preview(ctx: common.Context): Promise<void> {
-  return open_notice(ctx, S_PREVIEW_DEVICE + ' 投屏错误', S_ACTION_RETRY,
+  return open_notice(ctx, S_PREVIEW_DEVICE() + ' 投屏错误', S_ACTION_RETRY(),
     CaptureNoticeKind.Error, false, false);
 }
 
@@ -299,14 +300,14 @@ export function show_developer_reverse_control_error_preview(ctx: common.Context
 
 /** 原版 ShowDeveloperStoppedPreview：DeviceSessionClosedWarningTitleFormat + Body。 */
 export function show_developer_stopped_preview(ctx: common.Context): Promise<void> {
-  return open_notice(ctx, S_PREVIEW_DEVICE + ' 投屏已停止',
+  return open_notice(ctx, S_PREVIEW_DEVICE() + ' 投屏已停止',
     '检测到您已经在控制中心点击了停止镜像，下一次该设备有线镜像需重启 iPhone/iPad',
     CaptureNoticeKind.Stopped, false, false);
 }
 
 /** 原版 ShowDeveloperUsbPreview：CaptureUsbConfigurationTitle + CaptureActionReconnectDevice。 */
 export function show_developer_usb_preview(ctx: common.Context): Promise<void> {
-  return open_notice(ctx, 'USB 投屏配置错误', S_ACTION_RECONNECT_DEVICE,
+  return open_notice(ctx, 'USB 投屏配置错误', S_ACTION_RECONNECT_DEVICE(),
     CaptureNoticeKind.UsbConfiguration, false, false);
 }
 
@@ -361,23 +362,23 @@ struct CaptureStatusNoticeWindow {
   /** xaml.cs BadgeText。 */
   private badge_text(): string {
     if (this.is_stopped()) {
-      return S_BADGE_STOPPED;
+      return S_BADGE_STOPPED();
     }
     if (this.is_usb_configuration()) {
-      return S_BADGE_USB;
+      return S_BADGE_USB();
     }
-    return this.reverseControl ? S_BADGE_REVERSE_CONTROL : S_BADGE_ERROR;
+    return this.reverseControl ? S_BADGE_REVERSE_CONTROL() : S_BADGE_ERROR();
   }
 
   /** xaml.cs HintText。 */
   private hint_text(): string {
     if (this.is_stopped()) {
-      return S_HINT_STOPPED;
+      return S_HINT_STOPPED();
     }
     if (this.is_usb_configuration()) {
-      return S_HINT_USB;
+      return S_HINT_USB();
     }
-    return S_HINT_ERROR;
+    return S_HINT_ERROR();
   }
 
   /** 平台替换 5：三个 DataTrigger 互斥图标 → 代码里选一个。 */
@@ -449,7 +450,7 @@ struct CaptureStatusNoticeWindow {
             chipText: this.hint_text(),
           });
           PrimaryButton({
-            label: S_CLOSE,
+            label: S_CLOSE(),
             minButtonWidth: 80,
             buttonHeight: 36,
             on_action: (): void => { this.on_close(); },

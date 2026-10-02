@@ -78,6 +78,7 @@ import {
 import {
   WindowServices, ProtectedContentPresentation, ProtectedContentHandle, ProtectedContentRequest,
 } from '../../common/WindowServices';
+import { t } from '../../common/i18n';
 
 const TAG: string = 'im_protected_notice';
 const DOMAIN: number = 0x0100;
@@ -95,15 +96,15 @@ const ICON_DISC_CORNER: number = 15;
 const ICON_SIZE: number = 17;
 
 /** Strings （键名与取值逐条标注）。 */
-const S_TITLE: string = '请确认当前视频投放是否正常？';               // CaptureVideoProtectedNoticeTitle
-const S_VIDEO: string = '检测到当前视频画面持续为黑屏';                // CaptureVideoProtectedNoticeVideo
+const S_TITLE = (): string => t('请确认当前视频投放是否正常？');               // CaptureVideoProtectedNoticeTitle
+const S_VIDEO = (): string => t('检测到当前视频画面持续为黑屏');// CaptureVideoProtectedNoticeVideo
 const S_PROTECTION: string =
   '这可能与 DRM / FairPlay 或其他内容保护机制有关';                    // CaptureVideoProtectedNoticeProtection
-const S_HINT: string = '画面恢复后自动关闭';                          // CaptureVideoProtectedNoticeHint
-const S_AUDIO_ACTIVE: string = '有音频';                             // CaptureVideoProtectedAudioBadgeActive
-const S_AUDIO_UNAVAILABLE: string = '无音频';                        // CaptureVideoProtectedAudioBadgeUnavailable
-const S_CLOSE: string = '关闭';                                      // Close
-const S_PREVIEW_DEVICE: string = '预览设备';                          // DeveloperPreviewDeviceName
+const S_HINT = (): string => t('画面恢复后自动关闭');// CaptureVideoProtectedNoticeHint
+const S_AUDIO_ACTIVE = (): string => t('有音频');// CaptureVideoProtectedAudioBadgeActive
+const S_AUDIO_UNAVAILABLE = (): string => t('无音频');// CaptureVideoProtectedAudioBadgeUnavailable
+const S_CLOSE = (): string => t('关闭');// Close
+const S_PREVIEW_DEVICE = (): string => t('预览设备');// DeveloperPreviewDeviceName
 
 /**
  * 原版 internal static void Show(Window owner, string deviceUdid, ProtectedContentPresentation)。
@@ -119,7 +120,7 @@ export function open_protected_content_notice(ctx: common.Context,
   const spec: SubWindowSpec = {
     name: WINDOW_NAME,
     page: PAGE_PATH,
-    title: S_TITLE,
+    title: S_TITLE(),
     width: 430,
     height: WINDOW_HEIGHT,
     resizable: false,                // ResizeMode="NoResize"
@@ -139,7 +140,7 @@ export function open_protected_content_notice(ctx: common.Context,
  *   设备名用 DeveloperPreviewDeviceName（「预览设备」）
  */
 export function open_protected_content_preview(ctx: common.Context): void {
-  open_protected_content_notice(ctx, S_PREVIEW_DEVICE,
+  open_protected_content_notice(ctx, S_PREVIEW_DEVICE(),
     { isProtected: true, audioActive: false, audioSampleRate: 0, audioChannels: 0 },
     false);
 }
@@ -212,7 +213,7 @@ struct ProtectedContentNoticeWindow {
 
       // 列 1：两行文字
       Column() {
-        Text(S_VIDEO)
+        Text(S_VIDEO())
           .fontSize(14)
           .fontWeight(FontWeight.Bold)
           .fontColor(TEXT)
@@ -245,12 +246,12 @@ struct ProtectedContentNoticeWindow {
     Row() {
       BadgeChip({
         iconName: 'Speaker220',
-        chipText: this.audioActive ? S_AUDIO_ACTIVE : S_AUDIO_UNAVAILABLE,
+        chipText: this.audioActive ? S_AUDIO_ACTIVE() : S_AUDIO_UNAVAILABLE(),
         chipMarginEnd: 6,
       });
       BadgeChip({
         iconName: 'ArrowClockwise20',
-        chipText: S_HINT,
+        chipText: S_HINT(),
         chipMarginEnd: 0,
       });
     }
@@ -258,7 +259,7 @@ struct ProtectedContentNoticeWindow {
 
     Row() {
       PrimaryButton({
-        label: S_CLOSE,
+        label: S_CLOSE(),
         minButtonWidth: 80,
         buttonHeight: 36,
         on_action: (): void => { this.on_close(); },
@@ -271,7 +272,7 @@ struct ProtectedContentNoticeWindow {
     Column() {
       SubWindowShell({
       windowName: WINDOW_NAME,
-      title: S_TITLE,
+      title: S_TITLE(),
       subtitle: '',                    // 原版表头只有标题
       // Border Padding="20"（覆盖了 ModernDialogSurface 的 26）；底色是 DialogSurfaceBrush
       pageMarginH: 20,

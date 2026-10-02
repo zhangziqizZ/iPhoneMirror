@@ -1,3 +1,4 @@
+import { t } from './i18n';
 // UsbProjectionMode.ets —— USB 投屏模式选项
 //
 // 数据源（逐条对应，一个不改）：

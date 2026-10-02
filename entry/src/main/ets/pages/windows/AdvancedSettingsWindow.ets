@@ -61,6 +61,7 @@ import {
   SubWindowSpec,
 } from '../../common/SubWindow';
 import { MUTED_TEXT, TEXT } from '../../common/Theme';
+import { t } from '../../common/i18n';
 
 const TAG: string = 'im_advanced_settings';
 const DOMAIN: number = 0x0100;

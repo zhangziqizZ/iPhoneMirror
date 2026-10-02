@@ -57,6 +57,7 @@ import {
   TEXT, MUTED_TEXT, WARNING, WARNING_SURFACE, BORDER_SOFT, SETTINGS_SECTION_PADDING,
 } from '../../common/Theme';
 import { UsbProjectionMode, UsbProjectionModeOption, usb_projection_mode_option } from '../../common/UsbProjectionMode';
+import { t } from '../../common/i18n';
 
 const TAG: string = 'im_usb_mode_info';
 const DOMAIN: number = 0x0100;

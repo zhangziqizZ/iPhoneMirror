@@ -93,6 +93,7 @@ import {
 } from '../../common/SubWindow';
 import { MUTED_TEXT, TEXT } from '../../common/Theme';
 import { FluentSymbol } from '../../common/FluentIcon';
+import { t } from '../../common/i18n';
 
 const TAG: string = 'im_startup_error';
 const DOMAIN: number = 0x0100;
@@ -110,12 +111,12 @@ export const ARG_KEY_LOG_PATH: string = 'im.startupError.logPath';
 export const ARG_KEY_NATIVE_LOAD_FAILURE: string = 'im.startupError.nativeLoadFailure';
 
 /** Strings（逐键标注）。 */
-const S_TITLE: string = 'iPhoneMirror';                    // 原版硬编码的 Title，不是资源键
-const S_HEADING: string = 'iPhoneMirror 无法启动';           // StartupErrorHeading
-const S_LOG_LABEL: string = '诊断日志';                     // StartupErrorLogLabel
-const S_DETAILS: string = '错误详情';                       // StartupErrorDetails
-const S_OPEN_LOG: string = '打开日志位置';                   // StartupErrorOpenLog
-const S_CLOSE: string = '关闭';                             // StartupErrorClose
+const S_TITLE = (): string => t('iPhoneMirror');                    // 原版硬编码的 Title，不是资源键
+const S_HEADING = (): string => t('iPhoneMirror 无法启动');// StartupErrorHeading
+const S_LOG_LABEL = (): string => t('诊断日志');// StartupErrorLogLabel
+const S_DETAILS = (): string => t('错误详情');// StartupErrorDetails
+const S_OPEN_LOG = (): string => t('打开日志位置');// StartupErrorOpenLog
+const S_CLOSE = (): string => t('关闭');// StartupErrorClose
 
 /** StartupDiagnostics.UserMessage 的 zh-CN 两支（原文）。 */
 const S_SUMMARY_NATIVE: string =
@@ -194,7 +195,7 @@ export function open_startup_error(ctx: common.Context, args: StartupErrorArgs):
   const spec: SubWindowSpec = {
     name: WINDOW_NAME,
     page: PAGE_PATH,
-    title: S_TITLE,
+    title: S_TITLE(),
     width: 680,
     height: 440,
     resizable: true,                // ResizeMode="CanResize"
@@ -316,7 +317,7 @@ struct StartupErrorWindow {
     Column() {
       // StackPanel：LogLabelText（FontSize 12 / Margin 0,0,0,7）+ LogPathTextBox
       Column() {
-        Text(S_LOG_LABEL)
+        Text(S_LOG_LABEL())
           .fontSize(12)
           .fontColor(TEXT);
         RoundedTextBox({
@@ -331,7 +332,7 @@ struct StartupErrorWindow {
 
       Column().height(SUBWINDOW_ROW_GAP_NARROW);   // 行 5 = 14
 
-      DetailsExpander({ headerText: S_DETAILS, detailText: this.detailText });
+      DetailsExpander({ headerText: S_DETAILS(), detailText: this.detailText });
 
       if (this.statusText.length > 0) {
         Column() {
@@ -349,13 +350,13 @@ struct StartupErrorWindow {
   @Builder
   actions() {
     SecondaryButton({
-      label: S_OPEN_LOG,
+      label: S_OPEN_LOG(),
       minButtonWidth: 132,
       on_action: (): void => { this.on_open_log(); },
     })
       .margin({ right: 8 });
     PrimaryButton({
-      label: S_CLOSE,
+      label: S_CLOSE(),
       minButtonWidth: 96,
       on_action: (): void => { this.on_close(); },
     });
@@ -365,7 +366,7 @@ struct StartupErrorWindow {
     Column() {
       SubWindowShell({
       windowName: WINDOW_NAME,
-      title: S_HEADING,
+      title: S_HEADING(),
       subtitle: '',                 // 原版表头只有 HeadingText，没有 SubWindowSubtitle
       gap: SUBWINDOW_ROW_GAP,       // 行 1 = 16
       hasNotice: true,

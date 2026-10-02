@@ -57,6 +57,7 @@ import {
 } from '../../common/Theme';
 import { DeviceViewModel } from '../../common/DeviceViewModel';
 import { WindowServices, DeviceSelectionRequest } from '../../common/WindowServices';
+import { t } from '../../common/i18n';
 
 const TAG: string = 'im_airplay_select';
 const DOMAIN: number = 0x0100;

@@ -22,6 +22,7 @@
 import { preferences } from '@kit.ArkData';
 import common from '@ohos.app.ability.common';
 import { BusinessError } from '@ohos.base';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import {
   ACRYLIC_ALPHA_DEFAULT,
   ACRYLIC_ALPHA_KEY,
@@ -29,6 +30,7 @@ import {
   PERSIST_READ_RESULT_KEY,
   PERSIST_WRITE_RESULT_KEY,
 } from './WindowServices';
+import { LANG_INDEX_KEY } from './i18n';
 
 /** 偏好文件名 —— 落在应用沙箱的 preferences 目录，卸载才清。 */
 const PREFS_NAME: string = 'iphone_mirror_prefs';
@@ -36,6 +38,8 @@ const PREFS_NAME: string = 'iphone_mirror_prefs';
 /** ★ preferences 里的键：与 AppStorage 的 `im.xxx` 分开命名，避免两套键被误当成同一个。 */
 const PREFS_KEY_ACRYLIC_ON: string = 'acrylic_on';
 const PREFS_KEY_ACRYLIC_ALPHA: string = 'acrylic_alpha';
+/** ★ preferences 里的键：界面语言档位（0=跟随系统 1=简体 2=繁中香港 3=英文）。 */
+const PREFS_KEY_LANGUAGE: string = 'language_index';
 
 /**
  * 偏好实例。为什么是模块级可变变量：写入发生在 UI 点击回调里，那里拿不到 Ability 的
@@ -107,5 +111,46 @@ export function save_acrylic_preferences(on: boolean, alpha: string): void {
     const writeFailure = writeError as BusinessError;
     AppStorage.setOrCreate(PERSIST_WRITE_RESULT_KEY,
       `偏好写入失败 ${writeFailure.code} ${writeFailure.message}`);
+  }
+}
+
+/**
+ * 从磁盘读回界面语言档位，写进 AppStorage 的 `LANG_INDEX_KEY`。
+ *
+ * ★ 与 load_acrylic_preferences 同理：必须在 UI 装载**之前**调用 —— UI 里的
+ *   `@StorageLink`/`t()` 首次读取会**建立**这个键，一旦先建，这里读到的是默认值。
+ *   store 未打开（preferences 不可用）时按 0（跟随系统）处理：代价只是本次不跨启动保留。
+ */
+export function load_language_preference(): void {
+  if (store === null) {
+    return;
+  }
+  try {
+    const index: number = store.getSync(PREFS_KEY_LANGUAGE, 0) as number;
+    AppStorage.setOrCreate(LANG_INDEX_KEY, index);
+  } catch (readError) {
+    const readFailure = readError as BusinessError;
+    // 读取失败不连带崩：退回跟随系统，界面照常能用。
+    hilog.warn(0x0000, 'AppPreferences', '语言偏好读取失败 %d %{public}s',
+      readFailure.code, readFailure.message);
+  }
+}
+
+/**
+ * 写入界面语言档位并**立即落盘**（`flushSync()` 是关键，见文件头说明）。
+ *
+ * @param index 0=跟随系统 1=简体 2=繁中(香港) 3=英文
+ */
+export function save_language_preference(index: number): void {
+  if (store === null) {
+    return;
+  }
+  try {
+    store.putSync(PREFS_KEY_LANGUAGE, index);
+    store.flushSync();
+  } catch (writeError) {
+    const writeFailure = writeError as BusinessError;
+    hilog.warn(0x0000, 'AppPreferences', '语言偏好写入失败 %d %{public}s',
+      writeFailure.code, writeFailure.message);
   }
 }

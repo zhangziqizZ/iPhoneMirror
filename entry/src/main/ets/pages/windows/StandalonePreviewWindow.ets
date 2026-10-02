@@ -118,6 +118,7 @@ import {
 import { CORNER_RECTANGULAR, DeviceCornerProfile } from '../../common/DeviceCornerProfile';
 import { ReverseControlInput } from '../../common/ReverseControlInput';
 import { BluetoothHidPeripheral } from '../../common/BluetoothHidPeripheral';
+import { t } from '../../common/i18n';
 
 const TAG: string = 'im_standalone_preview';
 const DOMAIN: number = 0x0100;

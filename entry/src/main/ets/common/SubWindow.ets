@@ -55,6 +55,7 @@ import {
   DARK, LIGHT, ThemeColors,
 } from './Theme';
 import { THEME_SCHEME_KEY } from './theme_manager';
+import { t } from './i18n';
 
 const TAG: string = 'im_subwindow';
 const DOMAIN: number = 0x0100;

@@ -29,6 +29,7 @@
 
 import { deviceManager } from '@kit.DriverDevelopmentKit';
 import { BusinessError } from '@ohos.base';
+import { t } from './i18n';
 
 /** Apple 的 USB Vendor ID，与 module.json5 的 metadata 保持一致。 */
 const APPLE_VENDOR_ID: number = 0x05AC;

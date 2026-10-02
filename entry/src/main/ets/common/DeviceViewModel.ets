@@ -1,3 +1,4 @@
+import { t } from './i18n';
 // DeviceViewModel.ets —— 设备视图模型的忠实搬用
 //
 // 数据源（逐条对应）：
@@ -56,31 +57,31 @@ export interface NativeDeviceInfo {
 // ───────────────────── Strings.zh-CN.xaml 的取值（逐键标注） ─────────────────────
 
 /** MediaCastDeviceName */
-const S_MEDIA_CAST_DEVICE_NAME: string = '视频应用投屏';
+const S_MEDIA_CAST_DEVICE_NAME = (): string => t('视频应用投屏');
 /** MediaCastDeviceModel */
-const S_MEDIA_CAST_DEVICE_MODEL: string = 'AirPlay / DLNA 视频';
+const S_MEDIA_CAST_DEVICE_MODEL = (): string => t('AirPlay / DLNA 视频');
 /** MediaCastDeviceConnection */
-const S_MEDIA_CAST_DEVICE_CONNECTION: string = '网络媒体投放';
+const S_MEDIA_CAST_DEVICE_CONNECTION = (): string => t('网络媒体投放');
 /** MediaCastDeviceActive */
-const S_MEDIA_CAST_DEVICE_ACTIVE: string = '正在投放视频';
+const S_MEDIA_CAST_DEVICE_ACTIVE = (): string => t('正在投放视频');
 /** ModelLoading */
-const S_MODEL_LOADING: string = '型号读取中';
+const S_MODEL_LOADING = (): string => t('型号读取中');
 /** WirelessLocalNetwork */
-const S_WIRELESS_LOCAL_NETWORK: string = '本地网络';
+const S_WIRELESS_LOCAL_NETWORK = (): string => t('本地网络');
 /** WirelessConnected */
-const S_WIRELESS_CONNECTED: string = 'AirPlay 已连接';
+const S_WIRELESS_CONNECTED = (): string => t('AirPlay 已连接');
 /** ConnectionDisconnected */
-const S_CONNECTION_DISCONNECTED: string = '未连接';
+const S_CONNECTION_DISCONNECTED = (): string => t('未连接');
 /** ConnectionUsbNoMux */
-const S_CONNECTION_USB_NO_MUX: string = 'USB 已连接，等待 Apple 通道';
+const S_CONNECTION_USB_NO_MUX = (): string => t('USB 已连接，等待 Apple 通道');
 /** ConnectionConnected */
-const S_CONNECTION_CONNECTED: string = '已连接';
+const S_CONNECTION_CONNECTED = (): string => t('已连接');
 /** ConnectionPaired */
-const S_CONNECTION_PAIRED: string = '已配对，请解锁设备';
+const S_CONNECTION_PAIRED = (): string => t('已配对，请解锁设备');
 /** ConnectionReady */
-const S_CONNECTION_READY: string = '已连接并配对';
+const S_CONNECTION_READY = (): string => t('已连接并配对');
 /** ConnectionError */
-const S_CONNECTION_ERROR: string = '设备连接异常';
+const S_CONNECTION_ERROR = (): string => t('设备连接异常');
 
 /**
  * src/App/Services/AppleProductNames.cs —— KnownProducts 字典。
@@ -175,7 +176,7 @@ export class DeviceViewModel {
   /** DeviceViewModel.DisplayName */
   display_name(): string {
     if (this.is_media_cast()) {
-      return S_MEDIA_CAST_DEVICE_NAME;
+      return S_MEDIA_CAST_DEVICE_NAME();
     }
     return is_blank(this.name) ? 'iPhone' : this.name;
   }
@@ -183,10 +184,10 @@ export class DeviceViewModel {
   /** DeviceViewModel.ModelDisplay */
   model_display(): string {
     if (this.is_media_cast()) {
-      return S_MEDIA_CAST_DEVICE_MODEL;
+      return S_MEDIA_CAST_DEVICE_MODEL();
     }
     if (is_blank(this.productType)) {
-      return this.is_wireless() ? 'AirPlay' : S_MODEL_LOADING;
+      return this.is_wireless() ? 'AirPlay' : S_MODEL_LOADING();
     }
     return resolve_apple_product_name(this.productType);
   }
@@ -194,13 +195,13 @@ export class DeviceViewModel {
   /** DeviceViewModel.OsDisplay */
   os_display(): string {
     if (this.is_media_cast()) {
-      return S_MEDIA_CAST_DEVICE_CONNECTION;
+      return S_MEDIA_CAST_DEVICE_CONNECTION();
     }
     if (is_blank(this.osVersion)) {
-      return this.is_wireless() ? S_WIRELESS_LOCAL_NETWORK : 'iOS -';
+      return this.is_wireless() ? S_WIRELESS_LOCAL_NETWORK() : 'iOS -';
     }
     if (this.is_wireless()) {
-      return `iOS ${this.osVersion} · ${S_WIRELESS_LOCAL_NETWORK}`;
+      return `iOS ${this.osVersion} · ${S_WIRELESS_LOCAL_NETWORK()}`;
     }
     return `iOS ${this.osVersion}`;
   }
@@ -242,24 +243,24 @@ export class DeviceViewModel {
   /** DeviceViewModel.StatusDisplay */
   status_display(): string {
     if (this.is_media_cast()) {
-      return S_MEDIA_CAST_DEVICE_ACTIVE;
+      return S_MEDIA_CAST_DEVICE_ACTIVE();
     }
     if (this.is_wireless()) {
-      return S_WIRELESS_CONNECTED;
+      return S_WIRELESS_CONNECTED();
     }
     switch (this.state) {
       case ConnectionState.Disconnected:
-        return S_CONNECTION_DISCONNECTED;
+        return S_CONNECTION_DISCONNECTED();
       case ConnectionState.UsbPresentNoMux:
-        return S_CONNECTION_USB_NO_MUX;
+        return S_CONNECTION_USB_NO_MUX();
       case ConnectionState.Connected:
-        return S_CONNECTION_CONNECTED;
+        return S_CONNECTION_CONNECTED();
       case ConnectionState.Paired:
-        return S_CONNECTION_PAIRED;
+        return S_CONNECTION_PAIRED();
       case ConnectionState.Ready:
-        return S_CONNECTION_READY;
+        return S_CONNECTION_READY();
       default:
-        return S_CONNECTION_ERROR;
+        return S_CONNECTION_ERROR();
     }
   }
 
@@ -346,7 +347,7 @@ export class DeviceViewModel {
 
   /** DeviceViewModel.CreateMediaCast() */
   static create_media_cast(): DeviceViewModel {
-    return new DeviceViewModel(MEDIA_CAST_UDID, S_MEDIA_CAST_DEVICE_NAME, '', '',
+    return new DeviceViewModel(MEDIA_CAST_UDID, S_MEDIA_CAST_DEVICE_NAME(), '', '',
       'AirPlay / DLNA', '', ConnectionState.Ready);
   }
 

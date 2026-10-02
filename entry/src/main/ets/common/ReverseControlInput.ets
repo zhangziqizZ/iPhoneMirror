@@ -1,5 +1,6 @@
 import { BluetoothHidPeripheral } from './BluetoothHidPeripheral';
 import { BusinessError } from '@ohos.base';
+import { t } from './i18n';
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  反向控制：电脑端输入 → iPhone

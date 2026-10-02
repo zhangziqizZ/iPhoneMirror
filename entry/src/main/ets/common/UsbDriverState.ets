@@ -15,6 +15,7 @@
 // 设备管理服务看到几台 USB 设备。不写"应该没问题"这类推断。
 
 import { fileIo } from '@kit.CoreFileKit';
+import { t } from './i18n';
 
 /** 状态文件名。读写两侧共用本常量，避免两处手写字符串漂移。 */
 export const USB_DRIVER_STATE_FILE: string = 'usb_driver_state.txt';

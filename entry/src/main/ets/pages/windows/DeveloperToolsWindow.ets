@@ -155,6 +155,8 @@ import {
   show_developer_stopped_preview,
   show_developer_usb_preview,
 } from './CaptureStatusNoticeWindow';
+import { save_language_preference } from '../../common/AppPreferences';
+import { t, set_language, LANG_INDEX_KEY, active_lang, LANGUAGE_LABELS as I18N_LANG } from '../../common/i18n';
 
 const TAG: string = 'im_developer_tools';
 const DOMAIN: number = 0x0100;
@@ -175,46 +177,43 @@ export const LOG_FILE_NAME: string = 'developer-tools.log';
 
 // ───────────────────── Strings（逐键标注） ─────────────────────
 
-const S_TITLE: string = '开发者工具';                        // DeveloperToolsTitle
-const S_SUBTITLE: string = '统一预览所有页面、弹窗和运行期参数'; // DeveloperToolsSubtitle
-const S_PREVIEW_BADGE: string = '只读预览';                  // DeveloperToolsPreviewBadge
-const S_WORKSPACE_SECTION: string = '工作区页面';             // DeveloperToolsWorkspaceSection
-const S_WORKSPACE_HINT: string = '快速切换主窗口中的所有工作区状态'; // DeveloperToolsWorkspaceHint
-const S_WINDOWS_SECTION: string = '子窗口与弹窗';             // DeveloperToolsWindowsSection
-const S_WINDOWS_HINT: string = '打开现有窗口的安全预览；网络、设备和破坏性操作已隔离'; // DeveloperToolsWindowsHint
-const S_PARAM_SECTION: string = '运行期参数';                 // DeveloperToolsParametersSection
-const S_PARAM_HINT: string = '参数仅影响当前进程，便于检查主题、缩放和窗口协调'; // DeveloperToolsParametersHint
-const S_INSPECTOR_SECTION: string = '窗口检查器';             // DeveloperToolsInspectorSection
-const S_DIAGNOSTICS_SECTION: string = '诊断日志';             // 本工程新增（平台替换 7）
-const S_PARAM_THEME: string = '应用主题';                     // DeveloperParamTheme
-const S_PARAM_LANGUAGE: string = '界面语言';                  // DeveloperParamLanguage
-const S_PARAM_OPACITY: string = '主窗口透明度';                // DeveloperParamOpacity
-const S_PARAM_TOPMOST: string = '主窗口置顶';                  // DeveloperParamTopmost
-const S_PARAM_PRESET: string = '窗口预设';                    // DeveloperParamWindowPreset
-const S_PRESET_COMPACT: string = '紧凑 1280×700';              // DeveloperPresetCompact
-const S_PRESET_DEFAULT: string = '默认 1540×900';              // DeveloperPresetDefault
-const S_PRESET_MAXIMIZE: string = '最大化';                   // DeveloperPresetMaximize
-const S_RESET: string = '重置参数';                           // DeveloperResetParameters
-const S_REFRESH: string = '刷新检查';                         // DeveloperRefresh
-const S_ACTIVATE: string = '激活';                            // DeveloperActivate
-const S_CLOSE_WINDOW: string = '关闭';                        // DeveloperClose
-const S_CLOSE: string = '关闭';                               // Close
-const S_SURFACE_OPENED: string = '预览窗口已打开';             // DeveloperSurfaceOpened
-const S_SURFACE_OPEN_FAILED: string = '打开预览失败';          // DeveloperSurfaceOpenFailed
-const S_PARAMETERS_RESET: string = '参数已恢复默认值';          // DeveloperParametersReset
-const S_RUNTIME_VERSION: string = '版本';                     // DeveloperRuntimeVersion
-const S_RUNTIME_CULTURE: string = '区域';                     // DeveloperRuntimeCulture
-const S_RUNTIME_THEME: string = '主题';                       // DeveloperRuntimeTheme
-const S_RUNTIME_DPI: string = '文字缩放';                     // DeveloperRuntimeDpi
-const S_RUNTIME_WINDOWS: string = '窗口数';                   // DeveloperRuntimeWindows
+const S_TITLE = (): string => t('开发者工具');                        // DeveloperToolsTitle
+const S_SUBTITLE = (): string => t('统一预览所有页面、弹窗和运行期参数');// DeveloperToolsSubtitle
+const S_PREVIEW_BADGE = (): string => t('只读预览');// DeveloperToolsPreviewBadge
+const S_WORKSPACE_SECTION = (): string => t('工作区页面');// DeveloperToolsWorkspaceSection
+const S_WORKSPACE_HINT = (): string => t('快速切换主窗口中的所有工作区状态');// DeveloperToolsWorkspaceHint
+const S_WINDOWS_SECTION = (): string => t('子窗口与弹窗');// DeveloperToolsWindowsSection
+const S_WINDOWS_HINT = (): string => t('打开现有窗口的安全预览；网络、设备和破坏性操作已隔离');// DeveloperToolsWindowsHint
+const S_PARAM_SECTION = (): string => t('运行期参数');// DeveloperToolsParametersSection
+const S_PARAM_HINT = (): string => t('参数仅影响当前进程，便于检查主题、缩放和窗口协调');// DeveloperToolsParametersHint
+const S_INSPECTOR_SECTION = (): string => t('窗口检查器');// DeveloperToolsInspectorSection
+const S_DIAGNOSTICS_SECTION = (): string => t('诊断日志');// 本工程新增（平台替换 7）
+const S_PARAM_THEME = (): string => t('应用主题');// DeveloperParamTheme
+const S_PARAM_LANGUAGE = (): string => t('界面语言');// DeveloperParamLanguage
+const S_PARAM_OPACITY = (): string => t('主窗口透明度');// DeveloperParamOpacity
+const S_PARAM_TOPMOST = (): string => t('主窗口置顶');// DeveloperParamTopmost
+const S_PARAM_PRESET = (): string => t('窗口预设');// DeveloperParamWindowPreset
+const S_PRESET_COMPACT = (): string => t('紧凑 1280×700');// DeveloperPresetCompact
+const S_PRESET_DEFAULT = (): string => t('默认 1540×900');// DeveloperPresetDefault
+const S_PRESET_MAXIMIZE = (): string => t('最大化');// DeveloperPresetMaximize
+const S_RESET = (): string => t('重置参数');// DeveloperResetParameters
+const S_REFRESH = (): string => t('刷新检查');                         // DeveloperRefresh
+const S_ACTIVATE = (): string => t('激活');// DeveloperActivate
+const S_CLOSE_WINDOW = (): string => t('关闭');// DeveloperClose
+const S_CLOSE = (): string => t('关闭');// Close
+const S_SURFACE_OPENED = (): string => t('预览窗口已打开');// DeveloperSurfaceOpened
+const S_SURFACE_OPEN_FAILED = (): string => t('打开预览失败');// DeveloperSurfaceOpenFailed
+const S_PARAMETERS_RESET = (): string => t('参数已恢复默认值');// DeveloperParametersReset
+const S_RUNTIME_VERSION = (): string => t('版本');// DeveloperRuntimeVersion
+const S_RUNTIME_CULTURE = (): string => t('区域');// DeveloperRuntimeCulture
+const S_RUNTIME_THEME = (): string => t('主题');// DeveloperRuntimeTheme
+const S_RUNTIME_DPI = (): string => t('文字缩放');// DeveloperRuntimeDpi
+const S_RUNTIME_WINDOWS = (): string => t('窗口数');// DeveloperRuntimeWindows
 
 /** DeveloperThemeSystem / Light / Dark —— ComboBox 顺序为 System/Light/Dark。 */
 const THEME_LABELS: string[] = ['跟随系统', '浅色', '深色'];
 /** theme_manager 的口径：0=跟随系统 1=深色 2=浅色（与 ComboBox 顺序不同，需要映射）。 */
 const THEME_PREF_BY_INDEX: number[] = [0, 2, 1];
-/** DeveloperLanguageSystem / Simplified / Traditional / English。 */
-const LANGUAGE_TAGS: string[] = ['system', 'zh-CN', 'zh-HK', 'en-US'];
-const LANGUAGE_LABELS: string[] = ['跟随系统', '简体中文', '繁体中文（香港）', 'English'];
 
 /** 平台替换 5：WPF ComboBox → ArkUI 的 Select（下拉选择）。 */
 function to_options(labels: string[]): SelectOption[] {
@@ -226,23 +225,26 @@ function to_options(labels: string[]): SelectOption[] {
 }
 
 const THEME_OPTIONS: SelectOption[] = to_options(THEME_LABELS);
-const LANGUAGE_OPTIONS: SelectOption[] = to_options(LANGUAGE_LABELS);
+/**
+ * ★ 语言选项按**当前语言**取：切语言时整树重渲染，这里跟着变
+ *   （写死一份中文数组 ⇒ 选了 English 后下拉里还是中文）。
+ */
+function language_options(): SelectOption[] {
+  return to_options(I18N_LANG[active_lang()]);
+}
 /** DeveloperPreset* 对应的窗口尺寸（xaml.cs OnPresetClick / OnResetClick）。 */
 const PRESET_COMPACT_WIDTH: number = 1280;
 const PRESET_COMPACT_HEIGHT: number = 700;
 const PRESET_DEFAULT_WIDTH: number = 1540;
 const PRESET_DEFAULT_HEIGHT: number = 900;
 
-/** 平台替换 6：三项做不到的参数的确切原因。 */
+/** 平台替换 6：两项做不到的参数的确切原因（语言已真做，不再占位）。 */
 const S_REASON_OPACITY: string =
   '鸿蒙 @ohos.window 没有 WPF Window.Opacity 的等价物（无窗口不透明度设置接口），' +
   '主窗口透明度不可调整。';
 const S_REASON_TOPMOST: string =
   '鸿蒙 @ohos.window 没有 WPF Window.Topmost 的等价物（无窗口置顶标记接口），' +
   '主窗口置顶不可调整。';
-const S_REASON_LANGUAGE: string =
-  '鸿蒙版只有一套 zh-CN 内置文案（各窗口已把 Strings.zh-CN.xaml 的原文内联成常量），' +
-  '没有 LocalizationService 资源字典可切换。';
 /** 平台替换 3：打不开的预览面的确切原因。 */
 const S_REASON_NO_SURFACE: string =
   '鸿蒙版主窗口未提供 OpenDeveloperSurface(key) 的等价入口，本工程也没有对应的预览页面。';
@@ -428,7 +430,7 @@ export function open_developer_tools(ctx: common.Context): void {
   const spec: SubWindowSpec = {
     name: WINDOW_NAME,
     page: PAGE_PATH,
-    title: S_TITLE,
+    title: S_TITLE(),
     width: 980,                       // Width="980"
     height: 760,                      // Height="760"
     resizable: true,                  // ResizeMode="CanResize"
@@ -525,7 +527,7 @@ struct DeveloperToolsWindow {
   private timerId: number = -1;
 
   aboutToAppear(): void {
-    const storedLanguage: number = AppStorage.get<number>(PARAM_KEY_LANGUAGE) ?? 1;
+    const storedLanguage: number = AppStorage.get<number>(LANG_INDEX_KEY) ?? 0;
     this.languageIndex = storedLanguage;
     this.opacityValue = AppStorage.get<number>(PARAM_KEY_OPACITY) ?? 1;
     this.topmostOn = AppStorage.get<boolean>(PARAM_KEY_TOPMOST) ?? false;
@@ -564,15 +566,17 @@ struct DeveloperToolsWindow {
     this.refresh_diagnostics();
   }
 
-  /** 平台替换 6：语言 —— 只有 zh-CN 一档可用。 */
+  /**
+   * 平台替换 6（**真做**）：界面语言 —— 写全局 `LANG_INDEX_KEY`，
+   * 所有在 build() 里调过 t() 的组件立即重渲染；四个档位都真切，不再有占位文案。
+   */
   private on_language_changed(index: number): void {
     this.languageIndex = index;
-    AppStorage.setOrCreate<number>(PARAM_KEY_LANGUAGE, index);
-    if (LANGUAGE_TAGS[index] === 'zh-CN') {
-      this.statusText = '当前已是简体中文。';
-      return;
-    }
-    this.statusText = S_REASON_LANGUAGE;
+    set_language(index);
+    save_language_preference(index);
+    const label: string = I18N_LANG[active_lang()][index];
+    this.statusText = t('界面语言') + ' → ' + label;
+    this.refresh_diagnostics();
   }
 
   /** 平台替换 6：透明度 —— 做不到，明说。 */
@@ -604,9 +608,9 @@ struct DeveloperToolsWindow {
 
   private preset_label(tag: string): string {
     if (tag === 'compact') {
-      return S_PRESET_COMPACT;
+      return S_PRESET_COMPACT();
     }
-    return tag === 'maximize' ? S_PRESET_MAXIMIZE : S_PRESET_DEFAULT;
+    return tag === 'maximize' ? S_PRESET_MAXIMIZE() : S_PRESET_DEFAULT();
   }
 
   /**
@@ -643,19 +647,20 @@ struct DeveloperToolsWindow {
     AppStorage.setOrCreate<number>(THEME_PREF_KEY, 0);
     recomputeThemeScheme();
     this.languageIndex = 0;
-    AppStorage.setOrCreate<number>(PARAM_KEY_LANGUAGE, 0);
+    set_language(0);
+    save_language_preference(0);
     this.opacityValue = 1;
     this.opacityText = this.format_percent(1);
     this.topmostOn = false;
     AppStorage.setOrCreate<boolean>(PARAM_KEY_TOPMOST, false);
     this.apply_window_preset('default')
       .then((): void => {
-        this.statusText = S_PARAMETERS_RESET + '（界面语言、主窗口透明度、主窗口置顶'
+        this.statusText = S_PARAMETERS_RESET() + '（界面语言、主窗口透明度、主窗口置顶'
           + '在鸿蒙无对应能力，未变更。）';
         this.refresh_diagnostics();
       })
       .catch((error: BusinessError): void => {
-        this.statusText = S_PARAMETERS_RESET + '（窗口尺寸应用失败：' + error.message + '）';
+        this.statusText = S_PARAMETERS_RESET() + '（窗口尺寸应用失败：' + error.message + '）';
       });
   }
 
@@ -685,17 +690,17 @@ struct DeveloperToolsWindow {
   private on_surface_click(item: DeveloperSurfaceItem): void {
     const action: Promise<void> | null = this.preview_action(item.key);
     if (action === null) {
-      this.statusText = S_SURFACE_OPEN_FAILED + '：' + S_REASON_NO_SURFACE
+      this.statusText = S_SURFACE_OPEN_FAILED() + '：' + S_REASON_NO_SURFACE
         + '（key=' + item.key + '）';
       return;
     }
     action
       .then((): void => {
-        this.statusText = S_SURFACE_OPENED + '：' + item.title;
+        this.statusText = S_SURFACE_OPENED() + '：' + item.title;
         this.refresh_diagnostics();
       })
       .catch((error: BusinessError): void => {
-        this.statusText = S_SURFACE_OPEN_FAILED + '：' + error.message;
+        this.statusText = S_SURFACE_OPEN_FAILED() + '：' + error.message;
       });
   }
 
@@ -705,11 +710,11 @@ struct DeveloperToolsWindow {
   private refresh_diagnostics(): void {
     this.openWindowNames = this.detect_open_windows();
     const lines: string[] = [
-      S_RUNTIME_VERSION + '：' + this.versionText,
-      S_RUNTIME_CULTURE + '：zh-CN',
-      S_RUNTIME_THEME + '：' + THEME_LABELS[this.themeIndex],
-      S_RUNTIME_DPI + '：' + this.read_density().toFixed(2),
-      S_RUNTIME_WINDOWS + '：' + this.openWindowNames.length.toString(),
+      S_RUNTIME_VERSION() + '：' + this.versionText,
+      S_RUNTIME_CULTURE() + '：zh-CN',
+      S_RUNTIME_THEME() + '：' + THEME_LABELS[this.themeIndex],
+      S_RUNTIME_DPI() + '：' + this.read_density().toFixed(2),
+      S_RUNTIME_WINDOWS() + '：' + this.openWindowNames.length.toString(),
     ];
     this.diagnosticsText = lines.concat(INTEGRITY_LINES).join('\n');
   }
@@ -856,7 +861,7 @@ struct DeveloperToolsWindow {
   /** 平台替换 2：下移一行的「只读预览」徽标。 */
   @Builder
   preview_badge() {
-    Text(S_PREVIEW_BADGE)
+    Text(S_PREVIEW_BADGE())
       .fontSize(11)
       .fontWeight(FontWeight.Bold)
       .fontColor(WARNING)
@@ -888,8 +893,8 @@ struct DeveloperToolsWindow {
   @Builder
   workspace_card() {
     Column() {
-      section_title(S_WORKSPACE_SECTION);
-      hint_text(S_WORKSPACE_HINT);
+      section_title(S_WORKSPACE_SECTION());
+      hint_text(S_WORKSPACE_HINT());
       this.surface_grid(this.workspaceItems);
     }
     .alignItems(HorizontalAlign.Start)
@@ -899,8 +904,8 @@ struct DeveloperToolsWindow {
   @Builder
   windows_card() {
     Column() {
-      section_title(S_WINDOWS_SECTION);
-      hint_text(S_WINDOWS_HINT);
+      section_title(S_WINDOWS_SECTION());
+      hint_text(S_WINDOWS_HINT());
       this.surface_grid(this.windowItems);
     }
     .alignItems(HorizontalAlign.Start)
@@ -910,7 +915,7 @@ struct DeveloperToolsWindow {
   @Builder
   parameters_left() {
     Column() {
-      detail_label(S_PARAM_THEME);
+      detail_label(S_PARAM_THEME());
       Select(THEME_OPTIONS)
         .selected(this.themeIndex)
         .value(THEME_LABELS[this.themeIndex])
@@ -920,13 +925,13 @@ struct DeveloperToolsWindow {
         .width('100%')
         .onSelect((index: number): void => { this.on_theme_changed(index); });
 
-      Text(S_PARAM_LANGUAGE)
+      Text(S_PARAM_LANGUAGE())
         .fontSize(11)
         .fontColor(MUTED_TEXT)
         .margin({ top: 14, bottom: 3 });
-      Select(LANGUAGE_OPTIONS)
+      Select(language_options())
         .selected(this.languageIndex)
-        .value(LANGUAGE_LABELS[this.languageIndex])
+        .value(I18N_LANG[active_lang()][this.languageIndex])
         .fontColor(TEXT)
         .optionFontColor(TEXT)
         .selectedOptionFontColor(TEXT)
@@ -940,7 +945,7 @@ struct DeveloperToolsWindow {
   @Builder
   parameters_right() {
     Column() {
-      detail_label(S_PARAM_OPACITY);
+      detail_label(S_PARAM_OPACITY());
       Slider({
         value: this.opacityValue,
         min: 0.72,
@@ -962,13 +967,13 @@ struct DeveloperToolsWindow {
       Row() {
         // 平台替换 5：WPF CheckBox → ArkUI 的 Checkbox（与 AboutWindow 的
         // SettingsToggle 同一种写法）。
-        Checkbox({ name: S_PARAM_TOPMOST, group: 'developerToolsParameters' })
+        Checkbox({ name: S_PARAM_TOPMOST(), group: 'developerToolsParameters' })
           .select(this.topmostOn)
           .selectedColor(ACCENT)
           .width(20)
           .height(20)
           .onChange((value: boolean): void => { this.on_topmost_changed(value); });
-        Text(S_PARAM_TOPMOST)
+        Text(S_PARAM_TOPMOST())
           .fontSize(12)
           .fontColor(TEXT)
           .margin({ left: 8 });
@@ -976,25 +981,25 @@ struct DeveloperToolsWindow {
       .width('100%')
       .margin({ top: 14 });
 
-      Text(S_PARAM_PRESET)
+      Text(S_PARAM_PRESET())
         .fontSize(11)
         .fontColor(MUTED_TEXT)
         .margin({ top: 14, bottom: 3 });
       Row() {
         SecondaryButton({
-          label: S_PRESET_COMPACT,
+          label: S_PRESET_COMPACT(),
           minButtonWidth: 94,
           on_action: (): void => { this.on_preset('compact'); },
         })
           .margin({ right: 6 });
         SecondaryButton({
-          label: S_PRESET_DEFAULT,
+          label: S_PRESET_DEFAULT(),
           minButtonWidth: 94,
           on_action: (): void => { this.on_preset('default'); },
         })
           .margin({ right: 6 });
         SecondaryButton({
-          label: S_PRESET_MAXIMIZE,
+          label: S_PRESET_MAXIMIZE(),
           minButtonWidth: 94,
           on_action: (): void => { this.on_preset('maximize'); },
         });
@@ -1008,8 +1013,8 @@ struct DeveloperToolsWindow {
   @Builder
   parameters_card() {
     Column() {
-      section_title(S_PARAM_SECTION);
-      hint_text(S_PARAM_HINT);
+      section_title(S_PARAM_SECTION());
+      hint_text(S_PARAM_HINT());
 
       Row() {
         this.parameters_left();
@@ -1022,13 +1027,13 @@ struct DeveloperToolsWindow {
 
       Row() {
         SecondaryButton({
-          label: S_RESET,
+          label: S_RESET(),
           minButtonWidth: 116,
           on_action: (): void => { this.on_reset(); },
         })
           .margin({ right: 8 });
         PrimaryButton({
-          label: S_REFRESH,
+          label: S_REFRESH(),
           minButtonWidth: 116,
           on_action: (): void => { this.on_refresh(); },
         });
@@ -1051,13 +1056,13 @@ struct DeveloperToolsWindow {
         .textOverflow({ overflow: TextOverflow.Ellipsis })
         .layoutWeight(1);
       SecondaryButton({
-        label: S_ACTIVATE,
+        label: S_ACTIVATE(),
         minButtonWidth: 76,
         buttonHeight: 30,
         on_action: (): void => { this.on_activate_window(name); },
       });
       SecondaryButton({
-        label: S_CLOSE_WINDOW,
+        label: S_CLOSE_WINDOW(),
         minButtonWidth: 64,
         buttonHeight: 30,
         on_action: (): void => { this.on_close_window(name); },
@@ -1072,7 +1077,7 @@ struct DeveloperToolsWindow {
   @Builder
   inspector_card() {
     Column() {
-      section_title(S_INSPECTOR_SECTION);
+      section_title(S_INSPECTOR_SECTION());
       Text(this.diagnosticsText)
         .fontSize(11)
         .fontColor(MUTED_TEXT)
@@ -1104,7 +1109,7 @@ struct DeveloperToolsWindow {
   @Builder
   diagnostics_card() {
     Column() {
-      section_title(S_DIAGNOSTICS_SECTION);
+      section_title(S_DIAGNOSTICS_SECTION());
       hint_text('日志由 hilog 与 AppStorage 键 ' + LOG_KEY + ' 承载；'
         + '「导出日志」写入 ' + diagnostic_dir() + '/' + LOG_FILE_NAME + '。');
 
@@ -1183,7 +1188,7 @@ struct DeveloperToolsWindow {
       .textOverflow({ overflow: TextOverflow.Ellipsis })
       .layoutWeight(1);
     PrimaryButton({
-      label: S_CLOSE,
+      label: S_CLOSE(),
       minButtonWidth: 96,
       on_action: (): void => { SubWindowHost.close(WINDOW_NAME); },
     });
@@ -1193,8 +1198,8 @@ struct DeveloperToolsWindow {
     Column() {
       SubWindowShell({
       windowName: WINDOW_NAME,
-      title: S_TITLE,
-      subtitle: S_SUBTITLE,
+      title: S_TITLE(),
+      subtitle: S_SUBTITLE(),
       shellBackground: DIALOG_SURFACE,   // Background="DialogSurfaceBrush"
       gap: 12,                           // ScrollViewer Margin="0,12,0,0"
       hasNotice: true,                   // 平台替换 2：下移一行的「只读预览」徽标

@@ -118,6 +118,7 @@ import {
   PREVIEW_CHROME, PREVIEW_TEXT, SETTINGS_SECTION_CORNER, SETTINGS_SECTION_PADDING,
 } from '../../common/Theme';
 import { FluentSymbol } from '../../common/FluentIcon';
+import { t } from '../../common/i18n';
 
 const TAG: string = 'im_update';
 const DOMAIN: number = 0x0100;
@@ -147,14 +148,14 @@ const FALLBACK_RELEASE_URL: string = 'https://github.com/zhangziqizZ/iPhoneMirro
 const GITHUB_URL: string = 'https://github.com/zhangziqizZ/iPhoneMirror';
 
 /** Strings（逐键标注）。 */
-const S_TITLE: string = '发现新版本';                 // UpdateWindowTitle
-const S_SUBTITLE: string = '查看更新内容并一键完成升级';  // UpdateWindowSubtitle
-const S_OPEN_RELEASE: string = '查看完整 Release';     // OpenReleasePage
-const S_CURRENT_LABEL: string = '当前版本';            // CurrentVersionLabel
-const S_LATEST_LABEL: string = '最新版本';             // LatestVersionLabel
-const S_PUBLISHED_LABEL: string = '发布时间';          // PublishedAtLabel
-const S_REMIND_LATER: string = '稍后提醒';             // RemindLater
-const S_UPDATE_NOW: string = '立即更新';               // UpdateNow
+const S_TITLE = (): string => t('发现新版本');                 // UpdateWindowTitle
+const S_SUBTITLE = (): string => t('查看更新内容并一键完成升级');// UpdateWindowSubtitle
+const S_OPEN_RELEASE = (): string => t('查看完整 Release');// OpenReleasePage
+const S_CURRENT_LABEL = (): string => t('当前版本');// CurrentVersionLabel
+const S_LATEST_LABEL = (): string => t('最新版本');// LatestVersionLabel
+const S_PUBLISHED_LABEL = (): string => t('发布时间');// PublishedAtLabel
+const S_REMIND_LATER = (): string => t('稍后提醒');// RemindLater
+const S_UPDATE_NOW = (): string => t('立即更新');// UpdateNow
 
 /** 平台替换 3：点击「立即更新」后的确切原因。 */
 const S_UPDATE_REASON: string =
@@ -207,7 +208,7 @@ export function open_update_window(ctx: common.Context, args: ReleaseInfoArgs): 
   const spec: SubWindowSpec = {
     name: WINDOW_NAME,
     page: PAGE_PATH,
-    title: S_TITLE,
+    title: S_TITLE(),
     width: 760,
     height: 700,
     resizable: true,                // ResizeMode="CanResize"
@@ -352,11 +353,11 @@ struct UpdateWindow {
   @Builder
   version_row() {
     Row() {
-      VersionField({ labelText: S_CURRENT_LABEL, valueText: 'v' + this.currentVersion });
+      VersionField({ labelText: S_CURRENT_LABEL(), valueText: 'v' + this.currentVersion });
       Column().width(24);
-      VersionField({ labelText: S_LATEST_LABEL, valueText: this.latestVersion });
+      VersionField({ labelText: S_LATEST_LABEL(), valueText: this.latestVersion });
       Column().width(24);
-      VersionField({ labelText: S_PUBLISHED_LABEL, valueText: this.publishedAt });
+      VersionField({ labelText: S_PUBLISHED_LABEL(), valueText: this.publishedAt });
     }
     .width('100%')
     .alignItems(VerticalAlign.Top);
@@ -399,7 +400,7 @@ struct UpdateWindow {
           .layoutWeight(1);
         Row() {
           FluentSymbol({ iconName: 'Open20', iconSize: 14, iconColor: TEXT });
-          Text(S_OPEN_RELEASE)
+          Text(S_OPEN_RELEASE())
             .fontSize(12)
             .fontColor(TEXT)
             .margin({ left: 6 });
@@ -466,13 +467,13 @@ struct UpdateWindow {
   @Builder
   actions() {
     SecondaryButton({
-      label: S_REMIND_LATER,
+      label: S_REMIND_LATER(),
       minButtonWidth: 112,
       on_action: (): void => { this.on_later(); },
     })
       .margin({ right: 8 });
     PrimaryButton({
-      label: S_UPDATE_NOW,
+      label: S_UPDATE_NOW(),
       minButtonWidth: 132,
       actionEnabled: !this.readOnlyPreview,
       on_action: (): void => { this.on_update(); },
@@ -483,8 +484,8 @@ struct UpdateWindow {
     Column() {
       SubWindowShell({
       windowName: WINDOW_NAME,
-      title: S_TITLE,
-      subtitle: S_SUBTITLE,
+      title: S_TITLE(),
+      subtitle: S_SUBTITLE(),
       gap: SUBWINDOW_ROW_GAP,       // 行 1 = 16
       hasNotice: true,
       noticeGap: 18,                // 行 3 = 18

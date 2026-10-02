@@ -157,6 +157,7 @@ import {
   TEXT, MUTED_TEXT, WARNING, WARNING_SURFACE, ON_ACCENT, DIALOG_SURFACE,
   CONTROL_FILL, BORDER_SOFT, ACCENT,
 } from '../../common/Theme';
+import { t } from '../../common/i18n';
 
 const TAG: string = 'im_bluetooth_notice';
 const DOMAIN: number = 0x0100;
@@ -207,15 +208,15 @@ const AUTO_CLOSE_SECONDS: number = 5;
 const STEP_ROW_COUNT: number = 5;
 
 // ── Strings（键名与取值逐条标注）────────────────────────────────────────────
-const S_WAITING_TITLE: string = '正在等待蓝牙控制连接';               // BluetoothControlWaitingTitle
+const S_WAITING_TITLE = (): string => t('正在等待蓝牙控制连接');// BluetoothControlWaitingTitle
 // BluetoothControlWaitingBody —— 平台替换 ②：Windows → 鸿蒙设备 / 本机
 const S_WAITING_BODY: string =
   '请按以下顺序完成 iPhone 与鸿蒙设备的系统配对。若本机已连接过此 HID 设备，请先在蓝牙设置中断开，' +
   '再重新启用控制并重新连接。';
-const S_WAITING_TARGET_FORMAT: string = '设备列表中通常显示为：{0}';   // BluetoothControlWaitingTargetFormat
+const S_WAITING_TARGET_FORMAT = (): string => t('设备列表中通常显示为：{0}');// BluetoothControlWaitingTargetFormat
 const S_WAITING_DETAIL: string =                                    // BluetoothControlWaitingDetail
   '连接后会弹出蓝牙客户端绑定窗口，请选择对应手机。绑定完成前不会发送输入；等待期间鼠标不会被隐藏或限制。';
-const S_WAITING_STATUS: string = '等待 HID 鼠标连接';                 // BluetoothControlWaitingStatus
+const S_WAITING_STATUS = (): string => t('等待 HID 鼠标连接');// BluetoothControlWaitingStatus
 // BluetoothControlPairStepOneFormat（资源名带 Format，但正文里没有占位符，原版也用 Get 取）
 const S_PAIR_STEP_ONE: string =
   'iPhone：打开“设置 → 辅助功能 → 触控 → 辅助触控”，开启“辅助触控”。';
@@ -234,7 +235,7 @@ const S_PAIR_STEP_THREE: string =
 const S_PAIR_STEP_FOUR: string =
   '本机：不会弹出系统蓝牙配对窗口（HID 服务由应用的 GATT Server 提供，配对由 iPhone 发起）。' +
   '若 iPhone 上已显示为已连接，此步骤即已完成。';
-const S_PAIR_STEP_FIVE: string = 'iPhone：若再次出现配对提示窗口，点击“配对”。'; // BluetoothControlPairStepFive
+const S_PAIR_STEP_FIVE = (): string => t('iPhone：若再次出现配对提示窗口，点击“配对”。');// BluetoothControlPairStepFive
 
 /**
  * ★ 平台新增（上游**没有**这一条）。
@@ -251,7 +252,7 @@ const S_PORT_EXPERIMENTAL: string =
   '本移植版的蓝牙反控仍在实现阶段，不保证可用：按下面步骤做完后，iPhone 上仍可能不出现指针，' +
   '那属当前已知情况 —— 欢迎把「复制诊断」的输出提到 issue 里，那正是我们需要的现场。';
 
-const S_FAILED_TITLE: string = '蓝牙控制无法启动';                    // BluetoothControlFailedTitle
+const S_FAILED_TITLE = (): string => t('蓝牙控制无法启动');// BluetoothControlFailedTitle
 // BluetoothControlFailedBody —— 平台替换 ②：原版写的是 Windows 未能启动 BLE HID 外设服务
 //   「请检查蓝牙适配器和驱动是否支持外设模式」→ 鸿蒙侧的对应问法是"蓝牙是否开启、
 //   该设备是否有 BLE 外设角色"。**确切原因由调用方经 failureDetail 传进来并显示在下方**，
@@ -260,20 +261,20 @@ const S_FAILED_TITLE: string = '蓝牙控制无法启动';                    //
 //   因此无法启动蓝牙控制」——**那是错的，已作废**（本移植已实现该外设）。
 const S_FAILED_BODY: string =
   '本设备未能启动 BLE HID 外设服务。请确认蓝牙已开启，且当前设备支持 BLE 外设角色。';
-const S_FAILED_STATUS: string = '启动失败';                          // BluetoothControlFailedStatus
+const S_FAILED_STATUS = (): string => t('启动失败');// BluetoothControlFailedStatus
 
-const S_REPORT_MAP_TITLE: string = '蓝牙控制需要刷新配对';             // BluetoothControlReportMapChangedTitle
+const S_REPORT_MAP_TITLE = (): string => t('蓝牙控制需要刷新配对');// BluetoothControlReportMapChangedTitle
 const S_REPORT_MAP_BODY: string =                                    // BluetoothControlReportMapChangedBody
   '此更新修改了蓝牙 HID 控制。请在 iPhone/iPad 上忽略现有的 iPhoneMirror 设备，然后重新配对，再启用控制。';
 const S_REPORT_MAP_DETAIL: string =                                  // BluetoothControlReportMapChangedDetail
   '移除旧配对后关闭此提示。完成新配对后再次启用蓝牙控制。';
-const S_REPORT_MAP_STATUS: string = '需要重新配对';                    // BluetoothControlReportMapChangedStatus
-const S_REPORT_MAP_CONFIRM: string = '我已重新配对';                   // BluetoothControlReportMapChangedConfirm
+const S_REPORT_MAP_STATUS = (): string => t('需要重新配对');// BluetoothControlReportMapChangedStatus
+const S_REPORT_MAP_CONFIRM = (): string => t('我已重新配对');// BluetoothControlReportMapChangedConfirm
 
 // ★ 平台新增「（实验）」：原版这一条是"功能成立"的宣告（Windows 版确实能用），
 //   本移植版不是 —— 见 S_PORT_EXPERIMENTAL。标题是窗口上最大的一行，不带成熟度
 //   就等于替我们给这个功能背书。
-const S_PROMPT_TITLE: string = '蓝牙反向控制已开启（实验）';           // BluetoothControlPromptTitle
+const S_PROMPT_TITLE = (): string => t('蓝牙反向控制已开启（实验）');// BluetoothControlPromptTitle
 // BluetoothControlPromptBodyFormat —— 平台替换 ②：原版写的是 Windows 鼠标输入已转发
 // ★ 原文是「鸿蒙无法把鼠标输入转发到 iPhone/iPad（无 BLE HID 外设能力）」——**已作废**，
 //   输入转发已经实现（ReverseControlInput → BLE HID Report，见 Index.ets 的开关）。
@@ -281,26 +282,26 @@ const S_PROMPT_TITLE: string = '蓝牙反向控制已开启（实验）';       
 const S_PROMPT_BODY_FORMAT: string =
   '本机鼠标输入已转发到 iPhone/iPad。按 {0} 释放鼠标并关闭反向控制。';
 // BluetoothControlPromptDetail —— 平台替换 ②：Windows 光标 → 本机光标
-const S_PROMPT_DETAIL: string = '反向控制期间本机光标会隐藏。';
-const S_PROMPT_SHORTCUT_FORMAT: string = '按 {0} 释放鼠标';            // BluetoothControlPromptShortcutFormat
-const S_PROMPT_AUTO_CLOSE_FORMAT: string = '{0} 秒后自动关闭';         // BluetoothControlPromptAutoCloseFormat
+const S_PROMPT_DETAIL = (): string => t('反向控制期间本机光标会隐藏。');
+const S_PROMPT_SHORTCUT_FORMAT = (): string => t('按 {0} 释放鼠标');// BluetoothControlPromptShortcutFormat
+const S_PROMPT_AUTO_CLOSE_FORMAT = (): string => t('{0} 秒后自动关闭');// BluetoothControlPromptAutoCloseFormat
 
-const S_PREREQUISITE_STATUS: string = '请确认准备工作后继续';           // ReverseControlPrerequisiteStatus
-const S_PREREQUISITE_WIRELESS_TITLE: string = '启用无线控制前请确认';    // ReverseControlPrerequisiteWirelessTitle
+const S_PREREQUISITE_STATUS = (): string => t('请确认准备工作后继续');// ReverseControlPrerequisiteStatus
+const S_PREREQUISITE_WIRELESS_TITLE = (): string => t('启用无线控制前请确认');// ReverseControlPrerequisiteWirelessTitle
 // ReverseControlPrerequisiteWirelessBody —— 平台替换 ②：第 4 条改写成局域网可达性
 const S_PREREQUISITE_WIRELESS_BODY: string =
   '1. 开启“开发者模式”并重启设备。\n2. 先通过 USB 完成信任和无线配对。\n3. 保持设备解锁，并连接同一局域网。\n' +
   '4. 鸿蒙没有 Windows 防火墙，但请确认局域网未被隔离、本机可被设备访问。\n\n完成后点击“继续”，否则点击“取消”。';
-const S_PREREQUISITE_WIRED_TITLE: string = '启用有线控制前请确认';      // ReverseControlPrerequisiteWiredTitle
+const S_PREREQUISITE_WIRED_TITLE = (): string => t('启用有线控制前请确认');// ReverseControlPrerequisiteWiredTitle
 const S_PREREQUISITE_WIRED_BODY: string =                            // ReverseControlPrerequisiteWiredBody
   '1. 开启“开发者模式”并重启设备。\n2. USB 连接设备，解锁并点击“信任此电脑”。\n' +
   '3. 首次使用会从 GitHub 下载匹配的 DDI。\n4. 准备完成前不会发送输入。\n\n完成后点击“继续”，否则点击“取消”。';
 
 /** ShortcutSettingsUnbound —— 平台替换 ①：鸿蒙无法注册全局热键，恒定是未绑定态。 */
 const SHORTCUT_TEXT_UNBOUND: string = '未绑定';
-const S_CANCEL: string = '取消';                                     // Cancel
-const S_CLOSE: string = '关闭';                                      // Close
-const S_CONTINUE: string = '继续';                                    // Continue
+const S_CANCEL = (): string => t('取消');                                     // Cancel
+const S_CLOSE = (): string => t('关闭');// Close
+const S_CONTINUE = (): string => t('继续');// Continue
 /** 平台替换 ③：Environment.MachineName 的缺省替代。 */
 const DEFAULT_SUGGESTED_NAME: string = '本设备';
 
@@ -378,7 +379,7 @@ function open_bluetooth_control_notice(ctx: common.Context, state: number,
   const spec: SubWindowSpec = {
     name: WINDOW_NAME,
     page: PAGE_PATH,
-    title: S_WAITING_TITLE,           // 原版没有 Title 属性；窗口名按 Waiting 的标题给
+    title: S_WAITING_TITLE(),           // 原版没有 Title 属性；窗口名按 Waiting 的标题给
     width: WAITING_WIDTH,             // Width="500"（SetState 里还会把 Min/Max 都钉回 500）
     height: height_for_state(state),  // 平台替换 ⑤
     resizable: false,                 // ResizeMode="NoResize"
@@ -472,18 +473,18 @@ struct BluetoothControlNoticeWindow {
 
   private title_text(): string {
     if (this.state === STATE_PREREQUISITE) {
-      return this.wireless ? S_PREREQUISITE_WIRELESS_TITLE : S_PREREQUISITE_WIRED_TITLE;
+      return this.wireless ? S_PREREQUISITE_WIRELESS_TITLE() : S_PREREQUISITE_WIRED_TITLE();
     }
     if (this.state === STATE_WAITING) {
-      return S_WAITING_TITLE;
+      return S_WAITING_TITLE();
     }
     if (this.state === STATE_FAILED) {
-      return S_FAILED_TITLE;
+      return S_FAILED_TITLE();
     }
     if (this.state === STATE_REPORT_MAP_CHANGED) {
-      return S_REPORT_MAP_TITLE;
+      return S_REPORT_MAP_TITLE();
     }
-    return S_PROMPT_TITLE;
+    return S_PROMPT_TITLE();
   }
 
   private body_text(): string {
@@ -516,7 +517,7 @@ struct BluetoothControlNoticeWindow {
     if (this.state === STATE_REPORT_MAP_CHANGED) {
       return this.target_line() + S_REPORT_MAP_DETAIL;
     }
-    return S_PROMPT_DETAIL;
+    return S_PROMPT_DETAIL();
   }
 
   /** 原版把 WaitingTargetFormat 与 detail 用 '\n' 拼起来（只有建议设备名非空时才加）。 */
@@ -524,23 +525,23 @@ struct BluetoothControlNoticeWindow {
     if (this.suggestedDeviceName.trim().length === 0) {
       return '';
     }
-    return S_WAITING_TARGET_FORMAT.replace('{0}', this.suggestedDeviceName) + '\n';
+    return S_WAITING_TARGET_FORMAT().replace('{0}', this.suggestedDeviceName) + '\n';
   }
 
   private status_text(): string {
     if (this.state === STATE_WAITING) {
-      return S_WAITING_STATUS;
+      return S_WAITING_STATUS();
     }
     if (this.state === STATE_PREREQUISITE) {
-      return S_PREREQUISITE_STATUS;
+      return S_PREREQUISITE_STATUS();
     }
     if (this.state === STATE_FAILED) {
-      return S_FAILED_STATUS;
+      return S_FAILED_STATUS();
     }
     if (this.state === STATE_REPORT_MAP_CHANGED) {
-      return S_REPORT_MAP_STATUS;
+      return S_REPORT_MAP_STATUS();
     }
-    return S_PROMPT_AUTO_CLOSE_FORMAT.replace('{0}', this.remainingSeconds.toString());
+    return S_PROMPT_AUTO_CLOSE_FORMAT().replace('{0}', this.remainingSeconds.toString());
   }
 
   /** 原版 ShortcutVisibility：只有 Connected 显示。 */
@@ -571,7 +572,7 @@ struct BluetoothControlNoticeWindow {
 
   /** 原版 CloseButtonText：Prerequisite 是「取消」，其余是「关闭」。 */
   private close_button_text(): string {
-    return this.state === STATE_PREREQUISITE ? S_CANCEL : S_CLOSE;
+    return this.state === STATE_PREREQUISITE ? S_CANCEL() : S_CLOSE();
   }
 
   private step_text(step: number): string {
@@ -590,7 +591,7 @@ struct BluetoothControlNoticeWindow {
     if (step === 3) {
       return S_PAIR_STEP_FOUR;
     }
-    return S_PAIR_STEP_FIVE;
+    return S_PAIR_STEP_FIVE();
   }
 
   // ── 三个按钮的点击（原版 OnCloseClick / OnReportMapAcknowledgedClick /
@@ -731,7 +732,7 @@ struct BluetoothControlNoticeWindow {
       if (this.show_shortcut_badge()) {
         BadgeChip({
           iconName: 'KeyboardShift16',
-          chipText: S_PROMPT_SHORTCUT_FORMAT.replace('{0}', SHORTCUT_TEXT_UNBOUND),
+          chipText: S_PROMPT_SHORTCUT_FORMAT().replace('{0}', SHORTCUT_TEXT_UNBOUND),
           chipMarginEnd: 6,
         });
       }
@@ -749,7 +750,7 @@ struct BluetoothControlNoticeWindow {
       if (this.show_report_map_confirm()) {
         Row() {
           PrimaryButton({
-            label: S_REPORT_MAP_CONFIRM,
+            label: S_REPORT_MAP_CONFIRM(),
             minButtonWidth: 150,
             buttonHeight: 36,
             on_action: (): void => { this.on_report_map_acknowledged(); },
@@ -762,7 +763,7 @@ struct BluetoothControlNoticeWindow {
       if (this.show_prerequisite_confirm()) {
         Row() {
           PrimaryButton({
-            label: S_CONTINUE,
+            label: S_CONTINUE(),
             minButtonWidth: 100,
             buttonHeight: 36,
             on_action: (): void => { this.on_prerequisite_confirm(); },

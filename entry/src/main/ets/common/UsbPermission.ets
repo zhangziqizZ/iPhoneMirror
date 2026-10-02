@@ -18,6 +18,7 @@
 import { abilityAccessCtrl, bundleManager, Permissions } from '@kit.AbilityKit';
 import { BusinessError } from '@ohos.base';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { t } from './i18n';
 
 const DOMAIN: number = 0x0000;
 const TAG: string = 'ImUsbPerm';

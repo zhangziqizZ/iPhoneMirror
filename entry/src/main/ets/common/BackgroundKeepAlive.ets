@@ -1,6 +1,7 @@
 import { common, Want, wantAgent, WantAgent } from '@kit.AbilityKit';
 import { backgroundTaskManager } from '@kit.BackgroundTasksKit';
 import { BusinessError } from '@ohos.base';
+import { t } from './i18n';
 
 // 长时任务（连续任务）保活。
 //

@@ -162,6 +162,7 @@ import {
 import {
   open_media_output_settings,
 } from './MediaOutputSettingsWindow';
+import { t } from '../../common/i18n';
 
 const TAG: string = 'im_projection_settings';
 const DOMAIN: number = 0x0100;

@@ -174,6 +174,7 @@ import {
 } from '../../common/Theme';
 import { FluentSymbol } from '../../common/FluentIcon';
 import { DEVELOPER_MODE_KEY } from '../../common/WindowServices';
+import { t } from '../../common/i18n';
 
 const TAG: string = 'im_about';
 const DOMAIN: number = 0x0100;
@@ -199,9 +200,9 @@ const GITHUB_RELEASES_URL: string = 'https://github.com/zhangziqizZ/iPhoneMirror
 const GITHUB_LICENSE_URL: string = 'https://github.com/zhangziqizZ/iPhoneMirror/blob/main/LICENSE';
 
 /** Strings（逐键标注）。 */
-const S_TITLE: string = '关于';                                    // AboutTitle
-const S_SUBTITLE: string = '应用信息、更新和诊断';                    // AboutSubtitle
-const S_DESCRIPTION: string = '低延迟 iPhone 屏幕投射、录制、直播与虚拟摄像头。';  // AboutDescription
+const S_TITLE = (): string => t('关于');                                    // AboutTitle
+const S_SUBTITLE = (): string => t('应用信息、更新和诊断');// AboutSubtitle
+const S_DESCRIPTION = (): string => t('低延迟 iPhone 屏幕投射、录制、直播与虚拟摄像头。');// AboutDescription
 /**
  * 一个版本的更新记录（关于页「版本更新」按版本分组展示）。
  *
@@ -230,6 +231,13 @@ export class ChangelogRelease {
  * 关于页按版本分组：最新一版默认展开（可收起），旧版本固定折叠只留版本行。
  */
 const CHANGELOG_RELEASES: ChangelogRelease[] = [
+  new ChangelogRelease('1.0.42', '2026-10-02', [
+    '新增：界面语言真正可切换（简体 / 繁中香港 / 英文）—— 此前「界面语言」下拉只是没有作用的选项，选了不改任何界面文案；开发者工具里还直接回一句「当前不支持」',
+    '切换后立即生效：左侧导航、投屏按钮（开始/停止投屏）、画面工具（调节画面/独立窗口/刷新画面/全屏预览/录制与推流）、设置项标签（应用模式/界面语言/应用主题）、页脚按钮与「敬请期待」浮层',
+    '四档：跟随系统 / 简体中文 / 繁體中文（香港）/ English；下拉的选项文案本身也随当前语言变化',
+    '档位跨启动保留（@ohos.data.preferences 显式 putSync+flushSync 落盘，启动时在 UI 装载前读回）',
+    '修复：主窗左侧导航文案此前写在模块级常量数组里、只在加载时求值一次 ⇒ 加了翻译也不会刷新；开发者工具的语言键与主窗不同步，已统一',
+  ]),
   new ChangelogRelease('1.0.41', '2026-10-02', [
     '修复：浅色模式下「设置中心」等次要按钮白字白底不可见 —— 按钮配色改为随主题切换（主窗与各子窗口一致）',
     '调整：关于页「版本更新」旧版本固定折叠，只显示版本号与日期；最新版本仍可展开/收起',
@@ -394,9 +402,9 @@ const CHANGELOG_RELEASES: ChangelogRelease[] = [
 const LATEST_RELEASE_VERSION: string = CHANGELOG_RELEASES[0].version;
 
 /** 「最新」标记文案（标在最新版本的版本行上）。 */
-const S_LATEST_TAG: string = '最新';
+const S_LATEST_TAG = (): string => t('最新');
 /** 「版本更新」区块标题（按版本分组折叠，参考微信更新日志）。 */
-const S_WHATS_NEW: string = '版本更新';
+const S_WHATS_NEW = (): string => t('版本更新');
 
 /**
  * 单个版本的变更分组（「版本更新」里的一项）。
@@ -429,7 +437,7 @@ struct ChangelogGroup {
           .fontColor(MUTED_TEXT)
           .margin({ left: 8, top: 1 });
         if (this.isLatest) {
-          Text(S_LATEST_TAG)
+          Text(S_LATEST_TAG())
             .fontSize(10)
             .fontColor('#FFFFFF')
             .backgroundColor(ACCENT)
@@ -484,42 +492,42 @@ struct ChangelogGroup {
   }
 }
 
-const S_UPDATE_STATUS_TITLE: string = '更新状态';                   // UpdateStatusTitle
-const S_UPDATE_STATUS_READY: string = '可随时检查 GitHub Release 更新。';          // UpdateStatusReady
-const S_CHECK_UPDATES: string = '检查更新';                         // CheckForUpdates
-const S_CHANGELOG: string = '更新日志';                             // Changelog
-const S_LICENSE: string = '许可证信息';                             // LicenseInformation
-const S_TAB_ABOUT: string = '关于';                                 // AboutTitle（TabItem Header）
+const S_UPDATE_STATUS_TITLE = (): string => t('更新状态');// UpdateStatusTitle
+const S_UPDATE_STATUS_READY = (): string => t('可随时检查 GitHub Release 更新。');// UpdateStatusReady
+const S_CHECK_UPDATES = (): string => t('检查更新');// CheckForUpdates
+const S_CHANGELOG = (): string => t('更新日志');// Changelog
+const S_LICENSE = (): string => t('许可证信息');// LicenseInformation
+const S_TAB_ABOUT = (): string => t('关于');// AboutTitle（TabItem Header）
 
 /** 页签「无悬停」哨兵值（原版 SubWindowTabItem 的 IsMouseOver 触发器需要区分未悬停）。 */
 const NAV_TAB_NONE: number = -1;
-const S_TAB_UPDATE_SETTINGS: string = '更新设置';                    // UpdateSettingsTitle
-const S_TAB_DIAGNOSTICS: string = '诊断';                           // DiagnosticsTitle
-const S_UPDATE_SETTINGS_TITLE: string = '更新设置';                  // UpdateSettingsTitle
-const S_UPDATE_SETTINGS_DESC: string = '控制后台检查、自动下载、镜像加速和发布通道。';  // UpdateSettingsDescription
-const S_CHECK_ON_STARTUP: string = '启动时检查更新';                 // CheckOnStartup
-const S_AUTO_DOWNLOAD: string = '发现更新后自动开始下载';             // AutoDownloadUpdates
-const S_ALLOW_MIRROR: string = '自动选择最快更新下载线路';            // AllowUpdateMirrorFallback
+const S_TAB_UPDATE_SETTINGS = (): string => t('更新设置');// UpdateSettingsTitle
+const S_TAB_DIAGNOSTICS = (): string => t('诊断');// DiagnosticsTitle
+const S_UPDATE_SETTINGS_TITLE = (): string => t('更新设置');// UpdateSettingsTitle
+const S_UPDATE_SETTINGS_DESC = (): string => t('控制后台检查、自动下载、镜像加速和发布通道。');// UpdateSettingsDescription
+const S_CHECK_ON_STARTUP = (): string => t('启动时检查更新');// CheckOnStartup
+const S_AUTO_DOWNLOAD = (): string => t('发现更新后自动开始下载');// AutoDownloadUpdates
+const S_ALLOW_MIRROR = (): string => t('自动选择最快更新下载线路');// AllowUpdateMirrorFallback
 const S_ALLOW_MIRROR_DESC: string =
   '测试 GitHub 和全部镜像，仅对可达线路进行 256 KB 下载测速；下载内容仍必须通过官方' +
   '发布摘要中的 SHA-256 校验。';                                     // AllowUpdateMirrorFallbackDescription
-const S_NOTIFY_STABLE: string = '提醒正式版更新';                     // NotifyStableReleases
-const S_NOTIFY_PRERELEASE: string = '提醒 Beta 预览版更新';           // NotifyPrereleaseReleases
-const S_DIAGNOSTICS_TITLE: string = '诊断';                          // DiagnosticsTitle
+const S_NOTIFY_STABLE = (): string => t('提醒正式版更新');// NotifyStableReleases
+const S_NOTIFY_PRERELEASE = (): string => t('提醒 Beta 预览版更新');// NotifyPrereleaseReleases
+const S_DIAGNOSTICS_TITLE = (): string => t('诊断');// DiagnosticsTitle
 const S_DIAGNOSTICS_DESC: string =
   '应用错误、投屏核心和更新流程会写入本地日志，便于排查其他电脑上的问题。';  // DiagnosticsDescription
-const S_DIAGNOSTICS_LOCATION: string = '日志位置';                    // DiagnosticsLocation
+const S_DIAGNOSTICS_LOCATION = (): string => t('日志位置');// DiagnosticsLocation
 const S_RETENTION: string =
   '日志自动限制为单文件 8–16 MB，并清理超过 14 天或总量超过 64 MB 的旧文件。';  // DiagnosticsRetentionSummary
-const S_OPEN_LOGS: string = '打开日志目录';                           // OpenLogs
-const S_CLEAN_LOGS: string = '清理日志和更新缓存';                     // CleanLogs
-const S_LIVE_LOG: string = '实时日志  ·  Ctrl+L';                      // LiveLogHeader
-const S_CLEAR_VIEW: string = '清空视图';                               // ClearView
-const S_LOG_VIEW_CLEARED: string = '日志视图已清空（不会删除磁盘日志）';  // LogViewCleared
+const S_OPEN_LOGS = (): string => t('打开日志目录');// OpenLogs
+const S_CLEAN_LOGS = (): string => t('清理日志和更新缓存');// CleanLogs
+const S_LIVE_LOG = (): string => t('实时日志  ·  Ctrl+L');// LiveLogHeader
+const S_CLEAR_VIEW = (): string => t('清空视图');// ClearView
+const S_LOG_VIEW_CLEARED = (): string => t('日志视图已清空（不会删除磁盘日志）');// LogViewCleared
 /** DiagnosticsCleanedFormat：{0} 文件数 / {1} 释放体积 / {2} 跳过数。 */
-const S_CLEANED: string = '清理完成：删除 %d 个文件，释放 %s；%d 个正在使用或无权限的文件已跳过。';
+const S_CLEANED = (): string => t('清理完成：删除 %d 个文件，释放 %s；%d 个正在使用或无权限的文件已跳过。');
 /** DiagnosticsCleanupFailedFormat：{0} = 错误。 */
-const S_CLEAN_FAILED: string = '清理失败：%s';
+const S_CLEAN_FAILED = (): string => t('清理失败：%s');
 
 /** 平台替换 3：点「检查更新」后的确切原因。 */
 const S_CHECK_UNAVAILABLE: string =
@@ -546,7 +554,7 @@ export function open_about(ctx: common.Context, tabIndex: number): void {
   const spec: SubWindowSpec = {
     name: WINDOW_NAME,
     page: PAGE_PATH,
-    title: S_TITLE,
+    title: S_TITLE(),
     width: 760,
     height: 600,
     resizable: true,                // ResizeMode="CanResize"
@@ -791,7 +799,7 @@ struct AboutWindow {
   /** 当前悬停的页签下标（NAV_TAB_NONE = 无）。对应原版 IsMouseOver 触发器。 */
   @State hoverTabIndex: number = NAV_TAB_NONE;
   @State versionText: string = 'v0.0.0';
-  @State updateStatus: string = S_UPDATE_STATUS_READY;
+  @State updateStatus: string = S_UPDATE_STATUS_READY();
   @State diagnosticPath: string = '';
   @State diagnosticStatus: string = S_RETENTION;
   @State logText: string = '';
@@ -952,7 +960,7 @@ struct AboutWindow {
     try {
       const logs: CleanupResult = cleanup_logs(this.ability_context());
       // 更新缓存目录在鸿蒙侧不存在，两项目恒为 0（原版是 logs + updates 相加）。
-      this.diagnosticStatus = S_CLEANED
+      this.diagnosticStatus = S_CLEANED()
         .replace('%d', logs.deletedFiles.toString())
         .replace('%s', format_bytes(logs.deletedBytes))
         .replace('%d', logs.skippedFiles.toString())
@@ -964,14 +972,14 @@ struct AboutWindow {
       const reason: string = failure !== undefined && failure !== null && failure.message !== undefined
         ? failure.message : '未知原因';
       hilog.error(DOMAIN, TAG, 'manual_cleanup_failed: %{public}s', reason);
-      this.diagnosticStatus = S_CLEAN_FAILED.replace('%s', reason);
+      this.diagnosticStatus = S_CLEAN_FAILED().replace('%s', reason);
     }
   }
 
   /** 平台替换 8：只清视图，不动磁盘。 */
   private on_clear_view(): void {
     this.logText = '';
-    this.diagnosticStatus = S_LOG_VIEW_CLEARED;
+    this.diagnosticStatus = S_LOG_VIEW_CLEARED();
   }
 
   // ── TabItem 1「关于」────────────────────────────────────────────────────
@@ -1016,7 +1024,7 @@ struct AboutWindow {
                     (error as BusinessError).message);
                 }
               });
-            Text(S_DESCRIPTION)
+            Text(S_DESCRIPTION())
               .fontSize(12)
               .fontColor(MUTED_TEXT)
               .lineHeight(18)
@@ -1032,7 +1040,7 @@ struct AboutWindow {
 
         // ── 版本更新（按版本分组折叠，参考微信更新日志）──────────────────
         // 最新一版默认展开，旧版本默认收起；点版本行展开/收起该版本变更。
-        section_title(S_WHATS_NEW);
+        section_title(S_WHATS_NEW());
         ForEach(CHANGELOG_RELEASES, (rel: ChangelogRelease): void => {
           ChangelogGroup({
             version: rel.version,
@@ -1049,7 +1057,7 @@ struct AboutWindow {
           .backgroundColor(BORDER_SOFT)
           .margin({ top: 20, bottom: 20 });
 
-        section_title(S_UPDATE_STATUS_TITLE);
+        section_title(S_UPDATE_STATUS_TITLE());
         Text(this.updateStatus)
           .fontSize(12)
           .fontColor(MUTED_TEXT)
@@ -1060,7 +1068,7 @@ struct AboutWindow {
         // WrapPanel：四个按钮，都 Margin 0,0,8,8
         Flex({ wrap: FlexWrap.Wrap }) {
           PrimaryButton({
-            label: S_CHECK_UPDATES,
+            label: S_CHECK_UPDATES(),
             minButtonWidth: 138,
             on_action: (): void => { this.on_check_updates(); },
           })
@@ -1072,13 +1080,13 @@ struct AboutWindow {
           })
             .margin({ right: 8, bottom: 8 });
           SecondaryButton({
-            label: S_CHANGELOG,
+            label: S_CHANGELOG(),
             minButtonWidth: 108,
             on_action: (): void => { this.on_changelog(); },
           })
             .margin({ right: 8, bottom: 8 });
           SecondaryButton({
-            label: S_LICENSE,
+            label: S_LICENSE(),
             minButtonWidth: 118,
             on_action: (): void => { this.on_license(); },
           })
@@ -1103,8 +1111,8 @@ struct AboutWindow {
   update_settings_tab() {
     Scroll() {
       Column() {
-        section_title(S_UPDATE_SETTINGS_TITLE);
-        Text(S_UPDATE_SETTINGS_DESC)
+        section_title(S_UPDATE_SETTINGS_TITLE());
+        Text(S_UPDATE_SETTINGS_DESC())
           .fontSize(12)
           .fontColor(MUTED_TEXT)
           .lineHeight(18)
@@ -1112,17 +1120,17 @@ struct AboutWindow {
           .margin({ top: 6, bottom: 18 });
 
         SettingsToggle({
-          toggleLabel: S_CHECK_ON_STARTUP,
+          toggleLabel: S_CHECK_ON_STARTUP(),
           checked: this.checkOnStartup,
           on_toggle: (value: boolean): void => { this.checkOnStartup = value; },
         });
         SettingsToggle({
-          toggleLabel: S_AUTO_DOWNLOAD,
+          toggleLabel: S_AUTO_DOWNLOAD(),
           checked: this.autoDownload,
           on_toggle: (value: boolean): void => { this.autoDownload = value; },
         });
         SettingsToggle({
-          toggleLabel: S_ALLOW_MIRROR,
+          toggleLabel: S_ALLOW_MIRROR(),
           checked: this.allowMirrorFallback,
           on_toggle: (value: boolean): void => { this.allowMirrorFallback = value; },
         });
@@ -1134,12 +1142,12 @@ struct AboutWindow {
         .width('100%')
         .margin({ bottom: 14 });
         SettingsToggle({
-          toggleLabel: S_NOTIFY_STABLE,
+          toggleLabel: S_NOTIFY_STABLE(),
           checked: this.notifyStableReleases,
           on_toggle: (value: boolean): void => { this.notifyStableReleases = value; },
         });
         SettingsToggle({
-          toggleLabel: S_NOTIFY_PRERELEASE,
+          toggleLabel: S_NOTIFY_PRERELEASE(),
           checked: this.notifyPrereleaseReleases,
           toggleMarginBottom: 0,
           on_toggle: (value: boolean): void => { this.notifyPrereleaseReleases = value; },
@@ -1162,7 +1170,7 @@ struct AboutWindow {
   diagnostics_tab() {
     Scroll() {
       Column() {
-        section_title(S_DIAGNOSTICS_TITLE);
+        section_title(S_DIAGNOSTICS_TITLE());
         Text(S_DIAGNOSTICS_DESC)
           .fontSize(12)
           .fontColor(MUTED_TEXT)
@@ -1170,7 +1178,7 @@ struct AboutWindow {
           .width('100%')
           .margin({ top: 6, bottom: 18 });
 
-        section_title(S_DIAGNOSTICS_LOCATION);
+        section_title(S_DIAGNOSTICS_LOCATION());
         RoundedTextBox({
           text: this.diagnosticPath,
           readOnly: true,
@@ -1187,13 +1195,13 @@ struct AboutWindow {
 
         Flex({ wrap: FlexWrap.Wrap }) {
           PrimaryButton({
-            label: S_OPEN_LOGS,
+            label: S_OPEN_LOGS(),
             minButtonWidth: 126,
             on_action: (): void => { this.on_open_logs(); },
           })
             .margin({ right: 8, bottom: 8 });
           SecondaryButton({
-            label: S_CLEAN_LOGS,
+            label: S_CLEAN_LOGS(),
             minButtonWidth: 126,
             on_action: (): void => { this.on_clean_logs(); },
           })
@@ -1210,9 +1218,9 @@ struct AboutWindow {
 
         // Grid：LiveLogHeader（左）+「清空视图」（右，Padding 10,5 / MinHeight 32 / 11）
         Row() {
-          section_title(S_LIVE_LOG);
+          section_title(S_LIVE_LOG());
           Row() {
-            Text(S_CLEAR_VIEW)
+            Text(S_CLEAR_VIEW())
               .fontSize(11)
               .fontColor(TEXT);
           }
@@ -1315,9 +1323,9 @@ struct AboutWindow {
   body() {
     Column() {
       Row() {
-        this.tab_item(S_TAB_ABOUT, ABOUT_TAB_INDEX);
-        this.tab_item(S_TAB_UPDATE_SETTINGS, UPDATE_SETTINGS_TAB_INDEX);
-        this.tab_item(S_TAB_DIAGNOSTICS, DIAGNOSTICS_TAB_INDEX);
+        this.tab_item(S_TAB_ABOUT(), ABOUT_TAB_INDEX);
+        this.tab_item(S_TAB_UPDATE_SETTINGS(), UPDATE_SETTINGS_TAB_INDEX);
+        this.tab_item(S_TAB_DIAGNOSTICS(), DIAGNOSTICS_TAB_INDEX);
       }
       .width('100%')
       .padding(2)                                  // 原版 Border Padding="2"
@@ -1347,8 +1355,8 @@ struct AboutWindow {
     Column() {
       SubWindowShell({
       windowName: WINDOW_NAME,
-      title: S_TITLE,
-      subtitle: S_SUBTITLE,
+      title: S_TITLE(),
+      subtitle: S_SUBTITLE(),
       gap: SUBWINDOW_ROW_GAP,       // 行 1 = 16
       hasNotice: false,
       hasFooter: false,

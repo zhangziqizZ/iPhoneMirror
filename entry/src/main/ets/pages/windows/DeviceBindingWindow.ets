@@ -176,6 +176,7 @@ import { BluetoothHidPeripheral, BluetoothHidClient } from '../../common/Bluetoo
 import {
   open_bluetooth_connection, WINDOW_NAME as BLUETOOTH_CONNECTION_WINDOW_NAME,
 } from './BluetoothConnectionWindow';
+import { t } from '../../common/i18n';
 
 const TAG: string = 'im_device_binding';
 const DOMAIN: number = 0x0100;
@@ -192,17 +193,17 @@ export const PROFILES_KEY: string = 'im.deviceBinding.profiles';
 
 // ───────────────────── Strings（逐键标注） ─────────────────────
 
-const S_TITLE: string = '设备绑定器';                          // DeviceBindingTitle
-const S_SUBTITLE: string = '以真实设备档案管理 USB、AirPlay 和 Bluetooth 身份绑定。'; // DeviceBindingSubtitle
-const S_PROFILES: string = '我的设备档案';                     // DeviceBindingProfiles
-const S_ADD_TOOLTIP: string = '添加 AirPlay 设备档案';          // DeviceBindingAddProfileToolTip
-const S_RENAME: string = '重命名档案';                         // DeviceBindingRenameProfile
-const S_DELETE: string = '删除档案';                           // DeviceBindingDeleteProfile
-const S_SELECT_PROFILE: string = '选择设备档案';                // DeviceBindingSelectProfile
-const S_PROFILE_DESC: string = '为此档案选择并管理三种连接身份。'; // DeviceBindingProfileDescription
-const S_WIRED: string = '有线 USB';                            // DeviceBindingWired
-const S_AIRPLAY: string = 'AirPlay';                           // DeviceBindingAirPlay
-const S_BLUETOOTH: string = 'Bluetooth';                      // DeviceBindingBluetooth
+const S_TITLE = (): string => t('设备绑定器');                          // DeviceBindingTitle
+const S_SUBTITLE = (): string => t('以真实设备档案管理 USB、AirPlay 和 Bluetooth 身份绑定。');// DeviceBindingSubtitle
+const S_PROFILES = (): string => t('我的设备档案');// DeviceBindingProfiles
+const S_ADD_TOOLTIP = (): string => t('添加 AirPlay 设备档案');// DeviceBindingAddProfileToolTip
+const S_RENAME = (): string => t('重命名档案');// DeviceBindingRenameProfile
+const S_DELETE = (): string => t('删除档案');// DeviceBindingDeleteProfile
+const S_SELECT_PROFILE = (): string => t('选择设备档案');// DeviceBindingSelectProfile
+const S_PROFILE_DESC = (): string => t('为此档案选择并管理三种连接身份。');// DeviceBindingProfileDescription
+const S_WIRED = (): string => t('有线 USB');// DeviceBindingWired
+const S_AIRPLAY = (): string => t('AirPlay');// DeviceBindingAirPlay
+const S_BLUETOOTH = (): string => t('Bluetooth');// DeviceBindingBluetooth
 const S_WIRED_DESC: string =
   '使用数据线连接 iPhone/iPad，解锁设备并在提示时选择“信任”。已连接的 USB 设备会自动建立档案；' +
   '如需为当前档案更换有线身份，可在下方选择后绑定。';            // DeviceBindingWiredDescription
@@ -213,34 +214,34 @@ const S_BLUETOOTH_DESC: string =
   '点击“连接设备”后，电脑会临时广播 Bluetooth HID 服务。请在 iPhone/iPad 的“设置”→“蓝牙”中' +
   '选择此电脑完成配对，再点击等待窗口中的“下一步”选择 HID 设备。' +
   '完成后只保存绑定，不会启动反控。';                            // DeviceBindingBluetoothDescription
-const S_BIND: string = '绑定选择设备';                          // DeviceBindingBind
-const S_UNBIND: string = '解绑';                               // DeviceBindingUnbind
-const S_CONNECT: string = '连接设备';                           // DeviceBindingConnect
-const S_BOUND_NONE: string = '未绑定';                          // DeviceBindingBound
-const S_BOUND_CONNECTED: string = '已绑定 · 已连接';             // DeviceBindingBoundConnected
-const S_BOUND_MIRRORING: string = '已绑定 · 当前镜像';           // DeviceBindingBoundMirroring
-const S_BOUND_UNAVAILABLE: string = '已绑定 · 当前不可用';       // DeviceBindingBoundUnavailable
-const S_BOUND_DISCONNECTED: string = '已绑定 · 已断开';          // DeviceBindingBoundDisconnected
-const S_MODEL_UNKNOWN: string = '型号信息待获取';                // DeviceBindingModelUnknown
-const S_UNNAMED: string = '未命名设备';                         // DeviceBindingUnnamedDevice
-const S_CREATE_FAILED: string = '无法创建设备档案。';            // DeviceBindingCreateFailed
-const S_RENAME_PROMPT: string = '输入设备档案名称';              // DeviceBindingRenamePrompt
+const S_BIND = (): string => t('绑定选择设备');// DeviceBindingBind
+const S_UNBIND = (): string => t('解绑');                               // DeviceBindingUnbind
+const S_CONNECT = (): string => t('连接设备');// DeviceBindingConnect
+const S_BOUND_NONE = (): string => t('未绑定');// DeviceBindingBound
+const S_BOUND_CONNECTED = (): string => t('已绑定 · 已连接');// DeviceBindingBoundConnected
+const S_BOUND_MIRRORING = (): string => t('已绑定 · 当前镜像');// DeviceBindingBoundMirroring
+const S_BOUND_UNAVAILABLE = (): string => t('已绑定 · 当前不可用');// DeviceBindingBoundUnavailable
+const S_BOUND_DISCONNECTED = (): string => t('已绑定 · 已断开');// DeviceBindingBoundDisconnected
+const S_MODEL_UNKNOWN = (): string => t('型号信息待获取');// DeviceBindingModelUnknown
+const S_UNNAMED = (): string => t('未命名设备');// DeviceBindingUnnamedDevice
+const S_CREATE_FAILED = (): string => t('无法创建设备档案。');// DeviceBindingCreateFailed
+const S_RENAME_PROMPT = (): string => t('输入设备档案名称');// DeviceBindingRenamePrompt
 const S_DELETE_CONFIRMATION: string =
   '删除该设备档案将解除所有已绑定的 USB、AirPlay 和 Bluetooth 身份。是否继续？'; // DeviceBindingDeleteConfirmation
-const S_DELETE_CONFIRM: string = '确认删除？';
-const S_CANCEL: string = '取消';                                // DeviceBindingCancel
-const S_SAVE: string = '应用';                                  // Apply
-const S_USB_OR_AIRPLAY_REQUIRED: string = '请先为该档案绑定 USB 或 AirPlay 设备。'; // DeviceBindingUsbOrAirPlayRequired
-const S_BLUETOOTH_START_FAILED: string = '无法启动 Bluetooth HID 连接。请确认电脑蓝牙已开启。'; // DeviceBindingBluetoothStartFailed
+const S_DELETE_CONFIRM = (): string => t('确认删除？');
+const S_CANCEL = (): string => t('取消');                                // DeviceBindingCancel
+const S_SAVE = (): string => t('应用');// Apply
+const S_USB_OR_AIRPLAY_REQUIRED = (): string => t('请先为该档案绑定 USB 或 AirPlay 设备。');// DeviceBindingUsbOrAirPlayRequired
+const S_BLUETOOTH_START_FAILED = (): string => t('无法启动 Bluetooth HID 连接。请确认电脑蓝牙已开启。');// DeviceBindingBluetoothStartFailed
 
 /** DeviceBindingManager 的拒绝理由（Strings 原文）。 */
-const S_ERR_IDENTITY_REQUIRED: string = '设备身份不能为空。';              // DeviceBindingIdentityRequired
-const S_ERR_ALREADY_BOUND: string = '该设备身份已经绑定到设备档案。';       // DeviceBindingIdentityAlreadyBound
-const S_ERR_BOUND_ELSEWHERE: string = '该设备身份已绑定到另一台设备档案。';  // DeviceBindingIdentityBoundElsewhere
-const S_ERR_PROFILE_NOT_FOUND: string = '设备档案不存在。';                // DeviceBindingProfileNotFound
-const S_ERR_INCOMPATIBLE: string = '检测到的设备型号不一致，无法绑定。';    // DeviceBindingIncompatibleModel
-const S_ERR_NEEDS_CONFIRM: string = '设备型号一致，需要用户确认。';         // DeviceBindingCompatibleNeedsConfirmation
-const S_ERR_UNKNOWN_CONFIRM: string = '无法自动验证设备型号，需要用户确认。'; // DeviceBindingUnknownNeedsConfirmation
+const S_ERR_IDENTITY_REQUIRED = (): string => t('设备身份不能为空。');// DeviceBindingIdentityRequired
+const S_ERR_ALREADY_BOUND = (): string => t('该设备身份已经绑定到设备档案。');// DeviceBindingIdentityAlreadyBound
+const S_ERR_BOUND_ELSEWHERE = (): string => t('该设备身份已绑定到另一台设备档案。');// DeviceBindingIdentityBoundElsewhere
+const S_ERR_PROFILE_NOT_FOUND = (): string => t('设备档案不存在。');// DeviceBindingProfileNotFound
+const S_ERR_INCOMPATIBLE = (): string => t('检测到的设备型号不一致，无法绑定。');// DeviceBindingIncompatibleModel
+const S_ERR_NEEDS_CONFIRM = (): string => t('设备型号一致，需要用户确认。');// DeviceBindingCompatibleNeedsConfirmation
+const S_ERR_UNKNOWN_CONFIRM = (): string => t('无法自动验证设备型号，需要用户确认。');// DeviceBindingUnknownNeedsConfirmation
 
 /**
  * 保存蓝牙绑定失败时的兜底文案。
@@ -250,9 +251,9 @@ const S_ERR_UNKNOWN_CONFIRM: string = '无法自动验证设备型号，需要�
  *   现在蓝牙连接的失败原因是**真的启动失败**，而且原因由 `hid.errorText()` 原样给出
  *   （最常见的是 801 设备不支持 BLE 外设角色），不需要再编一段"平台不支持"的解释。
  */
-const S_BLUETOOTH_SAVE_FAILED: string = '无法保存 Bluetooth 设备绑定。'; // DeviceBindingBluetoothSaveFailed
+const S_BLUETOOTH_SAVE_FAILED = (): string => t('无法保存 Bluetooth 设备绑定。');// DeviceBindingBluetoothSaveFailed
 /** 下拉框在空列表时的占位项（原版此时 ComboBox 是空的）。 */
-const S_NO_OPTION: string = '（没有可选项）';
+const S_NO_OPTION = (): string => t('（没有可选项）');
 
 /** 平台替换 1：没有注入设备列表时的说明。 */
 const S_REASON_NO_DEVICES: string =
@@ -332,11 +333,11 @@ function binding_create(profiles: BindingProfile[], displayName: string,
                         type: DeviceIdentityType, stableId: string,
                         productType: string): BindingResult {
   if (stableId.length === 0) {
-    return new BindingResult(false, S_ERR_IDENTITY_REQUIRED);
+    return new BindingResult(false, S_ERR_IDENTITY_REQUIRED());
   }
   for (let index: number = 0; index < profiles.length; ++index) {
     if (matches(profiles[index], type, stableId)) {
-      return new BindingResult(false, S_ERR_ALREADY_BOUND);
+      return new BindingResult(false, S_ERR_ALREADY_BOUND());
     }
   }
   const profile: BindingProfile = new BindingProfile(
@@ -366,7 +367,7 @@ function binding_bind(profiles: BindingProfile[], profileId: string,
                       deviceName: string, productType: string,
                       userConfirmed: boolean): BindingResult {
   if (stableId.length === 0) {
-    return new BindingResult(false, S_ERR_IDENTITY_REQUIRED);
+    return new BindingResult(false, S_ERR_IDENTITY_REQUIRED());
   }
   let target: BindingProfile | null = null;
   for (let index: number = 0; index < profiles.length; ++index) {
@@ -376,12 +377,12 @@ function binding_bind(profiles: BindingProfile[], profileId: string,
     }
   }
   if (target === null) {
-    return new BindingResult(false, S_ERR_PROFILE_NOT_FOUND);
+    return new BindingResult(false, S_ERR_PROFILE_NOT_FOUND());
   }
   for (let index: number = 0; index < profiles.length; ++index) {
     const other: BindingProfile = profiles[index];
     if (other.id !== profileId && matches(other, type, stableId)) {
-      return new BindingResult(false, S_ERR_BOUND_ELSEWHERE);
+      return new BindingResult(false, S_ERR_BOUND_ELSEWHERE());
     }
   }
   const profile: BindingProfile = target;
@@ -390,11 +391,11 @@ function binding_bind(profiles: BindingProfile[], profileId: string,
   }
   const compatibility: number = compatibility_of(profile, productType);
   if (compatibility === 2) {
-    return new BindingResult(false, S_ERR_INCOMPATIBLE);
+    return new BindingResult(false, S_ERR_INCOMPATIBLE());
   }
   if (!userConfirmed) {
     return new BindingResult(false,
-      compatibility === 1 ? S_ERR_NEEDS_CONFIRM : S_ERR_UNKNOWN_CONFIRM);
+      compatibility === 1 ? S_ERR_NEEDS_CONFIRM() : S_ERR_UNKNOWN_CONFIRM());
   }
   if (type === DeviceIdentityType.Wired) {
     profile.wiredUdid = stableId;
@@ -465,7 +466,7 @@ export function open_device_binding(ctx: common.Context, devices: DeviceViewMode
   const spec: SubWindowSpec = {
     name: WINDOW_NAME,
     page: PAGE_PATH,
-    title: S_TITLE,
+    title: S_TITLE(),
     width: 1040,                      // Width="1040"
     height: 720,                      // Height="720"
     resizable: true,                  // 没写 ResizeMode → WPF 默认 CanResize
@@ -548,7 +549,7 @@ struct DeviceBindingWindow {
   @State wiredChoice: number = -1;
   @State airPlayChoice: number = -1;
   /** 蓝牙卡的状态行（原版 BluetoothStatus 属性）。GATT 连接是活的，所以要轮询。 */
-  @State bluetoothStatusText: string = S_BOUND_NONE;
+  @State bluetoothStatusText: string = S_BOUND_NONE();
   /** 蓝牙状态轮询句柄；-1 = 没在跑。 */
   private bluetoothTimer: number = -1;
   /**
@@ -681,9 +682,9 @@ struct DeviceBindingWindow {
   private profile_title(): string {
     const profile: BindingProfile | null = this.selected_profile();
     if (profile === null) {
-      return S_SELECT_PROFILE;
+      return S_SELECT_PROFILE();
     }
-    return profile.displayName.length > 0 ? profile.displayName : S_UNNAMED;
+    return profile.displayName.length > 0 ? profile.displayName : S_UNNAMED();
   }
 
   /** ProfileListItem.ModelName：指纹产品名 → 产品类型 → 「型号信息待获取」。 */
@@ -691,27 +692,27 @@ struct DeviceBindingWindow {
     if (profile.productType.length > 0) {
       return profile.productType;
     }
-    return S_MODEL_UNKNOWN;
+    return S_MODEL_UNKNOWN();
   }
 
   private profile_name(profile: BindingProfile): string {
-    return profile.displayName.length > 0 ? profile.displayName : S_UNNAMED;
+    return profile.displayName.length > 0 ? profile.displayName : S_UNNAMED();
   }
 
   private wired_status(): string {
     const profile: BindingProfile | null = this.selected_profile();
     if (profile === null || profile.wiredUdid.length === 0) {
-      return S_BOUND_NONE;
+      return S_BOUND_NONE();
     }
-    return this.is_wired_connected(profile) ? S_BOUND_CONNECTED : S_BOUND_UNAVAILABLE;
+    return this.is_wired_connected(profile) ? S_BOUND_CONNECTED() : S_BOUND_UNAVAILABLE();
   }
 
   private airplay_status(): string {
     const profile: BindingProfile | null = this.selected_profile();
     if (profile === null || profile.airPlayId.length === 0) {
-      return S_BOUND_NONE;
+      return S_BOUND_NONE();
     }
-    return this.is_airplay_current(profile) ? S_BOUND_MIRRORING : S_BOUND_UNAVAILABLE;
+    return this.is_airplay_current(profile) ? S_BOUND_MIRRORING() : S_BOUND_UNAVAILABLE();
   }
 
   /**
@@ -729,15 +730,15 @@ struct DeviceBindingWindow {
    * 靠用户点击触发重算会长时间停在过期值上（看起来就像坏了）。
    */
   private refresh_bluetooth_status(): void {
-    let text: string = S_BOUND_NONE;
+    let text: string = S_BOUND_NONE();
     try {
       const profile: BindingProfile | null = this.selected_profile();
       if (profile !== null && profile.bluetoothId.length > 0) {
-        text = S_BOUND_DISCONNECTED;
+        text = S_BOUND_DISCONNECTED();
         const clients: BluetoothHidClient[] = BluetoothHidPeripheral.shared().connectedClients();
         for (let index: number = 0; index < clients.length; ++index) {
           if (same_id(clients[index].address, profile.bluetoothId)) {
-            text = S_BOUND_CONNECTED;
+            text = S_BOUND_CONNECTED();
             break;
           }
         }
@@ -789,7 +790,7 @@ struct DeviceBindingWindow {
       options.push({ value: this.profile_name(this.profiles[index]) });
     }
     if (options.length === 0) {
-      options.push({ value: S_NO_OPTION });
+      options.push({ value: S_NO_OPTION() });
     }
     return options;
   }
@@ -801,7 +802,7 @@ struct DeviceBindingWindow {
       options.push({ value: devices[index].display_name() });
     }
     if (options.length === 0) {
-      options.push({ value: S_NO_OPTION });
+      options.push({ value: S_NO_OPTION() });
     }
     return options;
   }
@@ -809,7 +810,7 @@ struct DeviceBindingWindow {
   /** Select 的当前显示值（下标越界 / 空列表时回退到第一项）。 */
   private device_label(devices: DeviceViewModel[], index: number): string {
     if (devices.length === 0) {
-      return S_NO_OPTION;
+      return S_NO_OPTION();
     }
     const safe: number = index >= 0 && index < devices.length ? index : 0;
     return devices[safe].display_name();
@@ -837,7 +838,7 @@ struct DeviceBindingWindow {
         const result: BindingResult = binding_create(this.profiles, selected.display_name(),
           DeviceIdentityType.AirPlay, selected.udid, selected.productType);
         if (!result.success) {
-          this.statusText = result.error.length > 0 ? result.error : S_CREATE_FAILED;
+          this.statusText = result.error.length > 0 ? result.error : S_CREATE_FAILED();
           return;
         }
         this.persist();
@@ -858,8 +859,8 @@ struct DeviceBindingWindow {
       this.pendingConfirmWired);
     if (!result.success) {
       // 需要用户确认的两种情况 → 记下「已提示」，再点一次即确认（平台替换 4）。
-      this.pendingConfirmWired = result.error === S_ERR_NEEDS_CONFIRM
-        || result.error === S_ERR_UNKNOWN_CONFIRM;
+      this.pendingConfirmWired = result.error === S_ERR_NEEDS_CONFIRM()
+        || result.error === S_ERR_UNKNOWN_CONFIRM();
       this.statusText = result.error;
       return;
     }
@@ -879,8 +880,8 @@ struct DeviceBindingWindow {
       DeviceIdentityType.AirPlay, device.udid, device.display_name(), device.productType,
       this.pendingConfirmAirPlay);
     if (!result.success) {
-      this.pendingConfirmAirPlay = result.error === S_ERR_NEEDS_CONFIRM
-        || result.error === S_ERR_UNKNOWN_CONFIRM;
+      this.pendingConfirmAirPlay = result.error === S_ERR_NEEDS_CONFIRM()
+        || result.error === S_ERR_UNKNOWN_CONFIRM();
       this.statusText = result.error;
       return;
     }
@@ -946,13 +947,13 @@ struct DeviceBindingWindow {
   private on_connect_bluetooth(): void {
     const profile: BindingProfile | null = this.selected_profile();
     if (profile === null) {
-      this.statusText = S_SELECT_PROFILE;
+      this.statusText = S_SELECT_PROFILE();
       return;
     }
     // 原版：Profile.WiredIdentity?.Udid ?? Profile.AirPlayIdentity?.StableId
     const target: string = profile.wiredUdid.length > 0 ? profile.wiredUdid : profile.airPlayId;
     if (target.length === 0) {
-      this.statusText = S_USB_OR_AIRPLAY_REQUIRED;
+      this.statusText = S_USB_OR_AIRPLAY_REQUIRED();
       return;
     }
     if (this.bluetoothFlowActive && this.bluetooth_waiting_window_alive()) {
@@ -979,7 +980,7 @@ struct DeviceBindingWindow {
       this.after_bluetooth_start(profile, target, started);
     }).catch((error: BusinessError): void => {
       this.bluetoothFlowActive = false;
-      this.statusText = S_BLUETOOTH_START_FAILED + ' ' + error.message;
+      this.statusText = S_BLUETOOTH_START_FAILED() + ' ' + error.message;
     });
   }
 
@@ -989,7 +990,7 @@ struct DeviceBindingWindow {
     try {
       const hid: BluetoothHidPeripheral = BluetoothHidPeripheral.shared();
       if (!started) {
-        this.statusText = S_BLUETOOTH_START_FAILED + ' ' + hid.errorText();
+        this.statusText = S_BLUETOOTH_START_FAILED() + ' ' + hid.errorText();
         return;
       }
       this.bluetoothFlowActive = true;
@@ -1014,7 +1015,7 @@ struct DeviceBindingWindow {
     } catch (error) {
       const failure = error as BusinessError;
       this.bluetoothFlowActive = false;
-      this.statusText = S_BLUETOOTH_START_FAILED + ' ' + failure.message;
+      this.statusText = S_BLUETOOTH_START_FAILED() + ' ' + failure.message;
     }
   }
 
@@ -1048,7 +1049,7 @@ struct DeviceBindingWindow {
       } else {
         // 原版弹 DeviceBindingBluetoothSaveFailed；能拿到 DeviceBindingManager 的
         // 具体拒绝理由时优先显示理由（本文件「不吞原因」的一贯做法）。
-        message = result.error.length > 0 ? result.error : S_BLUETOOTH_SAVE_FAILED;
+        message = result.error.length > 0 ? result.error : S_BLUETOOTH_SAVE_FAILED();
       }
     } else {
       message = '未选择 Bluetooth 设备，未保存绑定。';
@@ -1081,7 +1082,7 @@ struct DeviceBindingWindow {
       return;
     }
     if (this.renameText.trim().length === 0) {
-      this.statusText = S_RENAME_PROMPT;
+      this.statusText = S_RENAME_PROMPT();
       return;
     }
     profile.displayName = this.renameText.trim();
@@ -1175,7 +1176,7 @@ struct DeviceBindingWindow {
   left_panel() {
     Column() {
       Row() {
-        Text(S_PROFILES)
+        Text(S_PROFILES())
           .fontSize(16)
           .fontWeight(FontWeight.Bold)
           .fontColor(TEXT)
@@ -1214,14 +1215,14 @@ struct DeviceBindingWindow {
 
         // 平台替换 2：原版是右键菜单，这里改成选中后露出图标，补一句说明。
         Column() {
-          hint_text('选中档案后，右侧两个图标分别是「' + S_RENAME + '」与「' + S_DELETE + '」。');
+          hint_text('选中档案后，右侧两个图标分别是「' + S_RENAME() + '」与「' + S_DELETE() + '」。');
         }
         .width('100%')
         .margin({ top: 8 });
       } else {
         Column() {
           hint_text('还没有设备档案。连接 iPhone/iPad 后会自动建立，'
-            + '也可以点右上角「' + S_ADD_TOOLTIP + '」。');
+            + '也可以点右上角「' + S_ADD_TOOLTIP() + '」。');
         }
         .width('100%')
         .layoutWeight(1);
@@ -1242,17 +1243,17 @@ struct DeviceBindingWindow {
     if (this.renaming) {
       Column() {
         RoundedTextBox({
-          label: S_RENAME_PROMPT,
+          label: S_RENAME_PROMPT(),
           text: this.renameText,
           on_text_change: (value: string): void => { this.renameText = value; },
         });
         Row() {
           BindingButton({
-            label: S_SAVE,
+            label: S_SAVE(),
             on_action: (): void => { this.on_save_rename(); },
           });
           BindingButton({
-            label: S_CANCEL,
+            label: S_CANCEL(),
             on_action: (): void => { this.renaming = false; },
           })
             .margin({ left: 8 });
@@ -1285,7 +1286,7 @@ struct DeviceBindingWindow {
   @Builder
   wired_card() {
     Column() {
-      Text(S_WIRED)
+      Text(S_WIRED())
         .fontSize(14)
         .fontWeight(FontWeight.Bold)
         .fontColor(TEXT);
@@ -1330,13 +1331,13 @@ struct DeviceBindingWindow {
 
       Row() {
         BindingButton({
-          label: S_BIND,
+          label: S_BIND(),
           actionEnabled: this.selected_profile() !== null && !this.has_wired_binding()
             && this.wiredChoice >= 0,
           on_action: (): void => { this.on_bind_wired(); },
         });
         BindingButton({
-          label: S_UNBIND,
+          label: S_UNBIND(),
           actionEnabled: this.has_wired_binding(),
           on_action: (): void => { this.on_unbind(DeviceIdentityType.Wired); },
         })
@@ -1352,7 +1353,7 @@ struct DeviceBindingWindow {
   @Builder
   airplay_card() {
     Column() {
-      Text(S_AIRPLAY)
+      Text(S_AIRPLAY())
         .fontSize(14)
         .fontWeight(FontWeight.Bold)
         .fontColor(TEXT);
@@ -1395,13 +1396,13 @@ struct DeviceBindingWindow {
 
       Row() {
         BindingButton({
-          label: S_BIND,
+          label: S_BIND(),
           actionEnabled: this.selected_profile() !== null && !this.has_airplay_binding()
             && this.airPlayChoice >= 0,
           on_action: (): void => { this.on_bind_airplay(); },
         });
         BindingButton({
-          label: S_UNBIND,
+          label: S_UNBIND(),
           actionEnabled: this.has_airplay_binding(),
           on_action: (): void => { this.on_unbind(DeviceIdentityType.AirPlay); },
         })
@@ -1417,7 +1418,7 @@ struct DeviceBindingWindow {
   @Builder
   bluetooth_card() {
     Column() {
-      Text(S_BLUETOOTH)
+      Text(S_BLUETOOTH())
         .fontSize(14)
         .fontWeight(FontWeight.Bold)
         .fontColor(TEXT);
@@ -1436,12 +1437,12 @@ struct DeviceBindingWindow {
 
       Row() {
         BindingButton({
-          label: S_CONNECT,
+          label: S_CONNECT(),
           actionEnabled: this.selected_profile() !== null,
           on_action: (): void => { this.on_connect_bluetooth(); },
         });
         BindingButton({
-          label: S_UNBIND,
+          label: S_UNBIND(),
           actionEnabled: this.selected_profile() !== null
             && (this.selected_profile() as BindingProfile).bluetoothId.length > 0,
           on_action: (): void => { this.on_unbind(DeviceIdentityType.Bluetooth); },
@@ -1460,7 +1461,7 @@ struct DeviceBindingWindow {
     Scroll() {
       Column() {
         this.title_area();
-        Text(S_PROFILE_DESC)
+        Text(S_PROFILE_DESC())
           .fontSize(11)
           .fontColor(MUTED_TEXT)
           .width('100%')
@@ -1523,8 +1524,8 @@ struct DeviceBindingWindow {
     Column() {
       SubWindowShell({
       windowName: WINDOW_NAME,
-      title: S_TITLE,
-      subtitle: S_SUBTITLE,
+      title: S_TITLE(),
+      subtitle: S_SUBTITLE(),
       gap: 16,                       // 行 1 = 16
       hasNotice: false,
       hasFooter: false,

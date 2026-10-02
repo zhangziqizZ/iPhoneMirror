@@ -36,6 +36,7 @@
 
 import { DeviceViewModel } from './DeviceViewModel';
 import { CORNER_RECTANGULAR, DeviceCornerProfile } from './DeviceCornerProfile';
+import { t } from './i18n';
 
 // ───────────────────── 画面调节（ImageSettingsWindow） ─────────────────────
 

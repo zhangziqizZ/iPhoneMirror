@@ -203,6 +203,8 @@ import {
   UsbProjectionModeOption,
   USB_PROJECTION_MODES,
 } from '../common/UsbProjectionMode';
+import { save_language_preference } from '../common/AppPreferences';
+import { t, set_language, active_lang, LANGUAGE_LABELS, LANG_INDEX_KEY } from '../common/i18n';
 
 // ───────────────────── 选项（对照原版 ItemsSource / ComboBox） ─────────────────────
 
@@ -285,13 +287,12 @@ const APPLICATION_MODE_OPTIONS: SelectOption[] = [
 ];
 
 // Strings: LanguageSystem / LanguageChinese / LanguageTraditionalChineseHongKong / LanguageEnglish
-const LANGUAGE_LABELS: string[] = ['跟随系统', '简体中文', '繁體中文（香港）', 'English'];
-const LANGUAGE_OPTIONS: SelectOption[] = [
-  { value: '跟随系统' },
-  { value: '简体中文' },
-  { value: '繁體中文（香港）' },
-  { value: 'English' },
-];
+function language_labels(): string[] {
+  return LANGUAGE_LABELS[active_lang()];
+}
+function language_options(): SelectOption[] {
+  return language_labels().map((lab: string): SelectOption => ({ value: lab }));
+}
 
 // Strings: ThemeSystem / ThemeDark / ThemeLight
 const THEME_LABELS: string[] = ['跟随系统', '深色', '浅色'];
@@ -352,22 +353,24 @@ class NavEntry {
 //   DeviceBindingNavButton UsbPlug24       20   ← Content=NavDeviceBinding「设备绑定器」
 //   OutputNavButton       VideoRecording20 20
 //   DriverManagerButton   DeveloperBoard20 20
-//   AboutButton (footer)  Info24           20
-const NAV_MAIN: NavEntry[] = [
-  new NavEntry('mirroring', '投屏', 'PhoneDesktop24', 20, '投屏控制'),                 // Strings: NavMirroring(NavMirroringDescription)
-  new NavEntry('devices', '投屏来源', 'ProjectionScreen24', 20, '选择投屏来源'),        // Strings: NavDevices(NavDevicesDescription)
-  new NavEntry('settings', '设置', 'Settings24', 20, '投屏设置'),                      // Strings: NavSettings(NavSettingsDescription)
-  // Strings: NavDeviceBinding「设备绑定器」/ NavDeviceBindingDescription
-  new NavEntry('binding', '设备绑定器', 'UsbPlug24', 20, '管理真实设备的 USB、AirPlay 和 Bluetooth 身份绑定'),
-  new NavEntry('output', '输出', 'VideoRecording20', 20, '输出设置'),                  // Strings: NavOutput(NavOutputDescription)
-  new NavEntry('driver', '驱动', 'DeveloperBoard20', 20, '驱动管理'),                  // Strings: NavDriver(NavDriverDescription)
-];
+function nav_main(): NavEntry[] {
+  return [
+    new NavEntry('mirroring', t('投屏'), 'PhoneDesktop24', 20, t('投屏控制')),                 // Strings: NavMirroring(NavMirroringDescription)
+    new NavEntry('devices', t('投屏来源'), 'ProjectionScreen24', 20, t('选择投屏来源')),        // Strings: NavDevices(NavDevicesDescription)
+    new NavEntry('settings', t('设置'), 'Settings24', 20, t('投屏设置')),                      // Strings: NavSettings(NavSettingsDescription)
+    // Strings: NavDeviceBinding「设备绑定器」/ NavDeviceBindingDescription
+    new NavEntry('binding', t('设备绑定器'), 'UsbPlug24', 20, t('管理真实设备的 USB、AirPlay 和 Bluetooth 身份绑定')),
+    new NavEntry('output', t('输出'), 'VideoRecording20', 20, t('输出设置')),                  // Strings: NavOutput(NavOutputDescription)
+    new NavEntry('driver', t('驱动'), 'DeveloperBoard20', 20, t('驱动管理')),                  // Strings: NavDriver(NavDriverDescription)
+  ];
+}
 // 原版在 DeviceBindingNavButton 之后放 <ui:NavigationViewItemSeparator/>，
 // 即前 4 项属于 MenuItems 的第一组。
 const NAV_SEPARATOR_AT: number = 4;
 // FooterMenuItems
-const NAV_FOOTER: NavEntry =
-  new NavEntry('about', '关于', 'Info24', 20, '关于与更新');                           // Strings: NavAbout(NavAboutDescription)
+function nav_footer(): NavEntry {
+  return new NavEntry('about', t('关于'), 'Info24', 20, t('关于与更新'));
+}                           // Strings: NavAbout(NavAboutDescription)
 
 // ───────────────────────── ShellNavigationItem 模板尺寸（MainWindow.xaml:132–244） ─────────────────────────
 // 图标列 ColumnDefinition Width="48"（图标在该列内居中）；
@@ -1197,7 +1200,7 @@ struct Index {
   /** AirPlay 接收端状态（每轮 poll_status 刷新）；null = 还没查过。 */
   @State airplay: AirPlayStatus | null = null;
   @State usbMode: number = 0;
-  @State languageIndex: number = 0;
+  @State languageIndex: number = AppStorage.get<number>(LANG_INDEX_KEY) ?? 0;
   @State themeIndex: number = 0;
 
   private xcController: XComponentController = new XComponentController();
@@ -2618,7 +2621,7 @@ struct Index {
         });
       })
 
-      ForEach(NAV_MAIN, (entry: NavEntry, index: number): void => {
+      ForEach(nav_main(), (entry: NavEntry, index: number): void => {
         // 原版在「设备绑定器」与「输出」之间有 NavigationViewItemSeparator
         if (index === NAV_SEPARATOR_AT) {
           Divider().color(this.themePalette().CONTROL_DIVIDER).margin({ top: 6, bottom: 6 })
@@ -2630,7 +2633,7 @@ struct Index {
 
       // FooterMenuItems
       Divider().color(this.themePalette().CONTROL_DIVIDER).margin({ bottom: 6 })
-      this.nav_item(NAV_FOOTER)
+      this.nav_item(nav_footer())
     }
     .width(this.navRailWidth)
     .height('100%')
@@ -2690,7 +2693,7 @@ struct Index {
       //   WPF 里 Command 绑定会按 CanExecute 自动置 IsEnabled，所以「不可用」的外观
       //   就是整块（底色+描边+文字）按 0.34 淡化 —— 这里照此实现，并且禁用时不响应点击。
       if (this.has_capture_session()) {
-        Text('停止投屏')                                 // Strings: StopMirroring
+        Text(t('停止投屏'))                                 // Strings: StopMirroring
           .fontSize(14)
           .fontWeight(FontWeight.Medium)
           .fontColor(this.themePalette().CAPTURE_ACTION_TEXT)
@@ -2709,7 +2712,7 @@ struct Index {
             }
           })
       } else {
-        Text('开始投屏')                                 // Strings: StartMirroring
+        Text(t('开始投屏'))                                 // Strings: StartMirroring
           .fontSize(14)
           .fontWeight(FontWeight.Medium)
           .fontColor(this.themePalette().CAPTURE_ACTION_TEXT)
@@ -2751,7 +2754,7 @@ struct Index {
     Column() {
       // 标题行：DevicesTitle + DeviceCount + 关闭（Dismiss20 / 16）
       Row() {
-        Text('投屏来源')                                  // Strings: DevicesTitle
+        Text(t('投屏来源'))                                  // Strings: DevicesTitle
           .fontSize(16)
           .fontWeight(FontWeight.Medium)
           .fontColor(this.themePalette().TEXT)
@@ -2920,7 +2923,7 @@ struct Index {
    */
   private show_not_implemented(action: string): void {
     if (action === 'media') {
-      this.show_coming_soon('录制与推流',
+      this.show_coming_soon(t('录制与推流'),
         '鸿蒙版尚未实现（上游 Windows 走 Media Foundation / FFmpeg 管线）。');
     } else {
       this.show_coming_soon('该功能', '鸿蒙版尚未实现。');
@@ -3097,7 +3100,7 @@ struct Index {
   mirroring_panel() {
     Column() {
       Row() {
-        Text('投屏')                                      // Strings: NavMirroring
+        Text(t('投屏'))                                      // Strings: NavMirroring
           .fontSize(16)
           .fontWeight(FontWeight.Medium)
           .fontColor(this.themePalette().TEXT)
@@ -3137,12 +3140,12 @@ struct Index {
       //   的说明：写成 @Builder 参数的话这些值会冻在首帧，「独立窗口」「刷新画面」
       //   投屏开始了也还是灰的。
       ToolPanelButton({
-        btnLabel: '调节画面', iconName: 'ImageEdit20', iconSize: 16, usable: true,
+        btnLabel: t('调节画面'), iconName: 'ImageEdit20', iconSize: 16, usable: true,
         on_action: (): void => { this.run_tool_action('image'); },
         on_blocked: (): void => { this.block_action('image'); },
       })
       ToolPanelButton({
-        btnLabel: '独立窗口', iconName: 'WindowNew20', iconSize: 15,
+        btnLabel: t('独立窗口'), iconName: 'WindowNew20', iconSize: 15,
         usable: this.can_use_visual_tools(),
         on_action: (): void => { this.run_tool_action('window'); },
         on_blocked: (): void => { this.block_action('window'); },
@@ -3154,13 +3157,13 @@ struct Index {
         on_blocked: (): void => { this.block_action('screenshot'); },
       })
       ToolPanelButton({
-        btnLabel: '刷新画面', iconName: 'ArrowClockwise20', iconSize: 15,
+        btnLabel: t('刷新画面'), iconName: 'ArrowClockwise20', iconSize: 15,
         usable: this.can_use_visual_tools(),
         on_action: (): void => { this.run_tool_action('refresh'); },
         on_blocked: (): void => { this.block_action('refresh'); },
       })
       ToolPanelButton({
-        btnLabel: '全屏预览', iconName: 'FullScreenMaximize20', iconSize: 15,
+        btnLabel: t('全屏预览'), iconName: 'FullScreenMaximize20', iconSize: 15,
         usable: this.can_use_visual_tools() && !this.standaloneOpen,
         on_action: (): void => { this.run_tool_action('fullscreen'); },
         on_blocked: (): void => { this.block_action('fullscreen'); },
@@ -4104,17 +4107,17 @@ struct Index {
         on_blocked: (): void => { this.block_action('bluetooth'); },
       })
       QuickBarButton({
-        btnLabel: '录制与推流', iconName: 'VideoRecording20', iconSize: 16, usable: false,
+        btnLabel: t('录制与推流'), iconName: 'VideoRecording20', iconSize: 16, usable: false,
         on_action: (): void => { this.run_quick_action('media'); },
         on_blocked: (): void => { this.block_action('media'); },
       })
       QuickBarButton({
-        btnLabel: '调节画面', iconName: 'ImageEdit20', iconSize: 16, usable: true,
+        btnLabel: t('调节画面'), iconName: 'ImageEdit20', iconSize: 16, usable: true,
         on_action: (): void => { this.run_quick_action('image'); },
         on_blocked: (): void => { this.block_action('image'); },
       })
       QuickBarButton({
-        btnLabel: '独立窗口', iconName: 'WindowNew20', iconSize: 14,
+        btnLabel: t('独立窗口'), iconName: 'WindowNew20', iconSize: 14,
         usable: this.can_use_visual_tools(),
         on_action: (): void => { this.run_quick_action('window'); },
         on_blocked: (): void => { this.block_action('window'); },
@@ -5241,7 +5244,7 @@ struct Index {
             // MainWindow.xaml 的 AdvancedSettingsCard 里 ApplicationModeLabel → 语言 → 主题
             // （三者的 DetailLabel Margin 都是 0,10,0,5，本文件对应 field_label）。
             // 此前把「应用模式」做成了顶部独立卡片 1，顺序与原版不一致，现按原版收进本卡片。
-            this.field_label('应用模式')                  // Strings: ApplicationModeLabel
+            this.field_label(t('应用模式'))                  // Strings: ApplicationModeLabel
             Select(APPLICATION_MODE_OPTIONS)
               .optionFontColor(this.themePalette().TEXT)
               .selectedOptionFontColor(this.themePalette().TEXT)
@@ -5252,18 +5255,20 @@ struct Index {
               .onSelect((index: number): void => {
                 this.appMode = index;
               })
-            this.field_label('界面语言')                  // Strings: LanguageToolTip
-            Select(LANGUAGE_OPTIONS)
+            this.field_label(t('界面语言'))                  // Strings: LanguageToolTip
+            Select(language_options())
               .optionFontColor(this.themePalette().TEXT)
               .selectedOptionFontColor(this.themePalette().TEXT)
               .selected(this.languageIndex)
-              .value(LANGUAGE_LABELS[this.languageIndex])
+              .value(language_labels()[this.languageIndex])
               .width('100%')
               .fontColor(this.themePalette().TEXT)
               .onSelect((index: number): void => {
                 this.languageIndex = index;
+                set_language(index);
+                save_language_preference(index);
               })
-            this.field_label('应用主题')                  // Strings: ThemeTitle
+            this.field_label(t('应用主题'))                  // Strings: ThemeTitle
             Select(THEME_OPTIONS)
               .optionFontColor(this.themePalette().TEXT)
               .selectedOptionFontColor(this.themePalette().TEXT)
@@ -5366,7 +5371,7 @@ struct Index {
                 },
               })
               SecondaryButton({
-                label: '高级设置',
+                label: t('高级设置'),
                 on_action: (): void => {
                   this.launch_subwindow((ctx: common.Context): void => {
                     open_advanced_settings(ctx, { width: 1280, height: 720, previewOnly: false });
@@ -5374,13 +5379,13 @@ struct Index {
                 },
               })
               SecondaryButton({
-                label: '关于',
+                label: t('关于'),
                 on_action: (): void => {
                   this.launch_subwindow((ctx: common.Context): void => { open_about(ctx, 0); });
                 },
               })
               SecondaryButton({
-                label: '开发者工具',
+                label: t('开发者工具'),
                 on_action: (): void => {
                   this.launch_subwindow((ctx: common.Context): void => { open_developer_tools(ctx); });
                 },

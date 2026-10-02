@@ -120,6 +120,7 @@ import {
   BUTTON_CORNER, DISABLED_OPACITY,
 } from '../../common/Theme';
 import { BluetoothHidPeripheral, BluetoothHidClient } from '../../common/BluetoothHidPeripheral';
+import { t } from '../../common/i18n';
 
 const TAG: string = 'im_bluetooth_binding';
 const DOMAIN: number = 0x0100;
@@ -262,31 +263,30 @@ export function clients_from_hid(): BluetoothClientInfo[] {
 }
 
 /** 原版 BluetoothClientBindingTargetFormat 的 {0}。 */
-const S_TARGET_FORMAT: string = '请选择与“{0}”对应的蓝牙手机';
+const S_TARGET_FORMAT = (): string => t('请选择与“{0}”对应的蓝牙手机');
 /** Strings: BluetoothClientBindingHint */
-const S_HINT: string =
-  '首次使用此投屏设备时，请确认列表中的蓝牙客户端就是当前设备。之后切换选项卡会自动使用此绑定。';
+const S_HINT = (): string => t('首次使用此投屏设备时，请确认列表中的蓝牙客户端就是当前设备。之后切换选项卡会自动使用此绑定。');
 /** Strings: BluetoothClientBindingUnbind */
-const S_UNBIND: string = '解除绑定';
+const S_UNBIND = (): string => t('解除绑定');
 /** Strings: BluetoothClientBindingRefresh（也是刷新按钮的 ToolTip / AutomationProperties.Name） */
-const S_REFRESH: string = '刷新蓝牙客户端';
+const S_REFRESH = (): string => t('刷新蓝牙客户端');
 /** Strings: BluetoothClientBindingConfirm */
-const S_CONFIRM: string = '确认绑定';
+const S_CONFIRM = (): string => t('确认绑定');
 /** Strings: Cancel */
-const S_CANCEL: string = '取消';
+const S_CANCEL = (): string => t('取消');
 /** Strings: BluetoothClientBindingTitle */
-const S_TITLE: string = '绑定蓝牙手机';
+const S_TITLE = (): string => t('绑定蓝牙手机');
 /** 平台替换 ①：列表为演示数据（真实客户端为空时）时才显示的常驻说明。 */
 const S_MOCK_NOTE: string =
   '以上为演示数据：当前没有蓝牙客户端连着本机（真实列表来自 BLE HID 外设的 GATT 连接）。';
 /** 刷新成功但有结果时的格式（原版 BluetoothClientBindingRefresh 的语义）。 */
-const S_REFRESH_OK_FORMAT: string = '已刷新：{0} 个蓝牙客户端';
+const S_REFRESH_OK_FORMAT = (): string => t('已刷新：{0} 个蓝牙客户端');
 /** 刷新成功但一个都没有。 */
 const S_REFRESH_EMPTY: string =
   '已刷新：当前没有蓝牙客户端连接。请先在设置面板开启蓝牙反向控制，再在 iPhone 的「蓝牙」里连接本机。';
 /** 解除绑定的真实结果说明（本移植没有持久化绑定）。 */
-const S_UNBIND_OK_FORMAT: string = '已清除「{0}」的绑定标记（本移植未做持久化，重启后回到原状）';
-const S_UNBIND_NONE: string = '该条目当前没有绑定标记可清除。';
+const S_UNBIND_OK_FORMAT = (): string => t('已清除「{0}」的绑定标记（本移植未做持久化，重启后回到原状）');
+const S_UNBIND_NONE = (): string => t('该条目当前没有绑定标记可清除。');
 
 /** 条目里那颗「解除绑定」按钮（原版 Padding="10,5"、跟随隐式 Button 的圆角 11）。 */
 @Component
@@ -295,7 +295,7 @@ struct UnbindButton {
   on_action: () => void = (): void => {};
 
   build() {
-    Text(S_UNBIND)
+    Text(S_UNBIND())
       .fontSize(12)
       .fontWeight(FontWeight.Bold)
       .fontColor(TEXT)
@@ -357,7 +357,7 @@ export function open_bluetooth_client_binding(ctx: common.Context,
   const spec: SubWindowSpec = {
     name: WINDOW_NAME,
     page: PAGE_PATH,
-    title: S_TITLE,
+    title: S_TITLE(),
     width: 520,                       // Width="520"
     height: 448,                      // Height="448"
     resizable: false,                 // ResizeMode="NoResize"
@@ -400,13 +400,13 @@ struct BluetoothClientBindingWindow {
       this.request = pending;
       this.suggestedId = pending.suggestedId;
       this.apply_clients(pending.clients, pending.suggestedId);
-      this.targetText = S_TARGET_FORMAT.replace('{0}', pending.targetName);
+      this.targetText = S_TARGET_FORMAT().replace('{0}', pending.targetName);
     } else {
       // 直接冷启动这个页面时（DevEco 预览 / 手工拉起），退回 AppStorage 里的标量入参。
       const name: string = AppStorage.get<string>(ARG_KEY_TARGET_NAME) ?? '';
       this.suggestedId = AppStorage.get<string>(ARG_KEY_SUGGESTED_ID) ?? '';
       this.apply_clients([], this.suggestedId);
-      this.targetText = S_TARGET_FORMAT.replace('{0}', name);
+      this.targetText = S_TARGET_FORMAT().replace('{0}', name);
     }
     // 右上角 X 关窗时也走取消（原版 ShowDialog 此时返回 null）。
     SubWindowHost.register_close_hook(WINDOW_NAME, (): boolean => {
@@ -517,7 +517,7 @@ struct BluetoothClientBindingWindow {
     const client: BluetoothClientInfo = this.clients[index];
     this.unavailableText = '';
     if (!client.is_bound()) {
-      this.feedbackText = S_UNBIND_NONE;
+      this.feedbackText = S_UNBIND_NONE();
       return;
     }
     // ★ 必须换成**新数组 + 新对象**：@State 只在引用变化时重新渲染，
@@ -531,7 +531,7 @@ struct BluetoothClientBindingWindow {
         : item);
     }
     this.clients = updated;
-    this.feedbackText = S_UNBIND_OK_FORMAT.replace('{0}', client.display_name());
+    this.feedbackText = S_UNBIND_OK_FORMAT().replace('{0}', client.display_name());
     hilog.info(DOMAIN, TAG, '清除绑定标记: %{public}s', client.id);
   }
 
@@ -551,7 +551,7 @@ struct BluetoothClientBindingWindow {
     this.showMockNote = false;
     this.replace_clients(real, this.suggestedId);
     this.feedbackText = real.length > 0
-      ? S_REFRESH_OK_FORMAT.replace('{0}', `${real.length}`)
+      ? S_REFRESH_OK_FORMAT().replace('{0}', `${real.length}`)
       : S_REFRESH_EMPTY;
     hilog.info(DOMAIN, TAG, '刷新蓝牙客户端：%{public}d 个', real.length);
     this.isRefreshing = false;
@@ -566,7 +566,7 @@ struct BluetoothClientBindingWindow {
         .fontWeight(FontWeight.Bold)
         .fontColor(TEXT)
         .width('100%');
-      Text(S_HINT)
+      Text(S_HINT())
         .fontSize(11)
         .fontColor(MUTED_TEXT)
         .width('100%')
@@ -683,7 +683,7 @@ struct BluetoothClientBindingWindow {
 
     Row() {
       SecondaryButton({
-        label: S_CANCEL,
+        label: S_CANCEL(),
         minButtonWidth: 88,
         on_action: (): void => { this.on_cancel(); },
       });
@@ -692,7 +692,7 @@ struct BluetoothClientBindingWindow {
 
     Row() {
       PrimaryButton({
-        label: S_CONFIRM,
+        label: S_CONFIRM(),
         minButtonWidth: 132,
         actionEnabled: this.can_confirm(),
         on_action: (): void => { this.on_confirm(); },
@@ -705,7 +705,7 @@ struct BluetoothClientBindingWindow {
     Column() {
       SubWindowShell({
       windowName: WINDOW_NAME,
-      title: S_TITLE,
+      title: S_TITLE(),
       subtitle: '',                    // 原版这个窗口的表头没有 SubWindowSubtitle
       gap: SUBWINDOW_ROW_GAP,          // 行 1 = 16
       hasNotice: true,                 // 行 2 = TargetText + Hint

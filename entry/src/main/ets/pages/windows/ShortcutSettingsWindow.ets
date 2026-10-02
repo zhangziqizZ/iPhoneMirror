@@ -137,6 +137,7 @@ import {
   TEXT, MUTED_TEXT, ACCENT, ERROR, BORDER, SHORTCUT_CLEAR_ICON, CONTROL_FILL,
 } from '../../common/Theme';
 import { FluentSymbol } from '../../common/FluentIcon';
+import { t } from '../../common/i18n';
 
 const TAG: string = 'im_shortcut_settings';
 const DOMAIN: number = 0x0100;
@@ -175,14 +176,14 @@ export interface ShortcutBinding {
 }
 
 /** ShortcutSettingsUnbound「未绑定」。 */
-const S_UNBOUND: string = '未绑定';
+const S_UNBOUND = (): string => t('未绑定');
 /** ShortcutModifierControl / Alt / Shift。 */
-const S_MOD_CTRL: string = 'Ctrl';
-const S_MOD_ALT: string = 'Alt';
-const S_MOD_SHIFT: string = 'Shift';
+const S_MOD_CTRL = (): string => t('Ctrl');
+const S_MOD_ALT = (): string => t('Alt');
+const S_MOD_SHIFT = (): string => t('Shift');
 /** ShortcutMouseRight / ShortcutMouseMiddle。 */
-const S_MOUSE_RIGHT: string = '右键';
-const S_MOUSE_MIDDLE: string = '中键';
+const S_MOUSE_RIGHT = (): string => t('右键');
+const S_MOUSE_MIDDLE = (): string => t('中键');
 
 /** 可识别的功能键：F1-F11（F12 按 cs 注释保留给调试器）。 */
 const FUNCTION_KEY_CODES: number[] = [
@@ -344,17 +345,17 @@ function is_bound(binding: ShortcutBinding): boolean {
 /** cs DisplayText：Ctrl / Alt / Shift 之后拼键名，用 " + " 连接。 */
 function display_text(binding: ShortcutBinding): string {
   if (!is_bound(binding)) {
-    return S_UNBOUND;
+    return S_UNBOUND();
   }
   const parts: string[] = [];
   if ((binding.modifiers & MOD_CONTROL) !== 0) {
-    parts.push(S_MOD_CTRL);
+    parts.push(S_MOD_CTRL());
   }
   if ((binding.modifiers & MOD_ALT) !== 0) {
-    parts.push(S_MOD_ALT);
+    parts.push(S_MOD_ALT());
   }
   if ((binding.modifiers & MOD_SHIFT) !== 0) {
-    parts.push(S_MOD_SHIFT);
+    parts.push(S_MOD_SHIFT());
   }
   parts.push(key_label(binding.virtualKey));
   return parts.join(' + ');
@@ -363,10 +364,10 @@ function display_text(binding: ShortcutBinding): string {
 /** cs FormatKey 的前两支（鼠标键）。 */
 function key_label(virtualKey: number): string {
   if (virtualKey === VK_MOUSE_RIGHT) {
-    return S_MOUSE_RIGHT;
+    return S_MOUSE_RIGHT();
   }
   if (virtualKey === VK_MOUSE_MIDDLE) {
-    return S_MOUSE_MIDDLE;
+    return S_MOUSE_MIDDLE();
   }
   let index: number = index_of(FUNCTION_KEY_CODES, virtualKey);
   if (index >= 0) {

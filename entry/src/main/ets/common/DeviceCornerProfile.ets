@@ -41,6 +41,7 @@
 // 将来若有官方外观数据，只改这个文件即可，不必碰渲染器与窗口代码。
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { t } from './i18n';
 
 const DOMAIN: number = 0x0100;
 const TAG: string = 'im_corner_profile';

@@ -42,6 +42,7 @@ import { Want } from '@kit.AbilityKit';
 import { rpc } from '@kit.IPCKit';
 import { BusinessError } from '@ohos.base';
 import { write_driver_state } from '../common/UsbDriverState';
+import { t } from '../common/i18n';
 // 刻意**不** import 'libim_core.so'：本扩展不碰 USB DDK（原因见 record() 的注释）。
 // 顺带的好处是扩展进程不必加载那 3.6MB 原生库（含 FFmpeg/AirPlay 的静态初始化），
 // 只做"被系统按 VID 拉起 + 让驱动配置生效"这一件事。

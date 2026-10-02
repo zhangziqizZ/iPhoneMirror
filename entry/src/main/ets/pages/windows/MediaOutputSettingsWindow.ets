@@ -154,6 +154,7 @@ import {
 import {
   TEXT, MUTED_TEXT, CARD, BORDER, BORDER_SOFT, CONTROL_FILL, PANEL_ALT, DISABLED_OPACITY,
 } from '../../common/Theme';
+import { t } from '../../common/i18n';
 
 const TAG: string = 'im_media_output';
 const DOMAIN: number = 0x0100;

@@ -1,3 +1,4 @@
+import { t } from './i18n';
 // theme_manager.ets —— 双主题方案的状态协调（对应原版 ThemeService）
 //
 // 原版 Win 的 ThemeService：默认 AppTheme.System，监听系统浅深变化实时切换

@@ -93,6 +93,7 @@ import {
   DIALOG_SURFACE, WARNING, WARNING_SURFACE, ON_ACCENT, ERROR, MUTED_TEXT, TEXT,
 } from '../../common/Theme';
 import { FluentSymbol } from '../../common/FluentIcon';
+import { t } from '../../common/i18n';
 
 const TAG: string = 'im_instance_conflict';
 const DOMAIN: number = 0x0100;
@@ -110,14 +111,13 @@ export const ARG_KEY_PREVIEW_ONLY: string = 'im.instanceConflict.previewOnly';
 export const RESULT_KEY_CONTINUE: string = 'im.instanceConflict.continueWithCurrent';
 
 /** Strings（逐键标注）。 */
-const S_TITLE: string = 'iPhoneMirror 已在运行';                    // InstanceConflictTitle
-const S_BODY: string = '检测到另一个 iPhoneMirror 程序正在运行。请选择要保留的窗口。';  // InstanceConflictBody
-const S_HINT: string =
-  '关闭其他窗口后，当前窗口会继续启动；关闭当前窗口不会影响已经运行的投屏。';          // InstanceConflictHint
-const S_CLOSE_OTHER: string = '关闭其他窗口';                        // CloseOtherInstances
-const S_CLOSE_CURRENT: string = '关闭当前窗口';                      // CloseCurrentInstance
+const S_TITLE = (): string => t('iPhoneMirror 已在运行');                    // InstanceConflictTitle
+const S_BODY = (): string => t('检测到另一个 iPhoneMirror 程序正在运行。请选择要保留的窗口。');// InstanceConflictBody
+const S_HINT = (): string => t('关闭其他窗口后，当前窗口会继续启动；关闭当前窗口不会影响已经运行的投屏。');          // InstanceConflictHint
+const S_CLOSE_OTHER = (): string => t('关闭其他窗口');// CloseOtherInstances
+const S_CLOSE_CURRENT = (): string => t('关闭当前窗口');// CloseCurrentInstance
 /** CloseOtherInstancesFailedFormat：{0} = 剩余实例数。 */
-const S_CLOSE_OTHER_FAILED: string = '仍有 %d 个 iPhoneMirror 实例未能关闭。';
+const S_CLOSE_OTHER_FAILED = (): string => t('仍有 %d 个 iPhoneMirror 实例未能关闭。');
 /** 平台替换 1/2：把原因说清楚，不做假动效。 */
 const S_CLOSE_OTHER_REASON: string =
   '鸿蒙不允许应用枚举或结束其它应用进程（原版依赖 Process.GetProcessesByName / Process.Kill ' +
@@ -168,7 +168,7 @@ export function open_instance_conflict(ctx: common.Context, request: InstanceCon
   const spec: SubWindowSpec = {
     name: WINDOW_NAME,
     page: PAGE_PATH,
-    title: S_TITLE,
+    title: S_TITLE(),
     width: 560,
     height: 380,
     resizable: false,               // ResizeMode="NoResize"
@@ -262,7 +262,7 @@ struct InstanceConflictWindow {
       return;
     }
     const count: number = Math.max(this.other_count(), 1);
-    this.errorText = S_CLOSE_OTHER_FAILED.replace('%d', count.toString());
+    this.errorText = S_CLOSE_OTHER_FAILED().replace('%d', count.toString());
     this.reasonText = S_CLOSE_OTHER_REASON;
     hilog.warn(DOMAIN, TAG, 'close_other_instances_unsupported: remaining=%{public}d', count);
   }
@@ -327,13 +327,13 @@ struct InstanceConflictWindow {
 
   @Builder
   notice() {
-    ConflictWarningBanner({ bodyText: S_BODY, hintText: S_HINT });
+    ConflictWarningBanner({ bodyText: S_BODY(), hintText: S_HINT() });
   }
 
   @Builder
   actions() {
     SecondaryButton({
-      label: S_CLOSE_OTHER,
+      label: S_CLOSE_OTHER(),
       minButtonWidth: 150,
       // 原版 previewOnly 时 CloseOtherInstancesButton.IsEnabled = false
       on_action: (): void => { this.on_close_other(); },
@@ -341,7 +341,7 @@ struct InstanceConflictWindow {
       .margin({ right: 8 })
       .enabled(!this.preview_only());
     PrimaryButton({
-      label: S_CLOSE_CURRENT,
+      label: S_CLOSE_CURRENT(),
       minButtonWidth: 150,
       actionEnabled: !this.preview_only(),
       on_action: (): void => { this.on_close_current(); },
@@ -352,7 +352,7 @@ struct InstanceConflictWindow {
     Column() {
       SubWindowShell({
       windowName: WINDOW_NAME,
-      title: S_TITLE,
+      title: S_TITLE(),
       subtitle: '',                 // 原版表头只有标题，没有 SubWindowSubtitle
       shellBackground: DIALOG_SURFACE,
       gap: SUBWINDOW_ROW_GAP,       // 行 1 = 16

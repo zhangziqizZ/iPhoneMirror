@@ -3,6 +3,7 @@ import { abilityAccessCtrl, bundleManager, PermissionRequestResult, Permissions 
 import { BusinessError } from '@ohos.base';
 import common from '@ohos.app.ability.common';
 import deviceInfo from '@ohos.deviceInfo';
+import { t } from './i18n';
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Bluetooth HID 反控外设（HOGP over BLE）

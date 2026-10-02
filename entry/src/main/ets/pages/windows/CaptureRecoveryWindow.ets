@@ -64,6 +64,7 @@ import {
   TEXT, MUTED_TEXT, WARNING, WARNING_SURFACE, ON_ACCENT,
   CONTROL_FILL, BORDER, BORDER_SOFT, DIALOG_SURFACE,
 } from '../../common/Theme';
+import { t } from '../../common/i18n';
 
 const TAG: string = 'im_capture_recovery';
 const DOMAIN: number = 0x0100;

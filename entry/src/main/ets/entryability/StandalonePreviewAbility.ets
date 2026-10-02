@@ -62,6 +62,7 @@ import {
   read_want_string, read_want_number,
   standalone_content_aspect,
 } from '../common/WindowServices';
+import { t } from '../common/i18n';
 
 const TAG: string = 'im_standalone_ability';
 const DOMAIN: number = 0x0101;

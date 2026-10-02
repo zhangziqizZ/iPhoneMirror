@@ -95,6 +95,7 @@ import {
   BluetoothClientInfo, open_bluetooth_client_binding, clients_from_hid,
 } from './BluetoothClientBindingWindow';
 import { BluetoothHidPeripheral } from '../../common/BluetoothHidPeripheral';
+import { t } from '../../common/i18n';
 
 const TAG: string = 'im_bluetooth_connection';
 const DOMAIN: number = 0x0100;
@@ -117,19 +118,17 @@ export class BluetoothConnectionChannel {
 }
 
 /** Strings: DeviceBindingBluetoothWaitingTitle */
-const S_TITLE: string = '等待 Bluetooth HID 连接';
+const S_TITLE = (): string => t('等待 Bluetooth HID 连接');
 /** Strings: DeviceBindingBluetoothBroadcasting（平台替换 ①：「电脑」→「本设备」） */
-const S_BROADCASTING: string = '本设备正在广播 Bluetooth HID 设备';
+const S_BROADCASTING = (): string => t('本设备正在广播 Bluetooth HID 设备');
 /** Strings: DeviceBindingBluetoothWaitingDescription（平台替换 ①：「此电脑」→「此设备」） */
-const S_DESCRIPTION: string =
-  '请在 iPhone/iPad 打开“设置”→“蓝牙”，在设备列表中选择此设备并完成配对。配对成功后返回这里，' +
-  '点击“下一步”选择刚刚连接的 HID 设备。此流程只保存设备绑定，不会启动蓝牙反控。';
+const S_DESCRIPTION = (): string => t('请在 iPhone/iPad 打开“设置”→“蓝牙”，在设备列表中选择此设备并完成配对。配对成功后返回这里，' + '点击“下一步”选择刚刚连接的 HID 设备。此流程只保存设备绑定，不会启动蓝牙反控。');
 /** Strings: DeviceBindingBluetoothWaitingStatus */
-const S_STATUS: string = '等待设备订阅 HID 服务';
+const S_STATUS = (): string => t('等待设备订阅 HID 服务');
 /** Strings: DeviceBindingCancel */
-const S_CANCEL: string = '取消';
+const S_CANCEL = (): string => t('取消');
 /** Strings: DeviceBindingNext */
-const S_NEXT: string = '下一步';
+const S_NEXT = (): string => t('下一步');
 /**
  * 未在广播时的引导。
  *
@@ -158,7 +157,7 @@ export function open_bluetooth_connection(ctx: common.Context,
   const spec: SubWindowSpec = {
     name: WINDOW_NAME,
     page: PAGE_PATH,
-    title: S_TITLE,
+    title: S_TITLE(),
     width: 500,                       // Width="500"
     height: 390,                      // Height="390"
     resizable: false,                 // ResizeMode="NoResize"
@@ -308,12 +307,12 @@ struct BluetoothConnectionWindow {
   @Builder
   body() {
     Column() {
-      Text(S_BROADCASTING)
+      Text(S_BROADCASTING())
         .fontSize(16)
         .fontWeight(FontWeight.Bold)
         .fontColor(TEXT)
         .width('100%');
-      Text(S_DESCRIPTION)
+      Text(S_DESCRIPTION())
         .fontSize(12)
         .fontColor(MUTED_TEXT)
         .width('100%')
@@ -326,7 +325,7 @@ struct BluetoothConnectionWindow {
           iconSize: 18,
           iconColor: ACCENT,
         });
-        Text(this.liveStatus.length > 0 ? this.liveStatus : S_STATUS)
+        Text(this.liveStatus.length > 0 ? this.liveStatus : S_STATUS())
           .fontSize(12)
           .fontColor(TEXT)
           .margin({ left: 9 });
@@ -347,14 +346,14 @@ struct BluetoothConnectionWindow {
   @Builder
   actions() {
     SecondaryButton({
-      label: S_CANCEL,
+      label: S_CANCEL(),
       minButtonWidth: 88,
       on_action: (): void => { this.on_cancel(); },
     });
 
     Row() {
       PrimaryButton({
-        label: S_NEXT,
+        label: S_NEXT(),
         minButtonWidth: 100,
         on_action: (): void => { this.on_next(); },
       });
@@ -366,7 +365,7 @@ struct BluetoothConnectionWindow {
     Column() {
       SubWindowShell({
       windowName: WINDOW_NAME,
-      title: S_TITLE,
+      title: S_TITLE(),
       subtitle: '',                    // 原版这个窗口的表头没有 SubWindowSubtitle
       gap: SUBWINDOW_ROW_GAP,          // 行 1 = 16
       hasNotice: this.noticeText.length > 0,  // 只在真有话要说时才占那一行（内容实时）

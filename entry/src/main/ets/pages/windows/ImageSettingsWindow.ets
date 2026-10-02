@@ -65,6 +65,7 @@ import {
 import {
   WindowServices, ImageAdjustmentValues, ImageAdjustmentResult, ImageSettingsHandle,
 } from '../../common/WindowServices';
+import { t } from '../../common/i18n';
 
 const TAG: string = 'im_image_settings';
 const DOMAIN: number = 0x0100;
