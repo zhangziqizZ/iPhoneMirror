@@ -285,6 +285,7 @@ export interface AirPlayStatus {
   videoNalSps: number;           // 含 SPS（type 7）的帧数
   videoNalPps: number;           // 含 PPS（type 8）的帧数
   videoNalNone: number;          // 一个 NAL 都扫不出来的帧数（>0 = 加密没解开/不是 H.264）
+  videoLatencyMs: number;        // 端到端延迟实测 ms：收包入队→解码出帧（EMA；0=尚无出帧样本）
   videoDecodeErrors: number; // OH_VideoDecoder::OnError 累计次数
   videoDecoderLastError: string; // 最近一次 OnError 的错误码文本
   decoderDiag: DecoderDiag;      // 解码链断点定位（pushed/callbacks/size 等）

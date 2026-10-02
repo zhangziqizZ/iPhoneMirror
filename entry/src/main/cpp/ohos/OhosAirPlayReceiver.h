@@ -98,6 +98,10 @@ typedef struct ImAirPlayStats {
     uint64_t video_nal_sps;             // 含 SPS（type 7）的帧数
     uint64_t video_nal_pps;             // 含 PPS（type 8）的帧数
     uint64_t video_nal_none;            // 一个 NAL 都扫不出来的帧数
+    // 端到端延迟实测（毫秒）：包进接收端队列 → 解码出帧，EMA 平滑。
+    // 口径不含 iPhone 编码与网络前段（那段只有发送端知道）；
+    // 0 = 尚无出帧样本。avg 涨到几百 ms = 解码跟不上实时（对照 video_queue_dropped）。
+    int video_latency_ms;
     // 最后一次 OnError 的错误码文本，例 "ohos avcodec error=14"。
     char video_decoder_last_error[IM_AIRPLAY_TEXT_MAX];
     int clients;                 // 当前连接数

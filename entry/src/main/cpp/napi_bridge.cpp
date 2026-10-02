@@ -713,6 +713,8 @@ napi_value JsAirPlayGetStatus(napi_env env, napi_callback_info /*info*/) {
     set_f64(env, object, "videoNalSps", static_cast<double>(stats.video_nal_sps));
     set_f64(env, object, "videoNalPps", static_cast<double>(stats.video_nal_pps));
     set_f64(env, object, "videoNalNone", static_cast<double>(stats.video_nal_none));
+    // 端到端延迟实测（收包入队 → 解码出帧，EMA；0 = 尚无出帧样本）
+    set_f64(env, object, "videoLatencyMs", static_cast<double>(stats.video_latency_ms));
     set_f64(env, object, "videoDecodeErrors",
         static_cast<double>(stats.video_decode_errors));
     set_utf8(env, object, "videoDecoderLastError",

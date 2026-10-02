@@ -37,6 +37,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdio>
@@ -115,8 +116,17 @@ bool g_video_configured{false};
 struct MirrorPacket {
     std::vector<std::uint8_t> bytes;
     std::int64_t pts{};
+    // 包进入接收端队列的时刻（steady_clock 毫秒）。解码线程出帧后用它算
+    // "收包 → 解码出帧" 的实测延迟（见 g_video_latency_avg_ms）。
+    std::int64_t arrive_ms{0};
     bool is_config{false};   // true = SPS/PPS 参数集
 };
+
+// 单调时钟毫秒（延迟测量专用；不用系统时钟 —— 用户改时间不该让延迟跳变）。
+std::int64_t SteadyNowMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
 
 // 队列上界（按包计）。超过就丢**最旧且非关键**的数据包（参数集永不丢弃）。
 //
@@ -176,6 +186,14 @@ std::atomic<uint64_t> g_param_from_frames{0};
 std::atomic<uint64_t> g_param_reconfigures{0};
 // 因"还没凑齐 SPS+PPS"而没敢送进解码器的数据帧数（旧实现这里是静默丢弃）
 std::atomic<uint64_t> g_frames_waiting_param{0};
+
+// ── 端到端延迟实测（收包入队 → 解码出帧）─────────────────────────────
+// 口径：不含 iPhone 编码与网络传输的前段（那段只有发送端知道），测的是
+// 接收端真正可控的一段 —— 队列等待 + 解码 + 取帧。判读：
+//   avg 涨到几百 ms   → 解码跟不上实时，积压在队列里（同时看 video_queue_dropped）
+//   avg 很小但画面慢  → 慢在渲染/网络，不在这条解码链
+std::atomic<int64_t> g_video_latency_last_ms{0};
+std::atomic<int64_t> g_video_latency_avg_ms{0};   // EMA（α≈0.125），帧间平滑
 
 // Annex-B 逐个 NAL 回调。fn(type, payload_begin, payload_end)。兼容 3/4 字节起始码。
 template <typename Fn>
@@ -573,6 +591,19 @@ void ProcessMirrorPacket(const MirrorPacket &packet) {
         SetError(e.what());
         return;
     }
+    // 延迟实测：这包从进接收端队列到解码出帧花了多久（只在真出帧时计——
+    // 空帧/错误帧的延迟没有意义）。EMA 平滑避免单帧抖动把读数甩来甩去。
+    if (packet.arrive_ms > 0 && !frames.empty()) {
+        const std::int64_t latency_ms = SteadyNowMs() - packet.arrive_ms;
+        if (latency_ms >= 0 && latency_ms < 100000) {
+            g_video_latency_last_ms.store(latency_ms, std::memory_order_relaxed);
+            const std::int64_t prev =
+                g_video_latency_avg_ms.load(std::memory_order_relaxed);
+            const std::int64_t ema =
+                prev <= 0 ? latency_ms : (prev * 7 + latency_ms * 1) / 8;
+            g_video_latency_avg_ms.store(ema, std::memory_order_relaxed);
+        }
+    }
     for (auto &frame : frames) {
         // present() 只是把帧投递给渲染线程（move 进去，避免每帧 1.7MB 拷贝），
         // 所以"有没有像素"要在 move 之前问。
@@ -656,6 +687,7 @@ void RaopVideoProcess(void * /*cls*/, h264_decode_struct *data,
         g_video_config_packets.fetch_add(1, std::memory_order_relaxed);
     }
     packet.pts = static_cast<std::int64_t>(data->pts);
+    packet.arrive_ms = SteadyNowMs();
     // 这行拷贝不能省：raop 的收包循环在回调返回后**立刻** free(data->data)
     // （raop_rtp_mirror.c:413-414 与 479-481），而解码在另一个线程上。
     const std::uint8_t *first = reinterpret_cast<const std::uint8_t *>(data->data);
@@ -970,6 +1002,8 @@ int im_airplay_start(const char *name, const char *password) {
     g_nal_sps.store(0);
     g_nal_pps.store(0);
     g_nal_none.store(0);
+    g_video_latency_last_ms.store(0);
+    g_video_latency_avg_ms.store(0);
     {
         std::lock_guard<std::mutex> err_lock(g_video_decoder_error_lock);
         g_video_decoder_last_error.clear();
@@ -1046,6 +1080,8 @@ void im_airplay_get_stats(ImAirPlayStats *out) {
     out->video_nal_sps = g_nal_sps.load(std::memory_order_relaxed);
     out->video_nal_pps = g_nal_pps.load(std::memory_order_relaxed);
     out->video_nal_none = g_nal_none.load(std::memory_order_relaxed);
+    // 端到端延迟实测（收包入队 → 解码出帧，EMA 平滑；0 = 尚无出帧样本）
+    out->video_latency_ms = static_cast<int>(g_video_latency_avg_ms.load(std::memory_order_relaxed));
     {
         std::lock_guard<std::mutex> err_lock(g_video_decoder_error_lock);
         std::snprintf(out->video_decoder_last_error, sizeof(out->video_decoder_last_error), "%s",

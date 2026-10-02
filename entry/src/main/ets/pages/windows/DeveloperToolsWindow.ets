@@ -573,7 +573,10 @@ struct DeveloperToolsWindow {
   private on_language_changed(index: number): void {
     this.languageIndex = index;
     set_language(index);
-    save_language_preference(index);
+    // 落盘延后一拍：flushSync 是磁盘 I/O，别排在整树重渲染前面（卡顿来源）。
+    setTimeout((): void => {
+      save_language_preference(index);
+    }, 0);
     const label: string = I18N_LANG[active_lang()][index];
     this.statusText = t('界面语言') + ' → ' + label;
     this.refresh_diagnostics();
@@ -648,7 +651,9 @@ struct DeveloperToolsWindow {
     recomputeThemeScheme();
     this.languageIndex = 0;
     set_language(0);
-    save_language_preference(0);
+    setTimeout((): void => {
+      save_language_preference(0);
+    }, 0);
     this.opacityValue = 1;
     this.opacityText = this.format_percent(1);
     this.topmostOn = false;

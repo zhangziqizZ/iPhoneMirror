@@ -238,9 +238,17 @@ export class ChangelogRelease {
  *   用户关心的功能边界 —— 摊成一长列表只会让用户看不清"今天到底改了什么"。
  *   版本号本身仍然逐次 +1（用来核对改动有没有进包），但**条目**按功能合并。
  *
- * 关于页按版本分组：最新一版默认展开（可收起），其余固定折叠只留版本行。
+ * 关于页按版本分组：默认只展开最新一版，**其余版本（含「之前的更新」）也都可以
+ * 点开**（用户 2026-10-02 晚间更正：上一版把旧版做成了不可展开，点不开）。
  */
 const CHANGELOG_RELEASES: ChangelogRelease[] = [
+  new ChangelogRelease('1.0.46', '2026-10-02', [
+    '修复：状态栏「分辨率/帧率/延迟」在 AirPlay 投屏时恒为「—」—— 此前只读 USB 采集状态机，AirPlay 镜像不经过它。现接真值：分辨率=解码器上报的实际流尺寸，帧率=轮询差分实测（EMA 平滑），延迟=C++ 侧实测「收包入队→解码出帧」（不含 iPhone 编码与网络前段）',
+    '修复：音频格不再显示假数据 —— 改为渲染器回读的真实格式（如 48 kHz · 2 ch），没在播就如实「—」（此前只要开关开着就恒显 48 kHz · 2 ch）',
+    '修复：「之前的更新」无法展开 —— 所有版本都可展开/收起，默认只展开最新一版；展开真值收拢到父组件，消除 Prop→State 拷贝时序',
+    '修复：语言切换卡顿 —— 系统层切换调用与偏好落盘延后到整树重渲染之后，「跟随系统」档的系统语言解析改为缓存（原来每次 t() 都打一次系统调用）',
+    '翻译：与原版逐条对齐 —— 解析上游 Strings.xaml 三语词典，222 条译文替换为上游措辞，并补齐状态栏等新增键',
+  ]),
   new ChangelogRelease('1.0.45', '2026-10-02', [
     '新增：关于页「检查更新」真接入 GitHub Release 检查 —— 查询 Releases API 最新 tag 与本机版本比较；拿到就报版本号/日期/说明，仓库还没有 Release 或网络失败都照实说（不许在查不到时说"已是最新"）',
     '「启动时检查更新」开关真正生效：进关于页时静默查一次，只在确认有更新时才改那行状态文案（失败不打扰，避免把自动检查的网络抖动当成按钮坏了）',
@@ -267,10 +275,18 @@ const CHANGELOG_RELEASES: ChangelogRelease[] = [
     '档位跨启动保留（@ohos.data.preferences 显式 putSync+flushSync 落盘，启动时在 UI 装载前读回）',
     '修复：主窗左侧导航文案此前写在模块级常量数组里、只在加载时求值一次 ⇒ 加了翻译也不会刷新；开发者工具的语言键与主窗不同步，已统一',
   ]),
-  // ── 更早的版本（1.0.41 及以前）折为一条 ──────────────────────────────────
-  // 版本号仍在仓库的 CHANGELOG.md 里逐条留档，这里不再占版面。
-  new ChangelogRelease('之前的更新', '1.0.41 及更早', [
-    '1.0.41 及更早共 20 余版的功能条目（蓝牙 HID 反控各轮定位、半透明窗口、开发者模式、权限 ACL 排错、AirPlay 黑屏的多轮渲染/解码修复、截图与全屏预览等）不再逐版摊开 —— 完整历史见仓库 CHANGELOG.md 与 GitHub Releases',
+  // ── 更早的版本（1.0.42 及以前）折为一条 ──────────────────────────────────
+  // 版本号仍在仓库的 CHANGELOG.md / docs/CHANGELOG-archive.md 里逐条留档，
+  // 这里只放按主题归并的摘要（可展开查看）。
+  new ChangelogRelease('之前的更新', '1.0.42 及更早', [
+    '多语言真正可切换（1.0.42）：简体 / 繁中香港 / 英文，档位跨启动保留',
+    '延迟与音频优化（1.0.43）：视频队列 12→3、丢帧避开 IDR、OHAudio 回调粒度对齐 AAC-ELD 480 帧',
+    '黑屏诊断（1.0.44-45）：参数集自愈（配置包实测缺 SPS，改为扫帧内 SPS/PPS 凑齐重建解码器）、NAL 账本、检查更新接入 GitHub Releases',
+    '蓝牙 HID 反控（无感操控）：GATT 服务端自应答、Report Map 建链、单指指针 + 键盘投递、rawDelta 三态判据、接管层与键盘焦点等各轮定位与修复',
+    '窗口与显示：半透明/阴影子窗口、独立窗口 UIAbility、系统装饰两刀、EGLSurface 重挂与多窗口启停回读真值',
+    'AirPlay 音视频：mDNS 原生响应器、音频渲染链（OHAudio）、黑屏的多轮渲染/解码修复',
+    '工程与权限：开发者模式、权限 ACL 排错、USB DDK 权限、后台保活、截图与全屏预览等',
+    '完整逐版记录见仓库 CHANGELOG.md 与 docs/CHANGELOG-archive.md',
   ]),
 ];
 
@@ -283,13 +299,10 @@ const S_WHATS_NEW = (): string => t('版本更新');
 
 /**
  * 单个版本的变更分组（「版本更新」里的一项）。
- * ★ 交互规则（用户 2026-10-02 要求「把旧版本再折叠起来」）：
- *   - **最新版本**默认展开，可点版本行收起/再展开；
- *   - **旧版本固定折叠**：只显示「版本号 + 日期」一行，**不可展开**
- *     （完整历史看仓库里的 CHANGELOG.md / GitHub Releases）。
- * ★ 实现上刻意**不依赖** `aboutToAppear` 里读 `@Prop`：旧版本根本不渲染条目、
- *   没有任何「Prop → State 拷贝」时序 —— 此前 `expanded = isLatest` 的写法在
- *   真机上表现与预期不符（旧版本出现展开态），这里从根上消除该依赖。
+ * ★ 交互规则（用户 2026-10-02 晚间更正）：**所有版本都可展开/收起** ——
+ *   上一版只允许展开最新版（旧版固定折叠、点击无效果），用户实测发现
+ *   「之前的更新」根本点不开。展开真值在父组件的 expandedReleases，
+ *   这里只拿 @Prop 标记 + 点击回调，不存在 Prop→State 拷贝时序。
  */
 @Component
 struct ChangelogGroup {
@@ -297,8 +310,9 @@ struct ChangelogGroup {
   @Prop date: string = '';
   @Prop items: string[] = [];
   @Prop isLatest: boolean = false;
-  /** 仅最新版本使用；旧版本不渲染条目，此状态无意义。初始即展开，无需 Prop 拷贝。 */
-  @State latestExpanded: boolean = true;
+  @Prop expanded: boolean = false;
+  /** 点击版本行时回调父组件切换展开态（默认空实现，避免未接线时空转）。 */
+  onToggle: (version: string) => void = (): void => {};
 
   build(): void {
     Column() {
@@ -321,30 +335,20 @@ struct ChangelogGroup {
             .margin({ left: 8 });
         }
         Blank();
-        if (this.isLatest) {
-          FluentSymbol({
-            iconName: this.latestExpanded ? 'ChevronUp20' : 'ChevronDown20',
-            iconSize: 16,
-            iconColor: MUTED_TEXT,
-          });
-        }
+        FluentSymbol({
+          iconName: this.expanded ? 'ChevronUp20' : 'ChevronDown20',
+          iconSize: 16,
+          iconColor: MUTED_TEXT,
+        });
       }
       .width('100%')
       .alignItems(VerticalAlign.Center)
       .padding({ top: 11, bottom: 11 })
       .onClick((): void => {
-        if (!this.isLatest) {
-          return; // 旧版本固定折叠，点击无效果。
-        }
-        try {
-          this.latestExpanded = !this.latestExpanded;
-        } catch (error) {
-          hilog.warn(DOMAIN, TAG, '版本分组展开/收起失败: %{public}s',
-            (error as BusinessError).message);
-        }
+        this.onToggle(this.version);
       });
 
-      if (this.isLatest && this.latestExpanded) {
+      if (this.expanded) {
         ForEach(this.items, (item: string): void => {
           Row() {
             Text('•')
@@ -711,6 +715,11 @@ struct AboutWindow {
   @StorageLink(DEVELOPER_MODE_KEY) devMode: boolean = false;
   /** 版本号连点计数，达到 7 即触发开发者模式开启；未开启时每点一次 +1。 */
   @State versionTapCount: number = 0;
+  /**
+   * 「版本更新」里处于展开态的版本号集合。真值放父组件：子组件只拿 @Prop 标记
+   * 与回调，展开状态不参与 Prop→State 拷贝时序。默认只展开最新一版。
+   */
+  @State expandedReleases: string[] = [LATEST_RELEASE_VERSION];
   private logTimer: number = -1;
   /** 启动时更新检查的延时句柄（只为等版本号读回来，见 aboutToAppear）。 */
   private startupCheckTimer: number = -1;
@@ -858,6 +867,25 @@ struct AboutWindow {
    * ★ 整个 async 链必须自己接住异常：这里是从 UI 点击回调进来的 async 函数，
    *   未接住的 reject 没人接管 ⇒ 应用被结束（子窗口铁律 1）。
    */
+  /**
+   * 展开/收起某个版本的变更条目（「版本更新」区块）。
+   * 用整表重赋值（filter/concat）而不是就地 splice：@State 数组要靠引用变化
+   * 才能可靠触发重渲染，ForEach 复用子组件后 @Prop expanded 会跟着同步。
+   */
+  private toggle_release(version: string): void {
+    try {
+      if (this.expandedReleases.indexOf(version) >= 0) {
+        this.expandedReleases =
+          this.expandedReleases.filter((v: string): boolean => v !== version);
+      } else {
+        this.expandedReleases = this.expandedReleases.concat([version]);
+      }
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, '版本分组展开/收起失败: %{public}s',
+        (error as BusinessError).message);
+    }
+  }
+
   private on_check_updates(): void {
     this.checkingUpdates = true;
     this.updateStatus = S_UPD_CHECKING();
@@ -1040,7 +1068,7 @@ struct AboutWindow {
         .alignItems(VerticalAlign.Center);
 
         // ── 版本更新（按版本分组折叠，参考微信更新日志）──────────────────
-        // 最新一版默认展开，旧版本默认收起；点版本行展开/收起该版本变更。
+        // 所有版本都可展开/收起；默认只展开最新一版，点版本行切换。
         section_title(S_WHATS_NEW());
         ForEach(CHANGELOG_RELEASES, (rel: ChangelogRelease): void => {
           ChangelogGroup({
@@ -1048,6 +1076,8 @@ struct AboutWindow {
             date: rel.date,
             items: rel.items,
             isLatest: rel.version === LATEST_RELEASE_VERSION,
+            expanded: this.expandedReleases.indexOf(rel.version) >= 0,
+            onToggle: (version: string): void => { this.toggle_release(version); },
           });
         }, (rel: ChangelogRelease): string => rel.version);
 

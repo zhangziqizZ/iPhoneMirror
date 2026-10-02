@@ -1211,6 +1211,11 @@ struct Index {
   @State wirelessName: string = 'iPhoneMirror AirPlay';
   /** AirPlay 接收端状态（每轮 poll_status 刷新）；null = 还没查过。 */
   @State airplay: AirPlayStatus | null = null;
+  /** AirPlay 实测解码帧率（fps，EMA 平滑；0 = 无样本）。UI 显示用，见 poll_status。 */
+  @State airplayFps: number = 0;
+  // 上轮轮询的 decodedFrames / 时间戳（fps 差分用，不参与渲染故不加 @State）。
+  private prevAirplayDecoded: number = -1;
+  private prevAirplayPollMs: number = 0;
   @State usbMode: number = 0;
   @State languageIndex: number = AppStorage.get<number>(LANG_INDEX_KEY) ?? 0;
   @State themeIndex: number = 0;
@@ -1624,6 +1629,31 @@ struct Index {
     }
     this.airplay = airplayGetStatus();
 
+    // AirPlay 实测解码帧率：相邻两轮轮询的 decodedFrames 差分（500ms 轮询周期，
+    // EMA 平滑抗抖动）。分辨率/延迟直接取状态里的实测值，只有帧率需要本地算。
+    {
+      const apNow: AirPlayStatus | null = this.airplay;
+      if (apNow !== null && apNow.running !== 0 && apNow.clients > 0) {
+        const nowMs: number = Date.now();
+        if (this.prevAirplayDecoded >= 0 && this.prevAirplayPollMs > 0) {
+          const dtSec: number = (nowMs - this.prevAirplayPollMs) / 1000;
+          if (dtSec >= 0.2) {
+            const instant: number = (apNow.decodedFrames - this.prevAirplayDecoded) / dtSec;
+            if (instant >= 0 && instant < 240) {
+              this.airplayFps = this.airplayFps > 0
+                ? (this.airplayFps * 0.7 + instant * 0.3)
+                : instant;
+            }
+          }
+        }
+        this.prevAirplayDecoded = apNow.decodedFrames;
+        this.prevAirplayPollMs = nowMs;
+      } else {
+        this.airplayFps = 0;
+        this.prevAirplayDecoded = -1;
+        this.prevAirplayPollMs = 0;
+      }
+    }
     this.capture = getCaptureStatus();
     const status: CaptureStatus | null = this.capture;
     // 状态查询本身失败（state < 0 是 JsGetCaptureStatus 如实给的 -1）不做跃迁判定。
@@ -1926,10 +1956,25 @@ struct Index {
     return STATE_NAMES[status.state];
   }
 
+  /**
+   * 分辨率：USB 走 CaptureStatus；AirPlay 走解码器 OnStreamChanged 上报的
+   * 实际流尺寸（first-hand），渲染帧尺寸兜底 —— 两者都没有才显示「—」。
+   * （此前这一栏只读 USB 状态机，AirPlay 投屏时恒为「—"，看起来像没数据。）
+   */
   resolution_value(): string {
     const status: CaptureStatus | null = this.capture;
     if (status !== null && status.width > 0) {
       return `${status.width}×${status.height}`;
+    }
+    const ap: AirPlayStatus | null = this.airplay;
+    if (ap !== null && ap.running !== 0 && ap.clients > 0) {
+      const d = ap.decoderDiag;
+      const p = ap.previewDiag;
+      const width: number = d.lastStreamWidth > 0 ? d.lastStreamWidth : p.lastFrameWidth;
+      const height: number = d.lastStreamHeight > 0 ? d.lastStreamHeight : p.lastFrameHeight;
+      if (width > 0 && height > 0) {
+        return `${width}×${height}`;
+      }
     }
     return '—';
   }
@@ -1939,6 +1984,10 @@ struct Index {
     if (status !== null && status.state === 4) {
       return `${status.fps.toFixed(1)} fps`;
     }
+    // AirPlay：轮询差分实测的解码帧率（见 poll_status 的 airplayFps）。
+    if (this.airplayFps > 0) {
+      return `${this.airplayFps.toFixed(1)} fps`;
+    }
     return '—';
   }
 
@@ -1947,11 +1996,41 @@ struct Index {
     if (status !== null && status.state === 4) {
       return `${status.latencyMs.toFixed(1)} ms`;
     }
+    // AirPlay：C++ 侧实测「收包入队 → 解码出帧」的 EMA 延迟（不含 iPhone
+    // 编码与网络前段 —— 那段只有发送端知道，如实按这个口径展示）。
+    const ap: AirPlayStatus | null = this.airplay;
+    if (ap !== null && ap.videoLatencyMs > 0) {
+      return `${ap.videoLatencyMs} ms`;
+    }
     return '—';
   }
 
+  /** "48000Hz/2ch/16bit" → "48 kHz · 2 ch"（解析失败返回空串）。 */
+  parse_audio_short(format: string): string {
+    const match: RegExpMatchArray | null = format.match(/(\d+)Hz\/(\d+)ch/);
+    if (match === null) {
+      return '';
+    }
+    const khz: number = Number(match[1]) / 1000;
+    const ch: number = Number(match[2]);
+    return `${khz.toFixed(khz % 1 === 0 ? 0 : 1)} kHz · ${ch} ch`;
+  }
+
+  /**
+   * 音频：真值优先 —— 渲染器在播且拿到格式串时显示实测格式；
+   * 没在播就如实「—」（此前的"开关开着就恒显 48 kHz·2 ch"是假数据）。
+   */
   audio_value(): string {
-    return this.audioEnabled ? '48 kHz · 2 ch' : '—';
+    const ap: AirPlayStatus | null = this.airplay;
+    if (ap !== null && ap.running !== 0 && ap.audioRendererActive === 1
+      && ap.audioFormat.length > 0) {
+      const short: string = this.parse_audio_short(ap.audioFormat);
+      if (short.length > 0) {
+        return short;
+      }
+      return ap.audioFormat;
+    }
+    return '—';
   }
 
   target_resolution_text(): string {
@@ -4710,18 +4789,18 @@ struct Index {
       //   的话这四格会永远停在首帧的「—」，看起来像"统计功能坏了"。
       Row() {
         StatCell({
-          cellLabel: '分辨率', cellValue: this.resolution_value(),
+          cellLabel: t('分辨率'), cellValue: this.resolution_value(),
           cellDetail: this.target_resolution_text(),
         })
         Divider().vertical(true).height(34).color(this.themePalette().CONTROL_DIVIDER)
         StatCell({
-          cellLabel: '帧率', cellValue: this.fps_value(),
+          cellLabel: t('帧率'), cellValue: this.fps_value(),
           cellDetail: this.target_fps_text(),
         })
         Divider().vertical(true).height(34).color(this.themePalette().CONTROL_DIVIDER)
-        StatCell({ cellLabel: '延迟', cellValue: this.latency_value(), cellDetail: '端到端' })
+        StatCell({ cellLabel: t('延迟'), cellValue: this.latency_value(), cellDetail: t('端到端') })
         Divider().vertical(true).height(34).color(this.themePalette().CONTROL_DIVIDER)
-        StatCell({ cellLabel: '音频', cellValue: this.audio_value(), cellDetail: '48 kHz PCM' })
+        StatCell({ cellLabel: t('音频'), cellValue: this.audio_value(), cellDetail: '48 kHz PCM' })
       }
       .width('100%')
       .alignItems(VerticalAlign.Center)
@@ -5317,7 +5396,11 @@ struct Index {
               .onSelect((index: number): void => {
                 this.languageIndex = index;
                 set_language(index);
-                save_language_preference(index);
+                // 落盘（putSync+flushSync）延后一拍：别把磁盘 I/O 排在整树重渲染
+                // 前面 —— 语言切换的卡顿就是这类"顺手同步干重活"攒出来的。
+                setTimeout((): void => {
+                  save_language_preference(index);
+                }, 0);
               })
             this.field_label(t('应用主题'))                  // Strings: ThemeTitle
             Select(THEME_OPTIONS)
