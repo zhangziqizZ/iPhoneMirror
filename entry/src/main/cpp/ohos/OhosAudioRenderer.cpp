@@ -71,16 +71,19 @@ void validate_format(const coremedia::AudioStreamBasicDescription& format) {
 
 // raop 交给我们的一块 PCM 有多大（**帧**数，不是字节）。
 //
-// 上游 third_party/airplayserver 的 raop_buffer.c 把 AAC-ELD 解码输出固定成
-// N_SAMPLE = 480 样本/帧，立体声 16bit 正好 1920 字节 —— 所以无论采样率是
-// 44100 还是 48000，一包永远是 480 帧。整条音频链的粒度（OHAudio 回调大小、
-// 起播门限、高水位）都按这个数对齐，见下面两处调用。
+// 上游 raop_buffer.c 的 pcm_pkt_size 是 4 * N_SAMPLE(480) = 3840 字节，但那是
+// **缓冲区容量上限**，不是"每包实际帧数"—— 实际帧数由 AAC-ELD 解码器给出，
+// 而 FDK 文档明写 "512 or 480 for AAC-LD and AAC-ELD"（aacdecoder_lib.h:823），
+// 取决于 ELD downscale 因子。
 //
-// ★ 之所以要对齐：OHAudio 每次写回调要多少帧，是它自己定的；我们一包只有 480
-//   帧。若回调一开口就要 1024/2048 帧，而我们每 ~11ms 才攒够 480 帧，就会出现
-//   "每次回调都差一点、尾部补零" —— 听感是闷、断续、发虚（正是用户报的形态）。
-//   把回调粒度设成 480，让"取"和"喂"同拍，这类系统性缺口就没有了。
+// ★ 2026-10-02 修正：此前这里写的是"无论采样率是 44100 还是 48000，一包永远是
+//   480 帧"，那句是**我自己推的**（上游只给了容量，没有这个保证）。按它把回调
+//   粒度写死 480，包长变 512 时就重新出现"每次回调差一截、尾部补零"的规律噪声
+//   ——用户报的「声音是炸的」。现在包长以实测为准（observed_packet_frames_）。
 constexpr std::size_t kPacketFrames = 480;
+// 包长上限（AAC-ELD 512 帧 + 余量），用于按包折算门限，避免包长变大时起播/高水位
+// 实际比标称短一截（够不着门槛 ⇒ 一直不起播 ⇒ 没声音）。
+constexpr std::size_t kMaxPacketFrames = 576;
 // 起播前预缓冲几个包。4 包 @44.1kHz ≈ 43ms：够吸收 Wi-Fi 抖动，又不至于让声音
 // 明显落后于画面（原来 3072 帧 ≈ 70ms）。
 constexpr std::size_t kStartupPackets = 4;
@@ -100,12 +103,16 @@ public:
             throw std::invalid_argument("ohos audio: 缓冲区布局计算失败");
         }
         layout_ = *layout;
+        // 门限按**最大**包长折算：包长是 480 还是 512 由解码器决定，我们不能假定。
+        // 用 480 折算而实际来 512，起播门限实际就比标称短一截（够不着 ⇒ 迟迟不
+        // 起播 ⇒ 没声音）；用上限折算则两边都不会够不着，代价只是门限略保守
+        // （多几 ms 预缓冲），这个方向的误差远小于前一个。
         thresholds_ = detail::wasapi_queue_thresholds(
-            /*maximum_packet_frames=*/kPacketFrames,
+            /*maximum_packet_frames=*/kMaxPacketFrames,
             layout_.capacity_frames,
             /*endpoint_buffer_frames=*/0,
-            /*base_startup_frames=*/kPacketFrames * kStartupPackets,
-            /*base_high_water_frames=*/kPacketFrames * kHighWaterPackets);
+            /*base_startup_frames=*/kMaxPacketFrames * kStartupPackets,
+            /*base_high_water_frames=*/kMaxPacketFrames * kHighWaterPackets);
         ring_.assign(layout_.capacity_bytes, 0);
         if (playback_enabled_) {
             open_stream(volume);
@@ -123,6 +130,13 @@ public:
             std::scoped_lock lock(mutex_);
             ++dropped_frames_;
             return;
+        }
+        // ★ 记住实测包长：AAC-ELD 可能是 480 也可能是 512（见 observed_packet_frames_
+        //   的说明）。建流发生在第一个包到达**之前**，那时只能先用 480 兜底；
+        //   拿到真值后，下一次建流（格式变化会重建流）就能用对的粒度。
+        //   这里只记不阻塞，且只取首包的确定值 —— 静音填充包长度相同，不必区分。
+        if (observed_packet_frames_ == 0 && frames > 0) {
+            observed_packet_frames_ = frames;
         }
         std::size_t dropped = 0;
         {
@@ -320,11 +334,19 @@ private:
         // 投屏音频要跟画面同步，用普通通路而不是低时延通路。
         OH_AudioStreamBuilder_SetLatencyMode(builder_, AUDIOSTREAM_LATENCY_MODE_NORMAL);
         OH_AudioStreamBuilder_SetRendererInfo(builder_, AUDIOSTREAM_USAGE_MUSIC);
-        // ★ 让"取"和"喂"同拍：一包 480 帧，回调就要 480 帧。不设的话 OHAudio 按
+        // ★ 让"取"和"喂"同拍：回调开口要多少帧，由我们自己定。不设的话 OHAudio 按
         //   自己的默认粒度开口（通常远大于一包），每回调都差一截、只能在尾部补
         //   静音 —— 那是有规律的可闻噪声，不是偶发欠载。
+        //
+        //   ★ 2026-10-02：AAC-ELD 的包长**不是恒定 480**，FDK 文档明写
+        //   "512 or 480 for AAC-LD and AAC-ELD"（aacdecoder_lib.h:823），
+        //   取决于 ELD downscale 因子。硬写 480 会在包长变 512 时重新制造
+        //   "每次回调差一截、尾部补零"的规律噪声（用户报的「炸」）。
+        //   这里取首次 enqueue 实测到的包长，并对 512 留余量；首包之前的建流
+        //   阶段用 480 兜底（多数会话就是 480）。
         OH_AudioStreamBuilder_SetFrameSizeInCallback(builder_,
-            static_cast<std::int32_t>(kPacketFrames));
+            static_cast<std::int32_t>(observed_packet_frames_ != 0
+                ? observed_packet_frames_ : kPacketFrames));
 
         OH_AudioRenderer_Callbacks callbacks{};
         callbacks.OH_AudioRenderer_OnWriteData = &OhosAudioRenderer::OnWriteData;
@@ -369,7 +391,8 @@ private:
             std::format("ohos audio opened: 请求 {:.0f}Hz/{}ch 回调{}帧；"
                 "实际 {:.0f}Hz 回调{}帧 端点延迟{}ms；"
                 "起播门限{}帧 高水位{}帧 环容{}帧",
-                format_.sample_rate, format_.channels_per_frame, kPacketFrames,
+                format_.sample_rate, format_.channels_per_frame,
+                (observed_packet_frames_ != 0 ? observed_packet_frames_ : kPacketFrames),
                 static_cast<double>(granted_rate), granted_frames, latency_ms,
                 thresholds_.startup_frames, thresholds_.high_water_frames,
                 layout_.capacity_frames));
@@ -397,6 +420,9 @@ private:
     std::uint64_t rendered_frames_{};
     std::uint64_t dropped_frames_{};
     std::uint64_t underruns_{};
+    // ★ 实际观测到的音频包帧数（首包为准）。AAC-ELD 可能是 480 也可能是 512
+    //   （aacdecoder_lib.h:823），写死会把回调粒度设错。0 = 还没收到包。
+    std::size_t observed_packet_frames_{};
     // 是否已经起播（见 pull() 的说明）：只用来决定"预缓冲门限还要不要拦"，
     // 一旦置位就不再复位 —— 复位它等于把"每块都要攒够 70ms"的毛病放回来。
     bool started_{};

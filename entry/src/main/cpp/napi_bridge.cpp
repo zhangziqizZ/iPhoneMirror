@@ -726,6 +726,10 @@ napi_value JsAirPlayGetStatus(napi_env env, napi_callback_info /*info*/) {
     set_f64(env, object, "videoDecoderIdrRequests",
         static_cast<double>(stats.video_decoder_idr_requests));
     set_f64(env, object, "videoDecodeUs", static_cast<double>(stats.video_decode_us));
+    // 冻结读数（1.0.50）：>0 表示此刻画面正在等 IDR（画面定住），而此时队列是
+    // 空的 ⇒ 延迟读数反而低。不摊出来就会被读成"延迟已经好了"。
+    set_f64(env, object, "videoFrozenMs", static_cast<double>(stats.video_frozen_ms));
+    set_f64(env, object, "videoSingleDrops", static_cast<double>(stats.video_single_drops));
     // 端到端延迟实测（收包入队 → 解码出帧，EMA；0 = 尚无出帧样本）
     set_f64(env, object, "videoLatencyMs", static_cast<double>(stats.video_latency_ms));
     set_f64(env, object, "videoDecodeErrors",

@@ -322,6 +322,15 @@ std::atomic<uint64_t> g_video_queue_dropped{0};
 std::atomic<bool> g_video_wait_idr{false};          // 正在等 IDR（等待期间数据帧不入队）
 std::atomic<std::int64_t> g_video_wait_started_ms{0};
 constexpr std::int64_t kResyncGiveupMs = 2000;      // 等 IDR 超时：恢复解码，宁可花屏不冻结
+// ★ 1.0.50：连续溢出多少次才允许冻结等 IDR（原来 1 次就冻）。
+//   高码率高运动内容（抖音）里瞬时抖动经常够到队列上限，一次就冻结会让画面
+//   反复定住 —— 表现为"延迟读数很低、帧率极低"的怪组合。连续 2 次才冻，
+//   单次只丢最旧一帧（花屏会被下一个 IDR 修掉）。
+constexpr int kResyncStreakToFreeze = 2;
+std::atomic<int> g_overflow_streak{0};             // 收包队列连续溢出计数
+std::atomic<int> g_decoder_overflow_streak{0};     // 解码器内部连续溢出计数
+std::atomic<uint64_t> g_single_drops{0};           // 单次溢出时只丢一帧的次数（未冻结）
+std::atomic<std::int64_t> g_frozen_since_ms{0};    // 进入"等 IDR"的时刻（0 = 没冻结）
 std::atomic<uint64_t> g_video_resyncs{0};           // 进入"等 IDR"的次数（>0 = 解码曾跟不上）
 std::atomic<uint64_t> g_video_resync_frames{0};     // 重同步期间被跳过的数据帧数
 std::atomic<uint64_t> g_video_resync_timeouts{0};   // 等 IDR 超时放弃次数（>0 = 关键帧间隔太长）
@@ -616,10 +625,21 @@ void ProcessMirrorPacket(const MirrorPacket &packet) {
     //   注意 needs_idr 是"消费即清"的请求位：这里清一次，下游只需响应一次。
     if (iPhoneMirror::media::im_video_decoder_take_needs_idr() != 0) {
         std::scoped_lock lock(g_video_queue_mutex);
-        g_video_wait_idr.store(true, std::memory_order_relaxed);
-        g_video_wait_started_ms.store(SteadyNowMs(), std::memory_order_relaxed);
-        g_video_queue.clear(); // 已断参考链的帧留着只会继续花屏
+        // 与收包侧同一套判据：**连续**两次内部溢出才冻结（kResyncStreakToFreeze），
+        // 单次只记账不清队。解码器内部溢出意味着已经丢过帧、参考链已断，但"断过
+        // 一次"在高运动内容里是常态，立刻冻结 2 秒的观感（画面定住）远比短暂
+        // 花屏差 —— 而短暂花屏会被下一个 IDR 自我修复。
+        const int streak =
+            g_decoder_overflow_streak.fetch_add(1, std::memory_order_relaxed) + 1;
         g_video_decoder_idr_requests.fetch_add(1, std::memory_order_relaxed);
+        if (streak >= kResyncStreakToFreeze) {
+            g_video_wait_idr.store(true, std::memory_order_relaxed);
+            g_video_wait_started_ms.store(SteadyNowMs(), std::memory_order_relaxed);
+            g_frozen_since_ms.store(SteadyNowMs(), std::memory_order_relaxed);
+            g_video_queue.clear(); // 已断参考链的帧留着只会继续花屏
+        }
+    } else {
+        g_decoder_overflow_streak.store(0, std::memory_order_relaxed);
     }
     std::vector<iPhoneMirror::media::DecodedFrame> frames;
     try {
@@ -684,6 +704,7 @@ void StartVideoDecodeThread() {
     // 上个会话若停在"等 IDR"状态，新会话必须从干净状态起步，否则开头的
     // 数据帧全被当重同步跳掉（表现：连上后画面黑/卡好几秒才出）。
     g_video_wait_idr.store(false, std::memory_order_relaxed);
+    g_frozen_since_ms.store(0, std::memory_order_relaxed);
     g_video_thread_stop = false;
     try {
         g_video_thread = std::thread(VideoDecodeLoop);
@@ -750,32 +771,57 @@ void RaopVideoProcess(void * /*cls*/, h264_decode_struct *data,
                     g_video_wait_started_ms.load(std::memory_order_relaxed);
                 if (ContainsIdr(packet.bytes)) {
                     g_video_wait_idr.store(false, std::memory_order_relaxed);
+                    g_frozen_since_ms.store(0, std::memory_order_relaxed);
                 } else if (waited >= kResyncGiveupMs) {
                     // IDR 迟迟不来（个别会话关键帧间隔极长）：宁可继续出花屏
                     // 也不能把画面永久冻住 —— 放弃等待恢复解码，并如实记账。
                     g_video_wait_idr.store(false, std::memory_order_relaxed);
+                    g_frozen_since_ms.store(0, std::memory_order_relaxed);
                     g_video_resync_timeouts.fetch_add(1, std::memory_order_relaxed);
                 } else {
                     g_video_resync_frames.fetch_add(1, std::memory_order_relaxed);
                     keep = false;
                 }
             }
-            // 队列满 = 解码跟不上实时：清队并进入"等 IDR"重同步。旧策略在这里
-            // 只丢一个包，参考链照样断 —— 这就是花屏的直接来源。
+            // 队列满 = 解码跟不上实时。这里**不能**一满就清队冻结。
+            //
+            // ★ 1.0.48 的策略是"满即清队 + 等 IDR"，对抖音这类高码率高运动内容
+            //   几乎必然触发（瞬时抖动就够到上限 3），而每次冻结要等一个 IDR
+            //   —— 用户 2026-10-02 20:2x 报的症状正是「延迟只有 20–50ms、帧率
+            //   0–5fps」：队列被清空 ⇒ 延迟读数很低；画面大部分时间冻着 ⇒ 帧率
+            //   极低。**"低延迟 + 极低帧率"这个组合本身就是"正在等 IDR"的指纹。**
+            //
+            // 现在的判据：只有**连续**溢出（streak >= 2）才认为解码真的跟不上，
+            // 才清队并等 IDR；单次溢出只丢最旧的一帧（保实时、不冻结）。
+            // 理由：丢一两帧造成的花屏会在下一个 IDR 自我修复、且期间画面仍在动
+            //（观感远好于冻结）；而解码真跟不上时连续溢出必定出现，不会被漏掉。
             if (keep && g_video_queue.size() >= kMirrorQueueLimit) {
                 g_video_queue_dropped.fetch_add(
                     static_cast<std::uint64_t>(g_video_queue.size()),
                     std::memory_order_relaxed);
-                g_video_queue.clear();
-                g_video_resyncs.fetch_add(1, std::memory_order_relaxed);
-                g_video_wait_started_ms.store(SteadyNowMs(), std::memory_order_relaxed);
-                if (ContainsIdr(packet.bytes)) {
-                    g_video_wait_idr.store(false, std::memory_order_relaxed);
+                g_overflow_streak.fetch_add(1, std::memory_order_relaxed);
+                if (g_overflow_streak.load(std::memory_order_relaxed) <
+                    kResyncStreakToFreeze) {
+                    // 单次溢出：只丢最旧一帧，不冻结。
+                    g_video_queue.pop_front();
+                    g_single_drops.fetch_add(1, std::memory_order_relaxed);
                 } else {
-                    g_video_wait_idr.store(true, std::memory_order_relaxed);
-                    g_video_resync_frames.fetch_add(1, std::memory_order_relaxed);
-                    keep = false;
+                    g_video_queue.clear();
+                    g_video_resyncs.fetch_add(1, std::memory_order_relaxed);
+                    g_video_wait_started_ms.store(SteadyNowMs(), std::memory_order_relaxed);
+                    g_frozen_since_ms.store(SteadyNowMs(), std::memory_order_relaxed);
+                    if (ContainsIdr(packet.bytes)) {
+                        g_video_wait_idr.store(false, std::memory_order_relaxed);
+                        g_frozen_since_ms.store(0, std::memory_order_relaxed);
+                    } else {
+                        g_video_wait_idr.store(true, std::memory_order_relaxed);
+                        g_video_resync_frames.fetch_add(1, std::memory_order_relaxed);
+                        keep = false;
+                    }
                 }
+            } else if (keep) {
+                // 这一拍没溢出 = 跟上了 ⇒ 连续计数清零（判据是"连续"不是"累计"）。
+                g_overflow_streak.store(0, std::memory_order_relaxed);
             }
         }
         if (keep) g_video_queue.push_back(std::move(packet));
@@ -1055,6 +1101,12 @@ int im_airplay_start(const char *name, const char *password) {
     g_video_resync_frames.store(0);
     g_video_resync_timeouts.store(0);
     g_video_decoder_idr_requests.store(0);
+    // 冻结判据的连续计数也必须跨会话清零：新会话刚起步时不该带着上一轮的
+    // streak 立刻冻结（否则"连中两次"的判据在会话边界会误触发一次）。
+    g_overflow_streak.store(0);
+    g_decoder_overflow_streak.store(0);
+    g_single_drops.store(0);
+    g_frozen_since_ms.store(0);
     // 参数集/NAL 账本同属"会话级"账：跨会话不清会误导下一次判读
     // （典型症状：上一轮缺 SPS 的计数挂在今天的分母里）。
     g_param_from_config.store(0);
@@ -1142,6 +1194,15 @@ void im_airplay_get_stats(ImAirPlayStats *out) {
         // 只在导出瞬间锁一下拿深度：队列互斥锁绝不能在收包线程外久持。
         std::lock_guard<std::mutex> q_lock(g_video_queue_mutex);
         out->video_queue_depth = static_cast<std::uint32_t>(g_video_queue.size());
+        // ★ 正在"等 IDR"（画面冻结）时如实报出已冻多久。这条是"延迟低但帧率极低"
+        //   的直接解释：不看它会误以为"延迟已经好了"，实际画面是定住的。
+        if (g_video_wait_idr.load(std::memory_order_relaxed)) {
+            const std::int64_t since = g_frozen_since_ms.load(std::memory_order_relaxed);
+            out->video_frozen_ms = since > 0 ? (SteadyNowMs() - since) : 0;
+        } else {
+            out->video_frozen_ms = 0;
+        }
+        out->video_single_drops = g_single_drops.load(std::memory_order_relaxed);
     }
     // 解码器内部堆积（延迟/帧率真根因所在的那一段）。这里主动读一次解码器
     // 诊断快照——它已经能报出待推队列溢出与实测解码耗时。

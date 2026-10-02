@@ -298,6 +298,10 @@ export interface AirPlayStatus {
   videoFillPeak: number;           // 待推队列历史最大深度（只增不减）
   videoDecoderIdrRequests: number; // 因内部溢出而触发的"等 IDR"次数
   videoDecodeUs: number;           // 实测解码耗时 EMA（微秒，0 = 尚未量到）
+  // 冻结诊断（1.0.50）。"延迟低 + 帧率极低" 这个组合必须靠 videoFrozenMs 解释：
+  // 冻结（等 IDR）期间队列被清空 ⇒ 延迟读数反而很低，但画面是定住的。
+  videoFrozenMs: number;           // 本次已冻结的毫秒数（0 = 当前没在冻结）
+  videoSingleDrops: number;        // 单次溢出只丢一帧（未冻结）的次数
   videoLatencyMs: number;        // 端到端延迟实测 ms：收包入队→解码出帧（EMA；0=尚无出帧样本）
   videoDecodeErrors: number; // OH_VideoDecoder::OnError 累计次数
   videoDecoderLastError: string; // 最近一次 OnError 的错误码文本

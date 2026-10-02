@@ -2170,7 +2170,11 @@ struct Index {
           (ap.videoDecodeUs > 0
             ? `、解码耗时${(ap.videoDecodeUs / 1000).toFixed(0)}ms` +
               (ap.videoDecodeUs > 16667 ? '(超一帧预算)' : '')
-            : '');
+            : '') +
+          // ★ 冻结读数（1.0.50）。冻结期间队列被清空 ⇒ 延迟读数反而很低，
+          //   不显式说出来就会被读成"延迟已经好了"，而实际画面是定住的。
+          (ap.videoFrozenMs > 0 ? `、★画面冻结中${ap.videoFrozenMs}ms(在等关键帧)` : '') +
+          (ap.videoSingleDrops > 0 ? `、单次丢帧${ap.videoSingleDrops}` : '');
         // 判读指引：软解耗时超预算时直接给出结论，省得用户自己算。
         const verdict: string = (ap.videoDecodeUs > 16667 &&
           d.decoderName.indexOf('(sw)') >= 0)

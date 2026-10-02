@@ -338,18 +338,43 @@ raop_buffer_queue(raop_buffer_t *raop_buffer, unsigned char *data, unsigned shor
         logger_log(raop_buffer->logger, LOGGER_ERR, "aacDecoder_Fill error : %x", ret);
     }
 	ret = aacDecoder_DecodeFrame(raop_buffer->phandle, entry->audio_buffer, pcm_pkt_size, fdk_flags);
-	entry->audio_buffer_len = pcm_pkt_size;
-	if (ret != AAC_DEC_OK) {
-		logger_log(raop_buffer->logger, LOGGER_ERR, "aacDecoder_DecodeFrame error : 0x%x", ret);
-	}
 
+	// ★ 2026-10-02 修复「声音是炸的」（爆音）。
+	//
+	//   AAC-ELD 的输出帧长**不是恒定 480** —— FDK 文档明写
+	//   "512 or 480 for AAC-LD and AAC-ELD"（aacdecoder_lib.h:823），取决于 ELD
+	//   的 downscale 因子：960/2=480、1024/2=512。而这里把 audio_buffer_len
+	//   **无条件**写成 pcm_pkt_size（= 4*480 帧 = 3840 字节），于是解码器实际只写
+	//   了 512*2ch*2byte*4 = 8192… 取不足时，后面一段是**上一包留在缓冲里的
+	//   残留**，被当成当前音频继续播放 ⇒ 周期性炸（爆音/断裂）。
+	//   抖音这类高码率内容最容易触发：码率高 ⇒ 两种包长在会话里交替出现。
+	//
+	//   注意下面用 streamInfo->frameSize 算 bits_per_sample 那行说明原作者知道
+	//   frameSize 会变，只是漏了"帧数/字节数"本身没跟着变。
+	//
+	//   修法：以 frameSize × numChannels × 2 为准算真实字节数；取不到就退回
+	//   pcm_pkt_size（保持原行为，不引入新的静默失败）。
+	int decoded_bytes = pcm_pkt_size;
 	CStreamInfo* streamInfo = aacDecoder_GetStreamInfo(raop_buffer->phandle);
 	if (streamInfo != NULL) {
 		entry->sample_rate = streamInfo->sampleRate;
 		entry->channels = streamInfo->numChannels;
-		if (entry->channels != 0 && streamInfo->frameSize != 0) {
-			entry->bits_per_sample = pcm_pkt_size * 8 / (streamInfo->frameSize * entry->channels);
+		if (streamInfo->frameSize > 0 && streamInfo->numChannels > 0) {
+			// 每帧字节 = 帧长 × 声道 × 2（16bit）。本链路 ELD 一律 16bit。
+			const int bytes_per_frame =
+			    streamInfo->frameSize * streamInfo->numChannels * 2;
+			if (bytes_per_frame > 0 && bytes_per_frame <= pcm_pkt_size) {
+				decoded_bytes = bytes_per_frame;
+			}
 		}
+		if (entry->channels != 0 && streamInfo->frameSize != 0) {
+			entry->bits_per_sample =
+			    decoded_bytes * 8 / (streamInfo->frameSize * entry->channels);
+		}
+	}
+	entry->audio_buffer_len = decoded_bytes;
+	if (ret != AAC_DEC_OK) {
+		logger_log(raop_buffer->logger, LOGGER_ERR, "aacDecoder_DecodeFrame error : 0x%x", ret);
 	}
 #ifdef DUMP_AUDIO
     if (file_pcm != NULL) {

@@ -112,6 +112,12 @@ typedef struct ImAirPlayStats {
     uint32_t video_fill_peak;          // 待推队列历史最大深度（只增不减）
     uint64_t video_decoder_idr_requests; // 因内部溢出而触发的"等 IDR"次数
     uint64_t video_decode_us;          // 实测解码耗时 EMA（微秒，0 = 未量到）
+    // ── 冻结诊断（1.0.50）────────────────────────────────────────────────
+    // video_frozen_ms > 0 = **此刻画面正在等 IDR、也就是定住的**。冻结期间队列
+    // 被清空 ⇒ 延迟读数反而很低，所以"低延迟 + 低帧率"这个组合必须靠它解释，
+    // 否则会误判成"延迟已经修好了"。
+    int video_frozen_ms;               // 本次已冻结的毫秒数（0 = 当前没在冻结）
+    uint64_t video_single_drops;       // 单次溢出只丢一帧（未冻结）的次数
     // 端到端延迟实测（毫秒）：包进接收端队列 → 解码出帧，EMA 平滑。
     // 口径不含 iPhone 编码与网络前段（那段只有发送端知道）；
     // 0 = 尚无出帧样本。avg 涨到几百 ms = 解码跟不上实时（对照 video_queue_dropped）。
