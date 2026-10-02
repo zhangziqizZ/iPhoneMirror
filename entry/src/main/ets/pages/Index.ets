@@ -161,6 +161,7 @@ import {
   STANDALONE_CHROME_NOTICE_KEY,
   STANDALONE_NOTICE_KEY,
   REVERSE_CONTROL_DISABLED_KEY,
+  HIDE_POINTER_ON_TAKEOVER_KEY,
   DEVELOPER_MODE_KEY,
   ACRYLIC_WINDOW_KEY,
   ACRYLIC_ALPHA_KEY,
@@ -171,7 +172,7 @@ import {
   PERSIST_WRITE_RESULT_KEY,
 } from '../common/WindowServices';
 import { SecondaryButton, SUBWINDOW_ERROR_KEY, SubWindowHost } from '../common/SubWindow';
-import { save_acrylic_preferences } from '../common/AppPreferences';
+import { save_acrylic_preferences, save_hide_pointer_preference } from '../common/AppPreferences';
 import {
   open_image_settings,
   DEFAULT_BRIGHTNESS, DEFAULT_CONTRAST, DEFAULT_SATURATION, DEFAULT_GAMMA,
@@ -1062,6 +1063,17 @@ struct Index {
   private pointerHidden: boolean = false;
   /** 指针可见性接口不可用时置位（能力不支持），之后不再反复重试与刷日志。 */
   private pointerHideUnsupported: boolean = false;
+
+  /**
+   * 反控接管期间**要不要**收起本地指针。
+   *
+   * ★ 默认 false = 保持可见。见 WindowServices 里 HIDE_POINTER_ON_TAKEOVER_KEY
+   *   的说明：上游之所以敢藏，是因为它那边对端指针一定能动；这边蓝牙 HID 反控
+   *   还是实验性的，藏掉本地指针等于把用户唯一的位置反馈也拿走。用户明确要求
+   *   「反控时鼠标不要消失」，所以默认可见，想要原版行为的人自己在设置里打开。
+   */
+  @State hidePointerOnTakeover: boolean =
+    AppStorage.get<boolean>(HIDE_POINTER_ON_TAKEOVER_KEY) ?? false;
 
   /**
    * 蓝牙外设正在启动中。
@@ -3439,7 +3451,12 @@ struct Index {
       return;
     }
     try {
-      const shouldHide: boolean = ReverseControlInput.shared().isTakingOver();
+      // ★ 偏好位关着 ⇒ shouldHide 恒为 false ⇒ 顺带把"上一轮藏起来的"恢复
+      //   回来（下面那句 setPointerVisibleSync 会在状态不一致时真去调一次）。
+      //   所以这里**不能**因为偏好关就早退 —— 早退就等于放弃自愈。
+      const wantHide: boolean = AppStorage.get<boolean>(HIDE_POINTER_ON_TAKEOVER_KEY)
+        ?? this.hidePointerOnTakeover;
+      const shouldHide: boolean = wantHide && ReverseControlInput.shared().isTakingOver();
       if (shouldHide === this.pointerHidden) {
         return;
       }
@@ -5285,6 +5302,33 @@ struct Index {
                 // 同步给系统，让系统三键跟着换色（不然深色下三键是深色的，看不见）。
                 this.sync_system_color_mode();
               })
+
+            // ── 反控接管时是否收起本地指针 ──
+            // ★ 默认「保持可见」：反控这条链路还是实验性的，对端指针不一定动得
+            //   起来，藏掉本地指针就等于把唯一的位置反馈也拿走（用户明确要求
+            //   「反控时鼠标不要消失」）。想要上游那种观感的自己打开。
+            Row() {
+              Text(`${t('反控接管时收起指针')}：${this.hidePointerOnTakeover ? '开' : '关'}`)
+                .fontSize(10)
+                .fontColor(this.themePalette().MUTED_TEXT)
+              Blank()
+              Button(this.hidePointerOnTakeover ? '关闭' : '开启')
+                .fontSize(11)
+                .fontColor(this.themePalette().TEXT)
+                .backgroundColor(this.themePalette().CONTROL_FILL)
+                .borderRadius(8)
+                .onClick((): void => {
+                  this.hidePointerOnTakeover = !this.hidePointerOnTakeover;
+                  // 关掉的那一拍必须立刻恢复：只改状态不调用的话，要等下一次
+                  // 500ms 轮询才自愈，中间那半秒鼠标是消失的。
+                  AppStorage.setOrCreate<boolean>(HIDE_POINTER_ON_TAKEOVER_KEY,
+                    this.hidePointerOnTakeover);
+                  save_hide_pointer_preference(this.hidePointerOnTakeover);
+                  this.apply_pointer_visibility();
+                })
+            }
+            .width('100%')
+            .margin({ top: 12 })
 
             // ── 半透明窗口 ──
             // 对齐 Windows 11 原生深色界面的 Acrylic 观感。文案是状态驱动的

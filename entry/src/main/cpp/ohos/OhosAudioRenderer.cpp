@@ -69,6 +69,25 @@ void validate_format(const coremedia::AudioStreamBasicDescription& format) {
     }
 }
 
+// raop 交给我们的一块 PCM 有多大（**帧**数，不是字节）。
+//
+// 上游 third_party/airplayserver 的 raop_buffer.c 把 AAC-ELD 解码输出固定成
+// N_SAMPLE = 480 样本/帧，立体声 16bit 正好 1920 字节 —— 所以无论采样率是
+// 44100 还是 48000，一包永远是 480 帧。整条音频链的粒度（OHAudio 回调大小、
+// 起播门限、高水位）都按这个数对齐，见下面两处调用。
+//
+// ★ 之所以要对齐：OHAudio 每次写回调要多少帧，是它自己定的；我们一包只有 480
+//   帧。若回调一开口就要 1024/2048 帧，而我们每 ~11ms 才攒够 480 帧，就会出现
+//   "每次回调都差一点、尾部补零" —— 听感是闷、断续、发虚（正是用户报的形态）。
+//   把回调粒度设成 480，让"取"和"喂"同拍，这类系统性缺口就没有了。
+constexpr std::size_t kPacketFrames = 480;
+// 起播前预缓冲几个包。4 包 @44.1kHz ≈ 43ms：够吸收 Wi-Fi 抖动，又不至于让声音
+// 明显落后于画面（原来 3072 帧 ≈ 70ms）。
+constexpr std::size_t kStartupPackets = 4;
+// 积压上限（超过就丢最旧的，宁可丢也别让延迟越攒越大）：6 包 ≈ 65ms
+// （原来 5120 帧 ≈ 116ms）。
+constexpr std::size_t kHighWaterPackets = 6;
+
 class OhosAudioRenderer final : public IAudioRenderer {
 public:
     OhosAudioRenderer(const coremedia::AudioStreamBasicDescription& format,
@@ -82,8 +101,11 @@ public:
         }
         layout_ = *layout;
         thresholds_ = detail::wasapi_queue_thresholds(
-            /*maximum_packet_frames=*/layout_.capacity_frames / 4,
-            layout_.capacity_frames);
+            /*maximum_packet_frames=*/kPacketFrames,
+            layout_.capacity_frames,
+            /*endpoint_buffer_frames=*/0,
+            /*base_startup_frames=*/kPacketFrames * kStartupPackets,
+            /*base_high_water_frames=*/kPacketFrames * kHighWaterPackets);
         ring_.assign(layout_.capacity_bytes, 0);
         if (playback_enabled_) {
             open_stream(volume);
@@ -298,6 +320,11 @@ private:
         // 投屏音频要跟画面同步，用普通通路而不是低时延通路。
         OH_AudioStreamBuilder_SetLatencyMode(builder_, AUDIOSTREAM_LATENCY_MODE_NORMAL);
         OH_AudioStreamBuilder_SetRendererInfo(builder_, AUDIOSTREAM_USAGE_MUSIC);
+        // ★ 让"取"和"喂"同拍：一包 480 帧，回调就要 480 帧。不设的话 OHAudio 按
+        //   自己的默认粒度开口（通常远大于一包），每回调都差一截、只能在尾部补
+        //   静音 —— 那是有规律的可闻噪声，不是偶发欠载。
+        OH_AudioStreamBuilder_SetFrameSizeInCallback(builder_,
+            static_cast<std::int32_t>(kPacketFrames));
 
         OH_AudioRenderer_Callbacks callbacks{};
         callbacks.OH_AudioRenderer_OnWriteData = &OhosAudioRenderer::OnWriteData;
@@ -316,6 +343,36 @@ private:
         volume_ = volume;
         OH_AudioRenderer_SetVolume(renderer_, volume);
         OH_AudioRenderer_Start(renderer_);
+
+        // ── 把真值记进日志：这几个数决定了"声音为什么是现在这样" ────────
+        // 请求的和实际拿到的常常不是一回事（设备有最小粒度、采样率可能被端点
+        // 改），不回读就只能靠猜。诊断页读不到日志时，这几行也是定位的抓手。
+        std::int32_t granted_frames = 0;
+        std::int32_t granted_rate = 0;
+        std::int32_t latency_ms = 0;
+        // 三个回读都可能失败（接口版本/设备能力不支持），失败就记 -1 —— 宁可看到
+        // 一个明确的 -1，也不要拿一个 0 当成"延迟为零"。
+        if (OH_AudioRenderer_GetFrameSizeInCallback(renderer_, &granted_frames) !=
+            AUDIOSTREAM_SUCCESS) {
+            granted_frames = -1;
+        }
+        if (OH_AudioRenderer_GetSamplingRate(renderer_, &granted_rate) !=
+            AUDIOSTREAM_SUCCESS) {
+            granted_rate = -1;
+        }
+        // AUDIOSTREAM_LATENCY_TYPE_ALL = 软件 + 硬件全链路延迟（毫秒），@since 23。
+        if (OH_AudioRenderer_GetLatency(renderer_, AUDIOSTREAM_LATENCY_TYPE_ALL,
+                &latency_ms) != AUDIOSTREAM_SUCCESS) {
+            latency_ms = -1;
+        }
+        logging::write(logging::Level::Info, "audio",
+            std::format("ohos audio opened: 请求 {:.0f}Hz/{}ch 回调{}帧；"
+                "实际 {:.0f}Hz 回调{}帧 端点延迟{}ms；"
+                "起播门限{}帧 高水位{}帧 环容{}帧",
+                format_.sample_rate, format_.channels_per_frame, kPacketFrames,
+                static_cast<double>(granted_rate), granted_frames, latency_ms,
+                thresholds_.startup_frames, thresholds_.high_water_frames,
+                layout_.capacity_frames));
     }
 
     OH_AudioStreamBuilder* builder_{};

@@ -29,6 +29,7 @@ import {
   ACRYLIC_WINDOW_KEY,
   PERSIST_READ_RESULT_KEY,
   PERSIST_WRITE_RESULT_KEY,
+  HIDE_POINTER_ON_TAKEOVER_KEY,
 } from './WindowServices';
 import { LANG_INDEX_KEY } from './i18n';
 
@@ -40,6 +41,8 @@ const PREFS_KEY_ACRYLIC_ON: string = 'acrylic_on';
 const PREFS_KEY_ACRYLIC_ALPHA: string = 'acrylic_alpha';
 /** ★ preferences 里的键：界面语言档位（0=跟随系统 1=简体 2=繁中香港 3=英文）。 */
 const PREFS_KEY_LANGUAGE: string = 'language_index';
+/** ★ preferences 里的键：反控接管时是否收起本地指针（默认 false = 保持可见）。 */
+const PREFS_KEY_HIDE_POINTER: string = 'hide_pointer_on_takeover';
 
 /**
  * 偏好实例。为什么是模块级可变变量：写入发生在 UI 点击回调里，那里拿不到 Ability 的
@@ -151,6 +154,49 @@ export function save_language_preference(index: number): void {
   } catch (writeError) {
     const writeFailure = writeError as BusinessError;
     hilog.warn(0x0000, 'AppPreferences', '语言偏好写入失败 %d %{public}s',
+      writeFailure.code, writeFailure.message);
+  }
+}
+
+/**
+ * 从磁盘读回「反控接管时是否收起本地指针」，写进 AppStorage。
+ *
+ * ★ 与其他 load_* 同理：必须在 UI 装载**之前**调用，否则 `@StorageLink` 已经用
+ *   默认值把键建好了，这里再写就只是普通更新。
+ * ★ 默认值 false = **保持可见**（理由见 WindowServices 里该键的注释）。
+ */
+export function load_hide_pointer_preference(): void {
+  if (store === null) {
+    AppStorage.setOrCreate(HIDE_POINTER_ON_TAKEOVER_KEY, false);
+    return;
+  }
+  try {
+    const hide: boolean = store.getSync(PREFS_KEY_HIDE_POINTER, false) as boolean;
+    AppStorage.setOrCreate(HIDE_POINTER_ON_TAKEOVER_KEY, hide);
+  } catch (readError) {
+    const readFailure = readError as BusinessError;
+    // 读不到就保持可见 —— 指针消失比"多一个指针"严重得多。
+    AppStorage.setOrCreate(HIDE_POINTER_ON_TAKEOVER_KEY, false);
+    hilog.warn(0x0000, 'AppPreferences', '指针偏好读取失败 %d %{public}s',
+      readFailure.code, readFailure.message);
+  }
+}
+
+/**
+ * 写入「反控接管时是否收起本地指针」并立即落盘。
+ *
+ * @param hide true = 接管期间收起本地指针（上游行为）；false = 始终可见（默认）。
+ */
+export function save_hide_pointer_preference(hide: boolean): void {
+  if (store === null) {
+    return;
+  }
+  try {
+    store.putSync(PREFS_KEY_HIDE_POINTER, hide);
+    store.flushSync();
+  } catch (writeError) {
+    const writeFailure = writeError as BusinessError;
+    hilog.warn(0x0000, 'AppPreferences', '指针偏好写入失败 %d %{public}s',
       writeFailure.code, writeFailure.message);
   }
 }

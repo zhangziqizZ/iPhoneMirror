@@ -117,9 +117,38 @@ struct MirrorPacket {
     bool is_config{false};   // true = SPS/PPS 参数集
 };
 
-// 队列上界（按包计）。超过就丢**最旧的数据包**（参数集永不丢弃）——
-// 宁可掉帧也不能让延迟无限累积，那正是"越播越卡"的成因。
-constexpr std::size_t kMirrorQueueLimit = 12;
+// 队列上界（按包计）。超过就丢**最旧且非关键**的数据包（参数集永不丢弃）。
+//
+// ★ 2026-10-02 从 12 降到 3。理由：这是**端到端延迟的直接一项** —— 队列里躺着
+//   N 个包，解码线程就比实时落后 N 帧（60fps 下 12 帧 = 200ms，30fps 下 = 400ms）。
+//   而直播镜像里旧帧**没有任何价值**：iPhone 那一秒的画面早就过去了，早播出来
+//   才有意义。12 这个数是当初为了"解码慢时别丢帧"定的，但那种情形下正确的做法
+//   恰恰是丢帧（保住实时性），不是排队（把延迟攒起来）。
+//   保留 3 而不是 1：解码器是异步回调式的，留一点余量让它不必空等收包线程，
+//   同时避免 Wi-Fi 上常见的抖动脉冲被当成"积压"直接丢掉。
+constexpr std::size_t kMirrorQueueLimit = 3;
+
+// Annex-B 流里是否含 IDR（NAL type 5）。丢帧时用它避开关键帧：丢掉 IDR 会让
+// 后面所有引用它的 P 帧都解不出（花屏/卡住不动），直到下一个 IDR 到来为止 ——
+// 在 iPhone 上那可能是好几秒。宁可多丢几个 P 帧。
+bool ContainsIdr(const std::vector<std::uint8_t> &bytes) {
+    const std::size_t size = bytes.size();
+    for (std::size_t i = 0; i + 4 < size; ++i) {
+        if (bytes[i] != 0x00 || bytes[i + 1] != 0x00) continue;
+        std::size_t nal = 0;
+        if (bytes[i + 2] == 0x01) {
+            nal = i + 3;
+        } else if (bytes[i + 2] == 0x00 && bytes[i + 3] == 0x01) {
+            nal = i + 4;
+        } else {
+            continue;
+        }
+        if (nal >= size) break;
+        const std::uint8_t type = bytes[nal] & 0x1Fu;
+        if (type == 5u) return true;   // Coded slice of an IDR picture
+    }
+    return false;
+}
 
 std::mutex g_video_queue_mutex;
 std::condition_variable g_video_queue_cv;
@@ -475,14 +504,31 @@ void RaopVideoProcess(void * /*cls*/, h264_decode_struct *data,
     {
         std::lock_guard<std::mutex> lock(g_video_queue_mutex);
         if (!packet.is_config && g_video_queue.size() >= kMirrorQueueLimit) {
+            // 挑一个"代价最小"的包丢掉：从最旧的开始找第一个**非 IDR** 的数据帧。
+            // 为什么不是直接丢队首：队首可能正好是 IDR，丢它等于把后面一整段
+            // P 帧都作废（画面会花/停住好几秒）。全队都是 IDR 时才退让丢队首 ——
+            // 那种情形下不丢也会一直积压，越拖越慢。
+            auto victim = g_video_queue.end();
             for (auto it = g_video_queue.begin(); it != g_video_queue.end(); ++it) {
-                if (!it->is_config) {
-                    g_video_queue.erase(it);
-                    g_video_queue_dropped.fetch_add(1, std::memory_order_relaxed);
-                    break;
+                if (it->is_config) continue;
+                if (ContainsIdr(it->bytes)) continue;
+                victim = it;
+                break;
+            }
+            if (victim == g_video_queue.end()) {
+                for (auto it = g_video_queue.begin(); it != g_video_queue.end(); ++it) {
+                    if (!it->is_config) {
+                        victim = it;
+                        break;
+                    }
                 }
             }
+            if (victim != g_video_queue.end()) {
+                g_video_queue.erase(victim);
+                g_video_queue_dropped.fetch_add(1, std::memory_order_relaxed);
+            }
         }
+        // 新包总是入队（上面腾位时已经避开 IDR，新包若是 IDR 也照收不误）。
         g_video_queue.push_back(std::move(packet));
     }
     g_video_queue_cv.notify_one();

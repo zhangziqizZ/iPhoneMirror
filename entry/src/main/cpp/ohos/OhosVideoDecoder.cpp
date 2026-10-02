@@ -944,16 +944,37 @@ private:
                             static_cast<std::uint32_t>(attr.size) * 2u / (3u * height);
                         if (derived >= width) stride_bytes = derived;
                     }
-                    pixels.resize(*needed);
+
+                    // ★ 2026-10-02 延迟专项（两处都在"收包→上屏"的关键路径上）：
+                    //
+                    //   ① 不再用 resize()。vector<uint8_t>::resize() 是**值初始化**，
+                    //      要先 memset 一遍整块（1080p 约 3MB），紧接着又被下面的
+                    //      拷贝整体覆盖 —— 等于每帧多写一趟 3MB 内存。改成
+                    //      reserve + 直接拷入，一次分配、一次写入。
+                    //
+                    //   ② stride 与 width 相等时（多数硬件解码器的实际情形）Y/UV
+                    //      各**一次**整块 memcpy 就够。原写法无条件逐行拷贝，1080p
+                    //      每帧要做 1080 + 540 = 1620 次 memcpy 调用；60fps 下是
+                    //      每秒近十万次函数调用，纯属加在这条路上的税。
+                    const std::size_t luma_bytes =
+                        static_cast<std::size_t>(width) * height;
                     const std::uint8_t* src_y = address;
                     const std::uint8_t* src_uv = address + stride_bytes * height;
-                    std::uint8_t* dst_y = pixels.data();
-                    std::uint8_t* dst_uv = pixels.data() + width * height;
-                    for (std::uint32_t row = 0; row < height; ++row) {
-                        std::memcpy(dst_y + row * width, src_y + row * stride_bytes, width);
-                    }
-                    for (std::uint32_t row = 0; row < height / 2; ++row) {
-                        std::memcpy(dst_uv + row * width, src_uv + row * stride_bytes, width);
+
+                    if (stride_bytes == width) {
+                        // 紧致布局：整块搬。UV 是 width × height/2 的交织半平面。
+                        pixels.assign(src_y, src_y + luma_bytes);
+                        pixels.insert(pixels.end(), src_uv, src_uv + luma_bytes / 2);
+                    } else {
+                        pixels.reserve(*needed);
+                        for (std::uint32_t row = 0; row < height; ++row) {
+                            pixels.insert(pixels.end(), src_y + row * stride_bytes,
+                                src_y + row * stride_bytes + width);
+                        }
+                        for (std::uint32_t row = 0; row < height / 2; ++row) {
+                            pixels.insert(pixels.end(), src_uv + row * stride_bytes,
+                                src_uv + row * stride_bytes + width);
+                        }
                     }
                     stride = static_cast<std::int32_t>(width);
                 }

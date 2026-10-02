@@ -407,6 +407,19 @@ export const STANDALONE_CHROME_NOTICE_KEY: string = 'im.standalone.chromeNotice'
 export const REVERSE_CONTROL_DISABLED_KEY: string = 'im.reverseControl.disabled';
 
 /**
+ * 反向控制**接管期间**要不要收起本地系统指针。
+ *
+ * ★ 默认 false（**保持可见**）。上游 Windows 版与 macOS「iPhone 镜像」都会藏本地
+ *   光标，理由是屏幕上同时出现两个指针会让人不知道该看哪个。但那两个实现里，
+ *   iPhone 侧的指针**一定能动**；鸿蒙这边的蓝牙 HID 反控还是实验性的，一旦对端
+ *   没配对上、或者指针不动，藏掉本地光标就等于把用户唯一的位置反馈也拿走了 ——
+ *   鼠标凭空消失、连桌面都没法正常用。用户明确要求"反控时鼠标不要消失"，所以
+ *   默认保持可见，想要原版行为的人自己打开这一项。
+ * ★ 落盘（见 AppPreferences.save_hide_pointer_preference）：这是个偏好，不是临时态。
+ */
+export const HIDE_POINTER_ON_TAKEOVER_KEY: string = 'im.reverseControl.hidePointer';
+
+/**
  * 开发者模式（在关于页连点版本号 7 次开启；开启后再点一下关闭）。
  *
  * ★ 为什么走 AppStorage 而不是各写一个成员变量：开关在**关于子窗口**里点，效果却要

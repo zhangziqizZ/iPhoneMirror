@@ -251,6 +251,7 @@ const ZH2EN: Record<string, string> = {
   '开发者工具': 'Developer Tools',
   '该功能': 'This feature',
   '鸿蒙版尚未实现。': 'Not yet implemented on HarmonyOS.',
+  '反控接管时收起指针': 'Hide local cursor while controlling',
 };
 
 /** 简体中文 → 繁體中文（香港）。 */
@@ -457,6 +458,7 @@ const ZH2HK: Record<string, string> = {
   '开发者工具': '開發者工具',
   '该功能': '該功能',
   '鸿蒙版尚未实现。': '鴻蒙版尚未實現。',
+  '反控接管时收起指针': '反控接管時收起指標',
 };
 
 /**
