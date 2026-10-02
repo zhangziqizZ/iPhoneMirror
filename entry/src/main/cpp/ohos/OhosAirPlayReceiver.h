@@ -77,6 +77,10 @@ typedef struct ImAirPlayStats {
     //       它和 decoded_frames 一起看才分得开"解码器坏了"和"解码器只是不够快"。
     uint64_t video_queue_dropped;
     // OH_VideoDecoder OnError 回调累计次数。>0 说明解码器主动失败、UI 必须报。
+    // 收到的 SPS/PPS 参数集包数（raop frame_type==0）。
+    // ★ 判读黑屏的关键一格：videoFrames 涨而它是 0 ⇒ 配置包根本没来，
+    //   解码器从未配置 ⇒ 所有数据帧在解码前就被丢掉（这是静默丢弃，无错误计数）。
+    uint64_t video_config_packets;
     uint64_t video_decode_errors;
     // 最后一次 OnError 的错误码文本，例 "ohos avcodec error=14"。
     char video_decoder_last_error[IM_AIRPLAY_TEXT_MAX];

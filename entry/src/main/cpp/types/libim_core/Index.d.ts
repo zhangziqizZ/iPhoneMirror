@@ -270,6 +270,7 @@ export interface AirPlayStatus {
   videoFrames: number;        // 已收到的视频帧数（尚未解码）
   decodedFrames: number;      // 已真正解出并送到预览的帧数（≠ videoFrames：解码链是否通的判据）
   videoQueueDropped: number;  // 因解码跟不上收包被丢弃的旧视频包数（>0 = 会掉帧，但延迟不累积）
+  videoConfigPackets: number; // 收到的 SPS/PPS 参数集包数（0 = 解码器从未被配置）
   videoDecodeErrors: number; // OH_VideoDecoder::OnError 累计次数
   videoDecoderLastError: string; // 最近一次 OnError 的错误码文本
   decoderDiag: DecoderDiag;      // 解码链断点定位（pushed/callbacks/size 等）

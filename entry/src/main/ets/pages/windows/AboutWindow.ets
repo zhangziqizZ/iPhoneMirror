@@ -231,6 +231,10 @@ export class ChangelogRelease {
  * 关于页按版本分组：最新一版默认展开（可收起），旧版本固定折叠只留版本行。
  */
 const CHANGELOG_RELEASES: ChangelogRelease[] = [
+  new ChangelogRelease('1.0.44', '2026-10-02', [
+    '诊断：黑屏状态行直接携带解码链断点读数（参数集/真推/回调/有像素/太小/SPS失败/cfg/档位/丢弃），一张截图即可定位',
+    '新增 SPS/PPS 参数集包计数器：videoFrames 涨而参数集=0 ⇒ 解码器从未被配置，数据帧被静默丢掉（这条路此前没有任何可见计数）',
+  ]),
   new ChangelogRelease('1.0.43', '2026-10-02', [
     '优化：镜像画面延迟 —— 视频队列上界 12→3（直播镜像里旧帧没有价值，排队等于把延迟攒起来），丢帧时避开 IDR 关键帧（丢 IDR 会让后面一整段 P 帧作废、画面花掉好几秒）',
     '优化：解码输出拷贝整块化 —— stride==width 时 Y/UV 各一次 memcpy（原来 1080p 每帧 1620 次调用），并绕开 resize() 的零初始化',

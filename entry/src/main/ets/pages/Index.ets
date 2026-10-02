@@ -2105,7 +2105,21 @@ struct Index {
       const audioNote: string = ` · ${this.airplay_audio_text(ap)}`;
       if (ap.videoFrames > 0 && ap.decodedFrames === 0) {
         // 解码器没产出，但 raop 视频帧在来 → 链路某段不通，必须讲清楚。
-        return `iPhone 已连接 · 已收 ${ap.videoFrames} 帧但解码器 0 帧输出（解码链未通）${decodeErr}${audioNote}`;
+        // ★ 把断点判据直接摊在状态行上：一张截图就能定位，不用再翻镜像面板。
+        //   三段式判读：
+        //   参数集=0                     → 解码器从未配置（SPS/PPS 没来，
+        //                                  数据帧在 ProcessMirrorPacket 里被静默丢）
+        //   参数集>0 · 真推=0            → configure 之后一个 input_buffer 都没拿到
+        //   真推>0 · 回调=0 / 有像素=0   → 解码器收了帧但不吐（档位/尺寸/喂帧方式）
+        const d = ap.decoderDiag;
+        const readout: string =
+          `参数集${ap.videoConfigPackets}` +
+          ` · 真推${d.pushedInputs}/回调${d.outputCallbacks}/有像素${d.outputWithPixels}` +
+          ` · 太小${d.outputTooSmall} · SPS失败${d.spsParseFailures}` +
+          ` · cfg=${d.lastConfigWidth}x${d.lastConfigHeight}` +
+          ` · 档${d.strategy}/4换${d.strategySwitches} · 丢${ap.videoQueueDropped}`;
+        return `iPhone 已连接 · 已收 ${ap.videoFrames} 帧但解码器 0 帧输出（解码链未通）` +
+          ` · ${readout}${decodeErr}${audioNote}`;
       }
       return `iPhone 已连接 · 实时镜像中（已收 ${ap.videoFrames} 帧 / 解码 ${ap.decodedFrames} 帧）`
         + `${dropNote}${decodeErr}${audioNote}`;

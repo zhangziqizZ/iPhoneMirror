@@ -695,6 +695,9 @@ napi_value JsAirPlayGetStatus(napi_env env, napi_callback_info /*info*/) {
     // 队列有上界，超了就丢最旧的**数据**包并在这里 +1（参数集永不丢弃）。
     set_f64(env, object, "videoQueueDropped",
         static_cast<double>(stats.video_queue_dropped));
+    // 参数集包数：videoFrames 涨而它为 0 ⇒ 解码器从未被配置（SPS/PPS 没来）。
+    set_f64(env, object, "videoConfigPackets",
+        static_cast<double>(stats.video_config_packets));
     set_f64(env, object, "videoDecodeErrors",
         static_cast<double>(stats.video_decode_errors));
     set_utf8(env, object, "videoDecoderLastError",

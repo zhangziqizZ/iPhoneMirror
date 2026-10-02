@@ -77,6 +77,7 @@ std::mutex g_mutex;
 
 std::atomic<uint64_t> g_audio_packets{0};
 std::atomic<uint64_t> g_video_frames{0};
+std::atomic<uint64_t> g_video_config_packets{0};
 // AirPlay 镜像视频真正走通的帧数：RaopVideoProcess 收到帧后送 OH_VideoDecoder，
 // 解码成功后由本文件的 present() 路径推进；只要 present() 真拿到了非空 nv12 就 +1。
 // 区分它和 g_video_frames（仅"收到"，不论解码成败）是排查"连上了但黑屏"的关键。
@@ -495,6 +496,9 @@ void RaopVideoProcess(void * /*cls*/, h264_decode_struct *data,
 
     MirrorPacket packet;
     packet.is_config = data->frame_type == 0;
+    if (packet.is_config) {
+        g_video_config_packets.fetch_add(1, std::memory_order_relaxed);
+    }
     packet.pts = static_cast<std::int64_t>(data->pts);
     // 这行拷贝不能省：raop 的收包循环在回调返回后**立刻** free(data->data)
     // （raop_rtp_mirror.c:413-414 与 479-481），而解码在另一个线程上。
@@ -790,6 +794,7 @@ int im_airplay_start(const char *name, const char *password) {
     }
     SetAudioError("");
     g_video_frames.store(0);
+    g_video_config_packets.store(0);
     g_decoded_frames.store(0);
     g_video_decode_errors.store(0);
     g_video_queue_dropped.store(0);
@@ -854,6 +859,7 @@ void im_airplay_get_stats(ImAirPlayStats *out) {
             audio_error.c_str());
     }
     out->video_frames = g_video_frames.load(std::memory_order_relaxed);
+    out->video_config_packets = g_video_config_packets.load(std::memory_order_relaxed);
     out->decoded_frames = g_decoded_frames.load(std::memory_order_relaxed);
     out->video_queue_dropped = g_video_queue_dropped.load(std::memory_order_relaxed);
     out->video_decode_errors = iPhoneMirror::media::im_video_decoder_errors();
