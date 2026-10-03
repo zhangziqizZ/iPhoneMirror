@@ -272,6 +272,10 @@ export interface AirPlayStatus {
   audioFormat: string;        // 当前音频格式，例 "44100Hz/2ch/16bit"
   audioError: string;         // 最近一次建流/播放失败原因（空 = 无错）
   videoFrames: number;        // 已收到的视频帧数（尚未解码）
+  // 收包停滞 ms：距**最后一个视频包**过了多久（导出瞬间算好，UI 不必对齐时钟）。
+  // 「已收 N 帧」是累计值，停住不动时分不清"iPhone 不发了"与"我们的收包路径死了"
+  // —— 这一格直接回答"多久没收到包了"。-1 = 本会话还没收到过包；>3000 = 停滞。
+  videoRxStaleMs: number;
   decodedFrames: number;      // 已真正解出并送到预览的帧数（≠ videoFrames：解码链是否通的判据）
   videoQueueDropped: number;  // 因解码跟不上收包被丢弃的旧视频包数（>0 = 会掉帧，但延迟不累积）
   videoConfigPackets: number; // 收到的 SPS/PPS 参数集包数（0 = 解码器从未被配置）

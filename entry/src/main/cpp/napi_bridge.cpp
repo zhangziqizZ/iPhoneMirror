@@ -686,6 +686,9 @@ napi_value JsAirPlayGetStatus(napi_env env, napi_callback_info /*info*/) {
     set_utf8(env, object, "audioFormat", stats.audio_format);
     set_utf8(env, object, "audioError", stats.audio_error);
     set_f64(env, object, "videoFrames", static_cast<double>(stats.video_frames));
+    // 收包停滞：距最后一个视频包多久（>3000=收包死了/停发；-1=还没收到过）
+    set_f64(env, object, "videoRxStaleMs",
+        static_cast<double>(stats.video_rx_stale_ms));
     // 区分"RaopVideoProcess 被调用 N 次"和"OH_VideoDecoder 真解出 N 帧"。
     // 这两个数若长期一致、且 N 稳定上涨，说明解码链路 OK、画面应该出；
     // decodedFrames 长时间停在 0 / 比 videoFrames 小一个量级，说明解码链某段

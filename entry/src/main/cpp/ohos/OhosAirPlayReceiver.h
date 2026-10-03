@@ -122,6 +122,10 @@ typedef struct ImAirPlayStats {
     // （raop_rtp_mirror.c 拼配置包时 lengthofSPS=0）。此前这条只表现为
     // "缺集待解 N"，看不出是配置包残缺还是流里没带 SPS。
     uint64_t video_param_pps_only;
+    // 收包停滞：距最后一个视频包多少毫秒（导出瞬间算好）。运行中 >3000 =
+    // 收包路径死了或 iPhone 停发；-1 = 本会话还没收到过包。与"已收 N 帧"
+    // （累计值）配套，用来区分"流断了"与"我们的线程卡了"。
+    int video_rx_stale_ms;
     // 端到端延迟实测（毫秒）：包进接收端队列 → 解码出帧，EMA 平滑。
     // 口径不含 iPhone 编码与网络前段（那段只有发送端知道）；
     // 0 = 尚无出帧样本。avg 涨到几百 ms = 解码跟不上实时（对照 video_queue_dropped）。

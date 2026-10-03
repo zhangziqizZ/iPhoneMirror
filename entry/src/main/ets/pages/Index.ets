@@ -2083,6 +2083,28 @@ struct Index {
     return `本地上限 ${FRAME_RATE_LABELS[this.frameRateIndex]} fps`; // Strings: TargetFpsFormat
   }
 
+  /**
+   * 收包是否还在走 —— 「已收 N 帧」是**累计值**，停住不动时彻底分不清
+   * "iPhone 不发了"与"我们的收包路径死了"。这一格直接回答"距最后一个视频包多久"。
+   *
+   * 为什么必须单独有它（1.0.52 的教训）：那次 `已收 204 帧`后再无进展、
+   * 解码器 0 输出，我第一反应是"参数集/喂帧问题"，翻了三轮才发现根因是
+   * **上游 NAL 改写循环死循环**，收包线程整个卡住 —— 而这只要看一眼
+   * "多久没收到包了"就能立刻定案。
+   *
+   *   -1       = 本会话还没收到过视频包（连了但 iPhone 没推，或推了但没到这层）
+   *   >3000ms  = 收包停滞：iPhone 停发（锁屏/切走）或我们的收包线程卡死
+   */
+  airplay_rx_stale_text(ap: AirPlayStatus): string {
+    if (ap.videoRxStaleMs < 0) {
+      return ' · 尚未收到视频包';
+    }
+    if (ap.videoRxStaleMs > 3000) {
+      return ` · ★收包已停滞 ${(ap.videoRxStaleMs / 1000).toFixed(1)}s（iPhone 停发或收包线程卡死）`;
+    }
+    return ` · ${ap.videoRxStaleMs}ms 前收包`;
+  }
+
   decode_status_text(): string {
     // AirPlay 路径：用视频帧/解码帧/错误数三个指标判断，USB 路径才看 capture.state。
     const ap: AirPlayStatus | null = this.airplay;
@@ -2305,11 +2327,14 @@ struct Index {
           ` · cfg=${d.lastConfigWidth}x${d.lastConfigHeight}` +
           ` · 档${d.strategy}/4换${d.strategySwitches} · 丢${ap.videoQueueDropped}` +
           ` · ${nalNote} · ${paramNote} · ${cfgHead}`;
+        // ★ 收包停滞读数必须在这里出现：这一支正是"帧数停住不动"的场景，
+        //   没有它就只能猜"iPhone 停发"还是"我们收包线程卡死"。
+        const rxNote: string = this.airplay_rx_stale_text(ap);
         return `iPhone 已连接 · 已收 ${ap.videoFrames} 帧但解码器 0 帧输出（解码链未通）` +
-          ` · ${readout}${decodeErr}${audioNote}`;
+          ` · ${readout}${decodeErr}${rxNote}${audioNote}`;
       }
       return `iPhone 已连接 · 实时镜像中（已收 ${ap.videoFrames} 帧 / 解码 ${ap.decodedFrames} 帧）`
-        + `${dropNote}${decodeErr}${audioNote}`;
+        + `${dropNote}${decodeErr}${this.airplay_rx_stale_text(ap)}${audioNote}`;
     }
     // 已确认广播中：把应答里用的本机 IP 与已应答查询数摊给用户，便于排查"搜到连不上"——
     // 之前那次就是 A 记录里的 IP 写死成了 iPhone 自己，导致它点到自己连不上。

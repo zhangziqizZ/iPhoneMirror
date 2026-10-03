@@ -79,6 +79,10 @@ std::mutex g_mutex;
 
 std::atomic<uint64_t> g_audio_packets{0};
 std::atomic<uint64_t> g_video_frames{0};
+// 最后一次收到视频包的时刻（SteadyNowMs）。配套导出 video_rx_stale_ms：
+// 「已收 N 帧」是累计值，停住不动时分不清"iPhone 不发了"与"我们收包路径死了"
+// —— 用"距今多久没收到包"直接回答。0 = 本会话还没收到过。
+std::atomic<int64_t> g_video_last_packet_ms{0};
 std::atomic<uint64_t> g_video_config_packets{0};
 // AirPlay 镜像视频真正走通的帧数：RaopVideoProcess 收到帧后送 OH_VideoDecoder，
 // 解码成功后由本文件的 present() 路径推进；只要 present() 真拿到了非空 nv12 就 +1。
@@ -756,6 +760,7 @@ void RaopVideoProcess(void * /*cls*/, h264_decode_struct *data,
     const char * /*remoteName*/, const char * /*remoteDeviceId*/) {
     if (data == nullptr || data->data == nullptr || data->data_len <= 0) return;
     g_video_frames.fetch_add(1, std::memory_order_relaxed);
+    g_video_last_packet_ms.store(SteadyNowMs(), std::memory_order_relaxed);
 
     MirrorPacket packet;
     packet.is_config = data->frame_type == 0;
@@ -1103,6 +1108,7 @@ int im_airplay_start(const char *name, const char *password) {
     }
     SetAudioError("");
     g_video_frames.store(0);
+    g_video_last_packet_ms.store(0);
     g_video_config_packets.store(0);
     g_decoded_frames.store(0);
     g_video_decode_errors.store(0);
@@ -1197,6 +1203,13 @@ void im_airplay_get_stats(ImAirPlayStats *out) {
             audio_error.c_str());
     }
     out->video_frames = g_video_frames.load(std::memory_order_relaxed);
+    // 收包停滞读数：距最后一个视频包多久（导出瞬间算好，UI 不必对齐时钟）。
+    // 运行中且 >3s = 收包路径死了或 iPhone 停发；-1 = 本会话还没收到过包。
+    {
+        const std::int64_t last = g_video_last_packet_ms.load(std::memory_order_relaxed);
+        out->video_rx_stale_ms = last > 0
+            ? static_cast<int>(SteadyNowMs() - last) : -1;
+    }
     out->video_config_packets = g_video_config_packets.load(std::memory_order_relaxed);
     out->decoded_frames = g_decoded_frames.load(std::memory_order_relaxed);
     out->video_queue_dropped = g_video_queue_dropped.load(std::memory_order_relaxed);

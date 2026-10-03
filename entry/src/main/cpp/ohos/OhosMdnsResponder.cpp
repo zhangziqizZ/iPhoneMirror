@@ -663,6 +663,13 @@ std::string g_conflict_note;
 // "现在还在跑"。直接用 std::chrono::steady_clock 的内部 epoch，只在同进程内
 // 比较，跨进程没有意义。
 std::atomic<std::int64_t> g_worker_last_tick_ms{0};
+// 冻结告警文本的统一前缀：用来判断 g_error 里现在挂着的是不是**这条**告警。
+// 有了它，恢复/用户重试时才不会把别处的真实错误（socket 失败等）顺手抹掉。
+static const char *const kFreezeErrorPrefix = "原生 mDNS 工作线程已";
+// 冻结警告当前是否处于"已置位"状态（兼作"只报一次"闩锁，见 im_mdns_responder_is_active）。
+// 必须是**文件域**：im_mdns_responder_clear_health_warning() 也要读写它 ——
+// 用函数内 static 时它俩是互不相干的两个变量，重置告警就成了空操作。
+std::atomic<int> g_freeze_warned{0};
 std::thread g_worker;
 
 // 记一条收到的查询。
@@ -1634,6 +1641,10 @@ int im_mdns_responder_start(void) {
         g_host_label = BuildHostLabel();
         g_error.clear();
     }
+    // ★ 上一轮的"冻结告警已报"闩锁必须一起复位，否则本次会话即便再被冻结也不会
+    //   再报（exchange(1) 拿到的仍是 1 ⇒ 走不进写 g_error 的分支），UI 端会
+    //   莫名其妙地"广播看着正常、iPhone 却搜不到"。开新一轮就该是新账本。
+    g_freeze_warned.store(0, std::memory_order_relaxed);
     g_answered.store(0, std::memory_order_relaxed);
     // 查询账本也要跟着归零：否则"已应答 4 次"是上一轮留下的、而这一轮其实
     // 一条都没收到——那是这个工程反复踩的累计值假成功。
@@ -1767,17 +1778,30 @@ int im_mdns_responder_is_active(void) {
     const std::int64_t now = SteadyNowMs();
     const std::int64_t gap = now - last;
     if (gap > 5000) {
-        static std::atomic<int> warned{0};
-        if (warned.exchange(1) == 0) {
+        // ★ 报一次用**文件域**的 g_freeze_warned，不再用函数内 static：
+        //   函数内 static 只有本函数看得见，im_mdns_responder_clear_health_warning()
+        //   因此一直在复位一个没人读的变量（"重置告警"是个空操作）。
+        if (g_freeze_warned.exchange(1, std::memory_order_relaxed) == 0) {
             char buffer[200];
             std::snprintf(buffer, sizeof(buffer),
-                "原生 mDNS 工作线程已 %lld 秒未轮询（最近 %lldms），通常是被系统冻结"
+                "%s %lld 秒未轮询（最近 %lldms），通常是被系统冻结"
                 "；请确认 App 的「后台长时任务」已申请成功且 App 切到后台后能保活",
+                kFreezeErrorPrefix,
                 static_cast<long long>(gap / 1000), static_cast<long long>(gap));
             std::lock_guard<std::mutex> lock(g_state_lock);
             g_error = buffer;
         }
         return 0;
+    }
+    // ★ 心跳恢复了（进程被冻结后又回到前台继续跑）⇒ 把冻结警告**解除**。
+    //   以前这里只写不清：一次后台冻结的 fossil 会永远挂在 UI 上，哪怕 mDNS
+    //   早已恢复工作 —— 用户带着一条过期报警去排查，方向必然错。
+    //   同时复位 warned，让**下一次**冻结仍能再报一次。
+    if (g_freeze_warned.exchange(0, std::memory_order_relaxed) != 0) {
+        std::lock_guard<std::mutex> lock(g_state_lock);
+        if (g_error.rfind(kFreezeErrorPrefix, 0) == 0) {
+            g_error.clear();
+        }
     }
     return 1;
 }
@@ -1791,10 +1815,24 @@ std::int64_t im_mdns_responder_last_tick_ms(void) {
 // 清掉"心跳超时"那种一次性的告警，让用户重新点应用/停用后状态可重置。
 // 不清的话下一次即便正常也仍处于"广播异常"分支。
 void im_mdns_responder_clear_health_warning(void) {
-    static std::atomic<int> warned{0};
-    warned.store(0, std::memory_order_release);
-    // 不要清 g_error —— 那个字段是给 UI 看原因的，应该等用户看见后再清。
-    // 但其实同步清掉"心跳超时"那段也行，让 UI 能立即切换到正常分支。
+    // ★ 以前这里只复位自己函数内的 static（那个变量没人读 ⇒ 整句等于没执行，
+    //   用户点了"重新启用/停用"之后那条过期报警仍然挂着）。现在 g_freeze_warned
+    //   是文件域的，复位它才能真正让下一次冻结再报一次。
+    //
+    //   注释里原本纠结要不要连 g_error 一起清。现在必须清：用户主动重试时他会
+    //   看 UI，看到"还写着被冻结"会以为重试没生效。清的前提是那条错确实是我们
+    //   这条冻结告警 —— 别的真实错误（socket 失败等）不能被顺手抹掉。
+    //
+    //   ★ 如实标记：本函数目前**没有任何调用方**（既没有 UI 也没有 NAPI 绑定），
+    //     所以它仍然是不生效的死代码。用户真正会走的那条"重试"路径是
+    //     停用 → 启用，由 im_mdns_responder_start() 里的复位兜住。这里只保证
+    //     将来一旦接上 UI 就是对的，不假装现在已经被修复。
+    if (g_freeze_warned.exchange(0, std::memory_order_relaxed) != 0) {
+        std::lock_guard<std::mutex> lock(g_state_lock);
+        if (g_error.rfind(kFreezeErrorPrefix, 0) == 0) {
+            g_error.clear();
+        }
+    }
 }
 
 const char *im_mdns_responder_error(void) {
