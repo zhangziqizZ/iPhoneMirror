@@ -2293,7 +2293,11 @@ struct Index {
         const paramNote: string =
           `补全参数集帧内${ap.videoParamFromFrames}/包内${ap.videoParamFromConfig}` +
           `·重配${ap.videoParamReconfigures}` +
-          (ap.videoWaitingParam > 0 ? `·缺集待解${ap.videoWaitingParam}` : '');
+          (ap.videoWaitingParam > 0 ? `·缺集待解${ap.videoWaitingParam}` : '') +
+          // ★ 配置包只有 PPS、没有 SPS = **上游给的参数集本身残缺**，不是我们的
+          //   解码器/丢帧策略问题。此前这条只表现为"缺集待解 N"，看不出区别。
+          (ap.videoParamPpsOnly > 0
+            ? `、★配置包只有PPS没有SPS(${ap.videoParamPpsOnly}次·上游参数集残缺)` : '');
         const readout: string =
           `参数集${ap.videoConfigPackets}` +
           ` · 真推${d.pushedInputs}/回调${d.outputCallbacks}/有像素${d.outputWithPixels}` +

@@ -385,18 +385,46 @@ raop_rtp_mirror_thread(void *arg)
                     mirror_buffer_decrypt(raop_rtp_mirror->buffer, payload_in, payload, payloadsize);
                     int nalu_size = 0;
                     int nalu_num = 0;
+                    // ★ 2026-10-04 修复**收包线程死锁**（用户现场：已收 204 帧后
+                    //   再无任何进展，解码器 0 输出、NAL 账本 slice/IDR/SPS 全 0）。
+                    //
+                    //   原循环在 `nc_len <= 0` 时**既不推进 nalu_size 也不 break**
+                    //   ⇒ 死循环。而这在真实数据上必然发生：nc_len 是 4 字节拼出的
+                    //   int，长度前缀被截断/错位/读到 0 时就是 0（末尾不足 4 字节
+                    //   时读到的更是垃圾）。一旦命中，**整个收包线程永久卡死** ——
+                    //   这条线程同时负责解密与回调，之后所有包都进不来。
+                    //
+                    //   修法（三个都要，缺一个仍会卡）：
+                    //   ① 剩余不足 4 字节 → 直接结束（末尾残缺不是完整 NAL）。
+                    //   ② nc_len <= 0 → 结束（不再把垃圾当长度前缀继续走）。
+                    //   ③ nc_len 超出剩余字节 → 截到剩余长度并结束，避免 nalu_size
+                    //      跳过 payloadsize 后仍在越界读。
+                    //   顺带：改写起始码的循环加了步数上限兜底。
                     while (nalu_size < payloadsize) {
-                        int nc_len = (payload[nalu_size + 0] << 24) | (payload[nalu_size + 1] << 16) | (payload[nalu_size + 2] << 8) | (payload[nalu_size + 3]);
-                        if (nc_len > 0) {
-                            payload[nalu_size + 0] = 0;
-                            payload[nalu_size + 1] = 0;
-                            payload[nalu_size + 2] = 0;
-                            payload[nalu_size + 3] = 1;
-                            //int nalutype = payload[4] & 0x1f;
-                            //logger_log(raop_rtp_mirror->logger, LOGGER_DEBUG, "nalutype = %d", nalutype);
-                            nalu_size += nc_len + 4;
-                            nalu_num++;
+                        /* ① 剩余不足 4 字节：不可能是完整的长度前缀 */
+                        if (nalu_size + 4 > payloadsize) {
+                            break;
                         }
+                        int nc_len = ((int)(unsigned char)payload[nalu_size + 0] << 24)
+                                   | ((int)(unsigned char)payload[nalu_size + 1] << 16)
+                                   | ((int)(unsigned char)payload[nalu_size + 2] << 8)
+                                   | ((int)(unsigned char)payload[nalu_size + 3]);
+                        /* ② 非正长度：数据已损坏或不是长度前缀格式，停止改写 */
+                        if (nc_len <= 0) {
+                            break;
+                        }
+                        /* ③ 长度超出剩余字节：截到剩余并结束（不越界读） */
+                        if (nc_len > payloadsize - nalu_size - 4) {
+                            nc_len = payloadsize - nalu_size - 4;
+                        }
+                        payload[nalu_size + 0] = 0;
+                        payload[nalu_size + 1] = 0;
+                        payload[nalu_size + 2] = 0;
+                        payload[nalu_size + 3] = 1;
+                        //int nalutype = payload[4] & 0x1f;
+                        //logger_log(raop_rtp_mirror->logger, LOGGER_DEBUG, "nalutype = %d", nalutype);
+                        nalu_size += nc_len + 4;
+                        nalu_num++;
                     }
                     //logger_log(raop_rtp_mirror->logger, LOGGER_DEBUG, "nalu_size = %d, payloadsize = %d nalu_num = %d", nalu_size, payloadsize, nalu_num);
 

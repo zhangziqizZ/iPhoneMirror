@@ -118,6 +118,10 @@ typedef struct ImAirPlayStats {
     // 否则会误判成"延迟已经修好了"。
     int video_frozen_ms;               // 本次已冻结的毫秒数（0 = 当前没在冻结）
     uint64_t video_single_drops;       // 单次溢出只丢一帧（未冻结）的次数
+    // 配置包只有 PPS、没有 SPS 的次数。>0 = 上游给的参数集本身残缺
+    // （raop_rtp_mirror.c 拼配置包时 lengthofSPS=0）。此前这条只表现为
+    // "缺集待解 N"，看不出是配置包残缺还是流里没带 SPS。
+    uint64_t video_param_pps_only;
     // 端到端延迟实测（毫秒）：包进接收端队列 → 解码出帧，EMA 平滑。
     // 口径不含 iPhone 编码与网络前段（那段只有发送端知道）；
     // 0 = 尚无出帧样本。avg 涨到几百 ms = 解码跟不上实时（对照 video_queue_dropped）。

@@ -708,6 +708,11 @@ napi_value JsAirPlayGetStatus(napi_env env, napi_callback_info /*info*/) {
         static_cast<double>(stats.video_param_reconfigures));
     set_f64(env, object, "videoWaitingParam",
         static_cast<double>(stats.video_waiting_param));
+    // 配置包只有 PPS、没有 SPS 的次数。>0 = 上游给的参数集本身残缺
+    // （不是我们的解码器 / 丢帧策略问题）。此前这条只表现为"缺集待解 N"，
+    // 看不出"配置包残缺"与"流里没带 SPS"的区别，排查方向会整个错。
+    set_f64(env, object, "videoParamPpsOnly",
+        static_cast<double>(stats.video_param_pps_only));
     // NAL 账本：判断"流本身是不是 H.264、有没有关键帧"。
     set_f64(env, object, "videoNalSlice", static_cast<double>(stats.video_nal_slice));
     set_f64(env, object, "videoNalIdr", static_cast<double>(stats.video_nal_idr));

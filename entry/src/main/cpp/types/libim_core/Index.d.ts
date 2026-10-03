@@ -302,6 +302,10 @@ export interface AirPlayStatus {
   // 冻结（等 IDR）期间队列被清空 ⇒ 延迟读数反而很低，但画面是定住的。
   videoFrozenMs: number;           // 本次已冻结的毫秒数（0 = 当前没在冻结）
   videoSingleDrops: number;        // 单次溢出只丢一帧（未冻结）的次数
+  // 配置包只有 PPS、没有 SPS 的次数。>0 = **上游给的参数集本身残缺**
+  //（raop_rtp_mirror.c 拼配置包时 lengthofSPS 解析成 0）。此前只表现为
+  // "缺集待解 N"，看不出是配置包残缺还是流里没带 SPS。
+  videoParamPpsOnly: number;
   videoLatencyMs: number;        // 端到端延迟实测 ms：收包入队→解码出帧（EMA；0=尚无出帧样本）
   videoDecodeErrors: number; // OH_VideoDecoder::OnError 累计次数
   videoDecoderLastError: string; // 最近一次 OnError 的错误码文本

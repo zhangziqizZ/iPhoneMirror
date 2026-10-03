@@ -187,6 +187,11 @@ std::atomic<uint64_t> g_param_from_frames{0};
 std::atomic<uint64_t> g_param_reconfigures{0};
 // 因"还没凑齐 SPS+PPS"而没敢送进解码器的数据帧数（旧实现这里是静默丢弃）
 std::atomic<uint64_t> g_frames_waiting_param{0};
+// 配置包里只有 PPS、没有 SPS 的次数。>0 = **上游给的参数集本身残缺**
+//（raop_rtp_mirror.c 拼配置包时 lengthofSPS 解析成 0，产出
+// `00000001 00000001 PPS…`）。此前这条只表现为"缺集待解 N"，看不出
+// "配置包残缺"与"帧里也没带 SPS"的区别，排查方向会整个错。
+std::atomic<uint64_t> g_param_pps_only_config{0};
 
 // ── 端到端延迟实测（收包入队 → 解码出帧）─────────────────────────────
 // 口径：不含 iPhone 编码与网络传输的前段（那段只有发送端知道），测的是
@@ -604,6 +609,14 @@ void ProcessMirrorPacket(const MirrorPacket &packet) {
                 g_video_configured = false;
                 return;
             }
+        } else if (packet.is_config && g_param_sps.empty() && !g_param_pps.empty()) {
+            // ★ 只收到 PPS、没收到 SPS —— 这是**上游给我们的参数集本身就是残缺的**
+            //   （raop_rtp_mirror.c 的配置包构造：lengthofSPS 解析成 0 时，产出的是
+            //   `00 00 00 01 00 00 00 01 PPS…`，扫出来就只有 PPS 没有 SPS）。
+            //   以前这条只表现为"缺集待解 N"，看不出是"配置包残缺"还是"帧里也没带
+            //   SPS"，于是排查方向完全错。单独记一笔：>0 = 该找上游/换格式口径，
+            //   不是我们的解码器或丢帧策略问题。
+            g_param_pps_only_config.fetch_add(1, std::memory_order_relaxed);
         }
     }
 
@@ -1113,6 +1126,7 @@ int im_airplay_start(const char *name, const char *password) {
     g_param_from_frames.store(0);
     g_param_reconfigures.store(0);
     g_frames_waiting_param.store(0);
+    g_param_pps_only_config.store(0);
     g_nal_slice.store(0);
     g_nal_idr.store(0);
     g_nal_sps.store(0);
@@ -1221,6 +1235,7 @@ void im_airplay_get_stats(ImAirPlayStats *out) {
     out->video_param_from_frames = g_param_from_frames.load(std::memory_order_relaxed);
     out->video_param_reconfigures = g_param_reconfigures.load(std::memory_order_relaxed);
     out->video_waiting_param = g_frames_waiting_param.load(std::memory_order_relaxed);
+    out->video_param_pps_only = g_param_pps_only_config.load(std::memory_order_relaxed);
     // NAL 账本：判断"流本身有没有问题"的唯一窗口
     out->video_nal_slice = g_nal_slice.load(std::memory_order_relaxed);
     out->video_nal_idr = g_nal_idr.load(std::memory_order_relaxed);
