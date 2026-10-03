@@ -2,8 +2,8 @@
   "app": {
     "bundleName": "com.rayrensx.iphonemirror",
     "vendor": "rayrensx",
-  "versionCode": 1000050,
-  "versionName": "1.0.50",
+  "versionCode": 1000051,
+  "versionName": "1.0.51",
     "icon": "$media:app_icon",
     "label": "$string:app_name"
   }

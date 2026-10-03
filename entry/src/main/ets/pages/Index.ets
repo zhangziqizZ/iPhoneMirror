@@ -1992,9 +1992,16 @@ struct Index {
   }
 
   /**
-   * 分辨率：USB 走 CaptureStatus；AirPlay 走解码器 OnStreamChanged 上报的
-   * 实际流尺寸（first-hand），渲染帧尺寸兜底 —— 两者都没有才显示「—」。
-   * （此前这一栏只读 USB 状态机，AirPlay 投屏时恒为「—"，看起来像没数据。）
+   * 分辨率：USB 走 CaptureStatus；AirPlay 只认解码器 OnStreamChanged 上报的
+   * **实际流尺寸**（first-hand），拿不到就显示「—」。
+   *
+   * ★ 2026-10-04：原来这里有一层回落 `d.lastStreamWidth : p.lastFrameWidth`
+   *   （渲染帧尺寸），已去掉。理由：渲染帧尺寸在 decoded_width_ 为 0 时取的是
+   *   `format_.width` —— 那是 **Configure 的配置尺寸**（ProcessMirrorPacket 里
+   *   甚至硬编码传的是 1920×1080 提示值），不是码流真实尺寸。回落显示出来的
+   *   数字看着有值、实则可能是配置值或窗口/显示器尺寸（曾出现过把 21:9
+   *   显示器尺寸 3440×1440 读成"视频分辨率"的情况），会把排查带偏。
+   *   宁可显示「—」，也不要给一个不标注来源的数字。
    */
   resolution_value(): string {
     const status: CaptureStatus | null = this.capture;
@@ -2004,12 +2011,12 @@ struct Index {
     const ap: AirPlayStatus | null = this.airplay;
     if (ap !== null && ap.running !== 0 && ap.clients > 0) {
       const d = ap.decoderDiag;
-      const p = ap.previewDiag;
-      const width: number = d.lastStreamWidth > 0 ? d.lastStreamWidth : p.lastFrameWidth;
-      const height: number = d.lastStreamHeight > 0 ? d.lastStreamHeight : p.lastFrameHeight;
-      if (width > 0 && height > 0) {
-        return `${width}×${height}`;
+      if (d.lastStreamWidth > 0 && d.lastStreamHeight > 0) {
+        return `${d.lastStreamWidth}×${d.lastStreamHeight}`;
       }
+      // 解码器还没上报流尺寸。这是**有信息量的状态**而不是"没数据"：
+      // 说明要么码流还没开始解码，要么解码器没走 OnStreamChanged。
+      return d.pushedInputs > 0 ? '解码中' : '—';
     }
     return '—';
   }
@@ -2151,10 +2158,22 @@ struct Index {
           // 遮罩是让开的 —— 等于失败原因根本看不到。
           (p.attachFailures > 0 && p.lastError.length > 0
             ? `、挂载失败=${p.lastError.substring(0, 80)}` : '');
-        // 解码器身份（hw/sw）与重同步账本必须摊在第一行：帧率低/花屏的第一分叉
-        // 就是"软解扛不动 3440×1440"还是"硬解但收包/丢帧策略问题"。
+        // 解码器身份（hw/sw）与重同步账本必须摊在第一行：帧率低的第一分叉是
+        // "软解扛不动这个分辨率"还是"硬解但收包/丢帧策略问题"。
+        //
+        // ★ 2026-10-04：分辨率这里必须**同时摊出三个口径**，且都标注清楚来源。
+        //   只有 lastStreamWidth（OnStreamChanged 上报）才是码流真实尺寸；
+        //   lastOutputWidth 是解码输出缓冲尺寸、lastConfigWidth 是 Configure
+        //   用的配置尺寸（ProcessMirrorPacket 传的是 1920×1080 提示值）。
+        //   以前状态栏那一格在 lastStreamWidth=0 时回落到渲染帧尺寸，于是出现过
+        //   "3440×1440"这种显示器尺寸被当成视频分辨率读数、据此误判"软解扛不住"。
+        const dims: string = `流尺寸=${d.lastStreamWidth}x${d.lastStreamHeight}` +
+          `、解码输出=${d.lastOutputWidth}x${d.lastOutputHeight}` +
+          `、配置=${d.lastConfigWidth}x${d.lastConfigHeight}` +
+          (d.lastStreamWidth > 0 ? '' : '★流尺寸未上报(别用后两个当分辨率)');
         const decode: string = `解码器=${d.decoderName.length > 0 ? d.decoderName : '未创建'}` +
           `·档${d.strategy}/4换${d.strategySwitches}` +
+          `、${dims}` +
           `、队列${ap.videoQueueDepth}` +
           (ap.videoResyncs > 0
             ? `、重同步${ap.videoResyncs}次/跳${ap.videoResyncFrames}帧` +
