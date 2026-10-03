@@ -94,6 +94,9 @@ target_include_directories(iPhoneMirrorCore
         # AirPlay 接收端协议库的公开头（raop.h / airplay.h / stream.h）；
         # OhosAirPlayReceiver.cpp 要驱动它，NAPI 桥只读它导出的状态。
         ${IM_CPP_DIR}/third_party/airplayserver/lib/include
+        # 内部头目录（1.0.54：OhosAirPlayReceiver.cpp 要读 raop_buffer.h 暴露的
+        # AAC 解码错误计数）。排最后，尽量少把内部头暴露出去。
+        ${IM_CPP_DIR}/third_party/airplayserver/lib/lib
         ${IM_CPP_DIR}/third_party/airplayserver
         # compat 必须排在最前：它用 include_next 的让路方式接住
         # <format> / <semaphore> / <libusb.h> / <openssl/evp.h>。

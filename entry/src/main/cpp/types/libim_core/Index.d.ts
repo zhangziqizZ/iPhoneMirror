@@ -267,6 +267,9 @@ export interface AirPlayStatus {
   audioDroppedFrames: number; // 因积压被丢弃的旧帧
   audioFlushes: number;       // iPhone 下发的 flush 次数（暂停/切歌/seek）
   audioOpenFailures: number;  // 建流失败次数（>0 时看 audioError）
+  // AAC 解码失败次数（本会话差分）。>0 且持续上涨 = 收到的包损坏/乱序到解不出来；
+  // 这些包按帧长补静音（时间轴不塌），听感是"一下一下没声"而不是噪声。
+  audioDecodeErrors: number;
   audioRendererActive: number; // 1 = 音频流已建立且处于播放态
   audioGain: number;          // 当前线性增益 0..1（RAOP dB 换算后；0 = iPhone 侧静音）
   audioFormat: string;        // 当前音频格式，例 "44100Hz/2ch/16bit"

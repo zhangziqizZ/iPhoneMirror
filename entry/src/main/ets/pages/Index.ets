@@ -2467,6 +2467,7 @@ struct Index {
       + (ap.audioRendererActive !== 0 ? ' · 流已建立' : ' · 流未建立')
       + (ap.audioUnderruns > 0 ? ` · 欠载 ${ap.audioUnderruns}` : '')
       + (ap.audioDroppedFrames > 0 ? ` · 丢旧帧 ${ap.audioDroppedFrames}` : '')
+      + (ap.audioDecodeErrors > 0 ? ` · AAC解码错误 ${ap.audioDecodeErrors}（这些包补静音）` : '')
       + (ap.audioFlushes > 0 ? ` · flush ${ap.audioFlushes}` : '')
       + (ap.audioOpenFailures > 0 ? ` · 建流失败 ${ap.audioOpenFailures}` : '')
       + (ap.audioError.length > 0 ? ` · 错误 ${ap.audioError}` : '');

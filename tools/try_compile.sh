@@ -88,8 +88,10 @@ COMMON_FLAGS=(
     -I"$CPP/Core/src"
     -I"$CPP/ohos"
     # AirPlay 接收端协议库的公开头（raop.h / airplay.h / stream.h / dnssd.h /
-    # im_dnssd_queue.h）。与 CMakeLists 的 iPhoneMirrorCore PRIVATE include 对齐。
+    # im_dnssd_queue.h）。与 CMakeLists 的 iPhoneMirrorCore PRIVATE include 对齐
+    # （lib/lib 是内部头目录，1.0.54 起加进来：raop_buffer.h 的解码错误计数）。
     -I"$CPP/third_party/airplayserver/lib/include"
+    -I"$CPP/third_party/airplayserver/lib/lib"
     -I"$CPP/third_party/airplayserver"
     # 强制预包含语言/库垫片，等价于 CMake 里的 -include。
     -include "$CPP/ohos/compat/ohos_cxx_compat.h"

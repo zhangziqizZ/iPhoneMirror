@@ -34,4 +34,10 @@ void raop_buffer_handle_resends(raop_buffer_t *raop_buffer, raop_resend_cb_t res
 void raop_buffer_flush(raop_buffer_t *raop_buffer, int next_seq);
 void raop_buffer_destroy(raop_buffer_t *raop_buffer);
 
+/* ★ 2026-10-04（1.0.54）：AAC 解码失败次数的进程级累计。
+ * 「静默丢弃路径必须配计数器」——解码失败的包现在按定长补静音（保持时间轴），
+ * 听感是"那一下没声"，但若没有这个计数，排查时根本分不清"解码总失败"
+ * 和"几乎没失败"。跨会话不归零：宿主在会话开始时自己记差分。 */
+unsigned long long raop_audio_decode_errors_total(void);
+
 #endif

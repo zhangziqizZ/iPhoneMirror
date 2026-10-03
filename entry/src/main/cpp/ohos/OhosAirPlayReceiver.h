@@ -64,6 +64,10 @@ typedef struct ImAirPlayStats {
     uint64_t audio_dropped_frames;  // 因积压被丢弃的旧帧
     uint64_t audio_flushes;         // iPhone 下发的 flush 次数（暂停/切歌/seek）
     uint64_t audio_open_failures;   // 建流失败次数（>0 时看 audio_error）
+    // AAC 解码失败次数（进程级累计，跨会话不清零；UI 显示的是与"会话开始时
+    // 基线"的差分）。>0 且持续上涨 = 收到的音频包损坏/乱序到 FDK 解不出来
+    // ——那些包被补成静音（时间轴不塌），听感是"一下一下没声"，而不是噪声。
+    uint64_t audio_decode_errors;
     int audio_renderer_active;      // 1 = 音频流已建立且处于播放态
     float audio_gain;               // 当前线性增益（RAOP dB 换算后；0 = iPhone 侧静音/-30dB 以下）
     char audio_format[IM_AIRPLAY_TEXT_MAX]; // 当前音频格式，例 "44100Hz/2ch/16bit"

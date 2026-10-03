@@ -84,12 +84,15 @@ constexpr std::size_t kPacketFrames = 480;
 // 包长上限（AAC-ELD 512 帧 + 余量），用于按包折算门限，避免包长变大时起播/高水位
 // 实际比标称短一截（够不着门槛 ⇒ 一直不起播 ⇒ 没声音）。
 constexpr std::size_t kMaxPacketFrames = 576;
-// 起播前预缓冲几个包。4 包 @44.1kHz ≈ 43ms：够吸收 Wi-Fi 抖动，又不至于让声音
-// 明显落后于画面（原来 3072 帧 ≈ 70ms）。
-constexpr std::size_t kStartupPackets = 4;
-// 积压上限（超过就丢最旧的，宁可丢也别让延迟越攒越大）：6 包 ≈ 65ms
-// （原来 5120 帧 ≈ 116ms）。
-constexpr std::size_t kHighWaterPackets = 6;
+// 起播前预缓冲几个包。★ 2026-10-04（1.0.54）4→8：实测（欠载 362 次/26s）
+// 43ms 的预缓冲在 Wi-Fi 抖动下远远不够，欠载就是"那次回调没数据、补静音"
+// ——听感为断续/卡顿。8 包 @44.1kHz ≈ 87ms。
+constexpr std::size_t kStartupPackets = 8;
+// 积压上限（超过就丢最旧的，宁可丢也别让延迟越攒越大）。★ 6→16（≈208ms）：
+// 原来的 6 包 ≈ 65ms 与起播门限只差两包，突发到达就触发"丢最旧"，实测
+// 丢旧帧数 ≈ 已播帧数（每秒都有一半音频被丢）。放宽容忍带后，丢帧只在
+// 真正积压时发生；有抖动窗+重传兜底，延迟由 dequeue 的 4 包窗口约束。
+constexpr std::size_t kHighWaterPackets = 16;
 
 class OhosAudioRenderer final : public IAudioRenderer {
 public:
@@ -98,7 +101,7 @@ public:
         : format_(format), playback_enabled_(playback_enabled) {
         validate_format(format);
         const auto layout = detail::checked_wasapi_buffer_layout(format,
-            /*minimum_capacity_frames=*/4096);
+            /*minimum_capacity_frames=*/16384);
         if (!layout) {
             throw std::invalid_argument("ohos audio: 缓冲区布局计算失败");
         }

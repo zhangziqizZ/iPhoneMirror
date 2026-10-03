@@ -87,10 +87,27 @@ struct raop_buffer_s {
 
 static int fdk_flags = 0;
 
+/* ★ 2026-10-04（1.0.54）：AAC 解码失败计数（进程级累计），经
+ * raop_audio_decode_errors_total() 暴露给宿主摊到诊断里。 */
+static unsigned long long g_raop_audio_decode_errors = 0;
+
 /* period size 480 samples */
 #define N_SAMPLE 480
 
 static int pcm_pkt_size = 4 * N_SAMPLE;
+
+/* ★ 2026-10-04（1.0.54）：每个 entry 的 PCM 缓冲从 480×2×2=1920 字节放大到
+ * 4096 字节（可容纳 frameSize 最大 1024×2ch×16bit）。1920 的来历是"ELD 一律
+ * 480 帧"这个不成立的假设——FDK 明写 ELD/LD 是 512 或 480。frameSize=512 时
+ * 每帧要写 512×2×2=2048 字节，FDK 末尾的整块 memcpy 会越过 1920 字节的边界
+ * 写坏**下一个 entry** 的前 128 字节；decode 出错时 FDK 的 memclear 按
+ * timeDataSize 个单位清零，越界清得更远（把后面多个 entry 一起抹掉）。
+ * 这类越界在会话里是持续发生的，正是「电音/炸」的主要来源之一。 */
+static int audio_entry_bytes = 4096;
+
+/* 每个成功解码帧的实际字节数（缺包/失败时补静音用这个长度，保持时间轴对齐）。
+ * 初始值按 480 帧兜底，第一次成功解码后被真值覆盖。 */
+static int last_frame_bytes = 4 * N_SAMPLE;
 
 HANDLE_AACDECODER
 create_fdk_aac_decoder(logger_t *logger)
@@ -165,7 +182,7 @@ raop_buffer_init(logger_t *logger,
     raop_buffer->logger = logger;
 
 	/* Allocate the output audio buffers */
-    audio_buffer_size = 480 * 2 * 2;
+    audio_buffer_size = audio_entry_bytes;
     raop_buffer->phandle = create_fdk_aac_decoder(logger);
     if (!raop_buffer->phandle) {
         free(raop_buffer);
@@ -191,6 +208,12 @@ raop_buffer_init(logger_t *logger,
 	raop_buffer->is_empty = 1;
 
 	return raop_buffer;
+}
+
+unsigned long long
+raop_audio_decode_errors_total(void)
+{
+	return g_raop_audio_decode_errors;
 }
 
 void
@@ -337,7 +360,15 @@ raop_buffer_queue(raop_buffer_t *raop_buffer, unsigned char *data, unsigned shor
     if (ret != AAC_DEC_OK) {
         logger_log(raop_buffer->logger, LOGGER_ERR, "aacDecoder_Fill error : %x", ret);
     }
-	ret = aacDecoder_DecodeFrame(raop_buffer->phandle, entry->audio_buffer, pcm_pkt_size, fdk_flags);
+	// ★ 2026-10-04（1.0.54）：timeDataSize 的单位是 **INT_PCM 元素**（采样点×声道，
+	//   FDK 源码 aacdecoder_lib.cpp 末尾的检查是
+	//   `timeDataSize_extern < numChannels * frameSize`）。原来这里传
+	//   pcm_pkt_size（=1920）——恰好等于旧缓冲的**字节数**，被当成 1920 个元素用
+	//   才一直没触发 TOO_SMALL；frameSize=512 的包需要 1024 单位=2048 字节，
+	//   FDK 末尾整块 memcpy 就越过 1920 字节的 entry 缓冲越界写。
+	//   现在缓冲已放大（audio_entry_bytes=4096），按单位数传参。
+	ret = aacDecoder_DecodeFrame(raop_buffer->phandle, entry->audio_buffer,
+	    audio_entry_bytes / 2, fdk_flags);
 
 	// ★ 2026-10-02 修复「声音是炸的」（爆音）。
 	//
@@ -352,9 +383,18 @@ raop_buffer_queue(raop_buffer_t *raop_buffer, unsigned char *data, unsigned shor
 	//   注意下面用 streamInfo->frameSize 算 bits_per_sample 那行说明原作者知道
 	//   frameSize 会变，只是漏了"帧数/字节数"本身没跟着变。
 	//
-	//   修法：以 frameSize × numChannels × 2 为准算真实字节数；取不到就退回
-	//   pcm_pkt_size（保持原行为，不引入新的静默失败）。
-	int decoded_bytes = pcm_pkt_size;
+	//   修法（1.0.50）：以 frameSize × numChannels × 2 为准算真实字节数。
+	//
+	//   ★ 2026-10-04（1.0.54）两条追加：
+	//   1) 上限从 pcm_pkt_size 改成 entry->audio_buffer_size（4096）——
+	//      pcm_pkt_size=1920 比真实帧长（512 帧=2048 字节）还小，条件恒不成立
+	//      时会退回旧值；真实上限应该是缓冲本身。
+	//   2) 解码失败的包**不再把缓冲里的旧内容当 PCM 播**。原来无论 ret 是什么都
+	//      写 audio_buffer_len（失败时退回 pcm_pkt_size），把上一包的残留或
+	//      未初始化内存当成当前帧播出去——听感就是周期性的「电音/炸」。现在
+	//      IS_OUTPUT_VALID 不成立 ⇒ 按最近一次的真实帧长补静音（时间轴不塌）
+	//      并计数；decoded_bytes 算不出来（streamInfo 为 NULL/异常）同理。
+	int decoded_bytes = 0;
 	CStreamInfo* streamInfo = aacDecoder_GetStreamInfo(raop_buffer->phandle);
 	if (streamInfo != NULL) {
 		entry->sample_rate = streamInfo->sampleRate;
@@ -363,19 +403,29 @@ raop_buffer_queue(raop_buffer_t *raop_buffer, unsigned char *data, unsigned shor
 			// 每帧字节 = 帧长 × 声道 × 2（16bit）。本链路 ELD 一律 16bit。
 			const int bytes_per_frame =
 			    streamInfo->frameSize * streamInfo->numChannels * 2;
-			if (bytes_per_frame > 0 && bytes_per_frame <= pcm_pkt_size) {
+			if (bytes_per_frame > 0 && bytes_per_frame <= entry->audio_buffer_size) {
 				decoded_bytes = bytes_per_frame;
 			}
 		}
-		if (entry->channels != 0 && streamInfo->frameSize != 0) {
+		if (decoded_bytes > 0 && entry->channels != 0 && streamInfo->frameSize != 0) {
 			entry->bits_per_sample =
 			    decoded_bytes * 8 / (streamInfo->frameSize * entry->channels);
 		}
 	}
-	entry->audio_buffer_len = decoded_bytes;
-	if (ret != AAC_DEC_OK) {
-		logger_log(raop_buffer->logger, LOGGER_ERR, "aacDecoder_DecodeFrame error : 0x%x", ret);
+	if (!IS_OUTPUT_VALID(ret) || decoded_bytes <= 0) {
+		if (!IS_OUTPUT_VALID(ret)) {
+			g_raop_audio_decode_errors += 1;
+			logger_log(raop_buffer->logger, LOGGER_ERR, "aacDecoder_DecodeFrame error : 0x%x", ret);
+		}
+		decoded_bytes = last_frame_bytes;
+		if (decoded_bytes > entry->audio_buffer_size) {
+			decoded_bytes = entry->audio_buffer_size;
+		}
+		memset(entry->audio_buffer, 0, decoded_bytes);
+	} else {
+		last_frame_bytes = decoded_bytes;
 	}
+	entry->audio_buffer_len = decoded_bytes;
 #ifdef DUMP_AUDIO
     if (file_pcm != NULL) {
         fwrite(entry->audio_buffer, entry->audio_buffer_len, 1, file_pcm);
@@ -427,8 +477,15 @@ raop_buffer_dequeue(raop_buffer_t *raop_buffer, int *length, unsigned int* pts, 
 	/* Update buffer and validate entry */
 	raop_buffer->first_seqnum += 1;
 	if (!entry->available) {
-		/* Return an empty audio buffer to skip audio */
-		*length = entry->audio_buffer_size;
+		/* Return a silence buffer to skip audio.
+		 * ★ 2026-10-04（1.0.54）：静音长度用最近一次真实帧长，不再用
+		 * entry->audio_buffer_size —— 缓冲放大后那是 4096 字节（=1024 帧），
+		 * 而一个丢包只欠 480/512 帧的时间；按缓冲尺寸补会凭空多出一段
+		 * 时间轴，每丢一包音频就往前赶一截，积起来就是持续掉帧/走音。 */
+		*length = last_frame_bytes;
+		if (*length > entry->audio_buffer_size) {
+			*length = entry->audio_buffer_size;
+		}
 		memset(entry->audio_buffer, 0, *length);
 		return entry->audio_buffer;
 	}

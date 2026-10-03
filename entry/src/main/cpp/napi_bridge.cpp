@@ -681,6 +681,9 @@ napi_value JsAirPlayGetStatus(napi_env env, napi_callback_info /*info*/) {
         static_cast<double>(stats.audio_flushes));
     set_f64(env, object, "audioOpenFailures",
         static_cast<double>(stats.audio_open_failures));
+    // AAC 解码失败次数（本会话差分；包被补成静音，不进城噪声）
+    set_f64(env, object, "audioDecodeErrors",
+        static_cast<double>(stats.audio_decode_errors));
     set_f64(env, object, "audioRendererActive", stats.audio_renderer_active);
     set_f64(env, object, "audioGain", static_cast<double>(stats.audio_gain));
     set_utf8(env, object, "audioFormat", stats.audio_format);

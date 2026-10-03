@@ -251,6 +251,17 @@ raop_rtp_init_sockets(raop_rtp_t *raop_rtp, int use_ipv6, int use_udp)
         goto sockets_cleanup;
     }
 
+    /* ★ 2026-10-04（1.0.54）：加大音频/控制套接字的内核接收缓冲。
+     * 收包线程对每个 UDP 包"就地解密+解码"，Wi-Fi 突发时（尤其 decode 或
+     * 下游 enqueue 偶发变慢）内核队列一满就开始静默丢包——UDP 没有流控，
+     * 丢了就是丢了。256KB 是尽力而为：失败不影响功能，成功则显著减少
+     * 内核层丢包（这正是重传请求救不回来的那一部分）。 */
+    {
+        int rcvbuf = 256 * 1024;
+        setsockopt(csock, SOL_SOCKET, SO_RCVBUF, (const char *)&rcvbuf, sizeof(rcvbuf));
+        setsockopt(dsock, SOL_SOCKET, SO_RCVBUF, (const char *)&rcvbuf, sizeof(rcvbuf));
+    }
+
     /* Set socket descriptors */
     raop_rtp->csock = csock;
     raop_rtp->tsock = tsock;
@@ -509,7 +520,17 @@ raop_rtp_thread_udp(void *arg)
             //logger_log(raop_rtp->logger, LOGGER_DEBUG, "raop_rtp_thread_udp type_d 0x%02x, packetlen = %d", type_d, packetlen);
 
             if (packetlen >= 12) {
-                int no_resend = 1;  // ULTRA-LOW LATENCY: Force immediate playback, bypass buffering wait (was: raop_rtp->control_rport == 0)
+                // ★ 2026-10-04（1.0.54）：恢复上游的丢包恢复路径。这里是后来被
+                //   改成硬编码 no_resend=1 的（"ULTRA-LOW LATENCY"），代价是：
+                //   永远不向 iPhone 请求重传 ⇒ UDP 上任何丢包都变成永久空档——
+                //   缺包补静音、解码器状态断链（下一批帧带着错误译出来，听感
+                //   就是「电音/炸」）、时间轴压缩。实测读数（欠载 362 次、
+                //   丢旧帧 ≈ 已播帧数）就是这个策略在 Wi-Fi 上的账单。
+                //   恢复上游判据 no_resend = (control_rport == 0)：有控制端口
+                //   就允许等 buflen≥4（≈44ms 抖动窗）再出帧并请求重传；重传
+                //   数据从 csock(type 0x56) 回来后照常入队解码。44ms 换掉
+                //   持续噪声，对投屏音频是值得的。
+                int no_resend = (raop_rtp->control_rport == 0);
                 int buf_ret;
                 const void *audiobuf;
                 int audiobuflen;

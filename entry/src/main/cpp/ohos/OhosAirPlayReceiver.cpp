@@ -33,6 +33,7 @@
 #include "im_dnssd_queue.h"
 #include "OhosMdnsResponder.h"
 #include "raop.h"
+#include "raop_buffer.h"
 #include "stream.h"
 
 #include <algorithm>
@@ -376,6 +377,8 @@ std::string g_audio_format_key;
 std::atomic<uint64_t> g_audio_bytes_fed{0};
 std::atomic<uint64_t> g_audio_flushes{0};
 std::atomic<uint64_t> g_audio_open_failures{0};
+// AAC 解码错误的本会话基线（raop_buffer.c 里是进程级累计，见 im_airplay_start）
+static unsigned long long g_audio_decode_errors_baseline = 0;
 // iPhone 侧音量（raop 的 audio_set_volume）。建新流时沿用它。
 std::atomic<float> g_audio_volume{1.0F};
 // 建流失败后置位，避免每包重试（44100 包/秒全在抛异常刷日志）；
@@ -1097,6 +1100,10 @@ int im_airplay_start(const char *name, const char *password) {
     g_audio_bytes_fed.store(0);
     g_audio_flushes.store(0);
     g_audio_open_failures.store(0);
+    // AAC 解码错误计数在 raop_buffer.c 里是进程级累计（拿不到 raop_buffer_t 句柄
+    // 逐会话清零），这里记会话开始时的基线，导出时取差分 —— UI 看到的就是
+    // 本会话的账，而不是开机以来的总账。
+    g_audio_decode_errors_baseline = raop_audio_decode_errors_total();
     g_audio_volume.store(1.0F);
     {
         // 音频状态必须跟视频一样在新会话开始时清零 —— 否则上一轮的
@@ -1191,6 +1198,10 @@ void im_airplay_get_stats(ImAirPlayStats *out) {
             out->audio_underruns = playback.underruns;
             out->audio_dropped_frames = playback.dropped_frames;
         }
+        out->audio_decode_errors = raop_audio_decode_errors_total() >=
+                g_audio_decode_errors_baseline
+            ? raop_audio_decode_errors_total() - g_audio_decode_errors_baseline
+            : 0;
         if (g_audio_format_known) {
             const std::string described = DescribeAudioFormat(g_audio_format);
             std::snprintf(out->audio_format, sizeof(out->audio_format), "%s",
