@@ -124,7 +124,10 @@ public:
         if (playback_enabled_) {
             open_stream(volume);
         } else {
-            volume_ = volume;
+            // ★ 2026-10-05：构造时不打开流，把目标音量存进 volume_units_。
+            volume_units_.store(static_cast<std::uint32_t>(std::lround(
+                std::clamp(volume, 0.0F, 1.0F) * 10000.0F)),
+                std::memory_order_relaxed);
         }
     }
 
@@ -190,12 +193,16 @@ public:
     }
 
     void set_volume(float volume) noexcept override {
-        volume_.store(volume);
-#if IM_HAVE_OHOS_OHAUDIO
-        if (renderer_ != nullptr) {
-            OH_AudioRenderer_SetVolume(renderer_, volume);
-        }
-#endif
+        // ★ 2026-10-05：音量改成 PCM 增益 ramp（对照上游 WasapiRenderer.cpp:314-335）。
+        //   上游这套消除了"启停/调音量时咔咔"的可闻爆音，我们之前调系统接口
+        //   `OH_AudioRenderer_SetVolume` 是瞬时切换，硬件层听到的就是硬切 → 咔。
+        //   现在音量只改 `volume_units_`（PCM ramp 的目标），系统级音量固定 1.0f
+        //   让所有幅度变化都在 PCM 上做线性 ramp —— 一个 endpoint buffer 内
+        //   完成，听感上是平滑过渡。
+        if (!std::isfinite(volume)) return;
+        const auto clamped = std::clamp(volume, 0.0F, 1.0F);
+        volume_units_.store(static_cast<std::uint32_t>(std::lround(clamped * 10000.0F)),
+            std::memory_order_relaxed);
     }
 
     void stop() noexcept override {
@@ -203,6 +210,7 @@ public:
             std::scoped_lock lock(mutex_);
             if (stopped_) return;
             stopped_ = true;
+            current_gain_units_ = 0; // ★ 重置：下次 ramp 从 0 开始（即使复用同一实例）
         }
         // 释放音频对象时必须放开 mutex_：OHAudio 的写回调会去抢同一把锁，
         // 持锁 Stop/Release 会和回调线程互等。
@@ -296,6 +304,33 @@ private:
             std::memset(destination + offset, 0, bytes - offset);
             ++underruns_;
         }
+        // ★ 2026-10-05：PCM 增益 ramp（对照上游 WasapiRenderer.cpp:314-335）。
+        //   在一个 endpoint buffer 内从 start_gain 线性插值到 target_gain：
+        //     - 启播时：start=0 → target=volume，淡入听不到爆音
+        //     - 停止时：target=0，衰减到静音不咔
+        //     - 调音量时：start=上次的尾值 → target=新值，平滑过渡
+        //   立体声 48kHz × 192 帧回调 ≈ 18k 次 int32 乘法/回调，可忽略。
+        if (frames_to_copy > 0) {
+            const auto target_gain = playback_enabled_.load(std::memory_order_relaxed)
+                ? volume_units_.load(std::memory_order_relaxed)
+                : 0U;
+            const auto start_gain = current_gain_units_;
+            const auto delta = static_cast<std::int64_t>(target_gain) -
+                static_cast<std::int64_t>(start_gain);
+            auto* samples = reinterpret_cast<std::int16_t*>(destination);
+            const auto channels = static_cast<std::size_t>(format_.channels_per_frame);
+            for (std::size_t f = 0; f < frames_to_copy; ++f) {
+                const auto gain = static_cast<std::int64_t>(start_gain) +
+                    delta * static_cast<std::int64_t>(f + 1U) /
+                    static_cast<std::int64_t>(frames_to_copy);
+                for (std::size_t c = 0; c < channels; ++c) {
+                    const size_t idx = f * channels + c;
+                    const auto scaled = static_cast<std::int32_t>(samples[idx]) * gain / 10000;
+                    samples[idx] = static_cast<std::int16_t>(scaled);
+                }
+            }
+            current_gain_units_ = target_gain;
+        }
         return frames_to_copy;
     }
 
@@ -369,8 +404,11 @@ private:
             renderer_ = nullptr;
             throw std::runtime_error("OH_AudioStreamBuilder_GenerateRenderer 失败");
         }
-        volume_ = volume;
-        OH_AudioRenderer_SetVolume(renderer_, volume);
+        volume_units_.store(static_cast<std::uint32_t>(std::lround(
+            std::clamp(volume, 0.0F, 1.0F) * 10000.0F)),
+            std::memory_order_relaxed);
+        current_gain_units_ = 0; // ★ 重置：下次 ramp 从 0 开始，避免复用上次的尾值
+        OH_AudioRenderer_SetVolume(renderer_, 1.0F); // 系统级恒 1，音量全交 PCM ramp
         OH_AudioRenderer_Start(renderer_);
 
         // ── 把真值记进日志：这几个数决定了"声音为什么是现在这样" ────────
@@ -435,7 +473,11 @@ private:
     bool started_{};
     bool stopped_{};
     std::atomic<bool> playback_enabled_{false};
-    std::atomic<float> volume_{1.0F};
+    // ★ 2026-10-05：音量改成 PCM 增益 ramp。`volume_units_` 是 ramp 的目标增益
+    //   （0..10000）。current_gain_units_ 是上次 dequeue 末尾的实时增益
+    //   （仅 render 线程访问、pull() 持锁，故无需原子）。
+    std::atomic<std::uint32_t> volume_units_{10000};
+    std::uint32_t current_gain_units_{0};
 };
 
 } // namespace
