@@ -431,7 +431,11 @@ bool annex_b_has_nal_type(std::span<const std::uint8_t> data, std::uint8_t want_
 //   待推队列的上限。与收包侧 kMirrorQueueLimit 同为 3，但**含义不同，别混**——
 //   那个管"收包线程 → 解码线程"，这个管"解码线程 → 解码器"。两处都得有上限，
 //   缺任何一个都会形成"生产快于消费"的正反馈，表现为延迟飙升 + 帧率塌陷。
-static constexpr std::size_t kMaxPendingInput = 3;
+//
+//   ★ 2026-10-05（1.0.55）：3 → 2，与上游对齐（上游文档写"视频队列 1–2 帧上界"）。
+//     投屏是实时流，队列里每多一帧就是多一帧的端到端延迟；抖动吸收靠"解码器
+//     自己的在途帧 + 这一个槽"就够，再多纯粹是把延迟堆给用户看。
+static constexpr std::size_t kMaxPendingInput = 2;
 
 class OhosVideoDecoder final : public IVideoDecoder {
 public:
@@ -522,38 +526,23 @@ public:
                 maybe_switch_strategy_locked();
             }
         }
-        // 等输出：解码是回调驱动的，给输出回调一点时间把帧交回来。
-        // 1080p60 HW 解码冷启动（首 I 帧）常 >8ms，原值会让"解码成功但被超时丢弃"，
-        // 表现为 present() 拿不到帧、画面黑。改 50ms 后再慢的解码器也能覆盖到首帧，
-        // 后续帧因为解码器已 warm，产出基本在 16ms 内完成。
+        // ★ 2026-10-05（1.0.55，对照上游）：这里**原来要阻塞等输出**——
+        //   喂一帧后 wait_for 等这一帧吐出来（1.0.49 起按 EMA 自适应放宽到
+        //   50–400ms）。上游 MediaFoundationVideoDecoder::decode_once 的做法
+        //   正好相反：ProcessInput 之后只把**当时所有可读的输出一次取走**
+        //   （`while (auto output = receive_output()) …`），一次都不等。
         //
-        // ★ 2026-10-02：这个 50ms 其实是**帧率天花板**。解码慢于 50ms 的档位
-        //   （典型：软解 3440x1440，单帧 100ms+）每帧都要把 50ms 等满才返回，
-        //   于是 fps 被死死压在 1000/50 = 20fps 以下，再叠加 pending 堆积就更低。
-        //   现在按实测耗时 EMA 自适应放宽（上限 400ms），并把耗时如实记进诊断
-        //   —— 这样"软解扛不扛得住这个分辨率"有直接读数，不必再靠 fps 反推。
-        const std::uint64_t observed_us = Diag().sw_decode_us.load(std::memory_order_relaxed);
-        const std::int64_t wait_ms = observed_us == 0
-            ? 50
-            : std::clamp<std::int64_t>(
-                  static_cast<std::int64_t>(observed_us / 1000) + 20, 50, 400);
-        const auto wait_started = std::chrono::steady_clock::now();
-        std::unique_lock lock(mutex_);
-        output_ready_.wait_for(lock, std::chrono::milliseconds(wait_ms),
-            [this] { return !decoded_.empty() || failed_; });
-        const bool got = !decoded_.empty();
-        const auto waited_us = std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::steady_clock::now() - wait_started).count();
-        lock.unlock();
-        // 只在"确实等到输出"时统计：超时返回的那次耗时是等待上限而非解码耗时，
-        // 混进去会把 EMA 越推越高、进而无限放宽等待（自反馈的假成功）。
-        if (got && waited_us > 0) {
-            const std::uint64_t prev = Diag().sw_decode_us.load(std::memory_order_relaxed);
-            const std::uint64_t sample = prev == 0
-                ? static_cast<std::uint64_t>(waited_us)
-                : (prev * 7 + static_cast<std::uint64_t>(waited_us)) / 8;
-            Diag().sw_decode_us.store(sample, std::memory_order_relaxed);
-        }
+        //   等输出有三笔账，都是用户现在抱怨的那两项：
+        //   ① 帧率被钉死在 1/等待 —— 解码慢于 waits 的档位每帧都把等待等满；
+        //   ② 每帧凭空多等一轮 ⇒ 端到端延迟直接 += 等待时长；
+        //   ③ 解码线程被占住 ⇒ 收包侧堆积 ⇒ 反过来触发 pending 溢出/等 IDR。
+        //
+        //   现在改成非阻塞：有就把**全部**取走（上游同样要求"不能只保留最后一帧"），
+        //   没有就返回空。背压改由队列长度承担（见 kMaxPendingInput）而不是等待，
+        //   这才是"丢帧保实时"，而不是"排队保完整"。
+        //
+        //   代价要说清：最后一帧要等下一次输入才会被带出来（上游同步 MFT 同理）。
+        //   镜像是持续流，这等于多一帧的间隔；流停了则由 drain() 收尾。
         std::scoped_lock relock(mutex_);
         return take_decoded_locked();
     }
@@ -810,6 +799,20 @@ private:
         OH_AVFormat_SetIntValue(description, OH_MD_KEY_PIXEL_FORMAT, AV_PIXEL_FORMAT_NV12);
         OH_AVFormat_SetIntValue(description, OH_MD_KEY_FRAME_RATE,
             static_cast<std::int32_t>(fps_numerator_ / fps_denominator_));
+        // ★ 2026-10-05（1.0.55，对照上游 v1.8.3 的 docs/D3D11_RENDERING.md）：
+        //   上游给解码器设 MF_MT_VIDEO_NO_FRAME_ORDERING 禁掉帧重排，文档记
+        //   "禁止无必要的 frame ordering 后，MFT 输入与输出 PTS 逐帧相等，不再
+        //    出现约 14 帧（≈233 ms）的周期性滞后"。
+        //   鸿蒙侧的对应项是 OH_MD_KEY_VIDEO_ENABLE_LOW_LATENCY（@since 12，
+        //   值 int32 0/1，用于 configure）：官方口径"the decoder doesn't hold
+        //   input and output data more than required by the codec standards"
+        //   —— 同样是不让解码器为了排序多攥着帧。投屏是实时流，排序带来的
+        //   延迟毫无收益。失败只是丢这个优化，不影响解码本身。
+        if (!OH_AVFormat_SetIntValue(description, OH_MD_KEY_VIDEO_ENABLE_LOW_LATENCY, 1)) {
+            logging::write(logging::Level::Warning, "decoder",
+                "低延迟模式设置失败（OH_MD_KEY_VIDEO_ENABLE_LOW_LATENCY），"
+                "解码器会按标准多留若干帧做重排，延迟会高");
+        }
         // 参数集（SPS/PPS/VPS）必须在 Configure 之前给进去，否则解码器无从得知
         // 编码参数。AVCC 流的参数集在 avcC 里、样本里未必带，见 build_codec_config。
         const std::vector<std::uint8_t> codec_config = have_codec_config_override_
@@ -1134,6 +1137,27 @@ private:
             frame.color = self->format_.color;
             frame.nv12 = std::move(pixels);
             self->decoded_.push_back(std::move(frame));
+            // ★ 2026-10-05（1.0.55）：产出节奏 EMA（微秒）—— 两次"真出像素"
+            //   之间的间隔。1.0.55 起它取代了旧的"阻塞等输出等了多久"：那个数
+            //   含等待上限、不是解码耗时；改成非阻塞取帧后没有等待可量，改为量
+            //   真实产出间隔，才是"解码器多久吐一帧"（≈ 解码能力上限）。
+            {
+                const auto now = std::chrono::steady_clock::now();
+                const std::int64_t now_us =
+                    std::chrono::duration_cast<std::chrono::microseconds>(
+                        now.time_since_epoch()).count();
+                const std::int64_t prev_us = self->last_output_us_.exchange(now_us,
+                    std::memory_order_relaxed);
+                if (prev_us != 0 && now_us > prev_us) {
+                    const std::uint64_t interval =
+                        static_cast<std::uint64_t>(now_us - prev_us);
+                    const std::uint64_t prev =
+                        Diag().sw_decode_us.load(std::memory_order_relaxed);
+                    Diag().sw_decode_us.store(prev == 0
+                        ? interval : (prev * 7 + interval) / 8,
+                        std::memory_order_relaxed);
+                }
+            }
             Diag().output_with_pixels.fetch_add(1, std::memory_order_relaxed);
         } else {
             Diag().output_no_pixels.fetch_add(1, std::memory_order_relaxed);
@@ -1142,8 +1166,10 @@ private:
         self->output_ready_.notify_all();
     }
 
-    mutable std::mutex mutex_;
-    std::condition_variable output_ready_;
+  mutable std::mutex mutex_;
+  std::condition_variable output_ready_;
+  // 上一次"真出像素"的时刻（steady_clock µs），用来算产出间隔（见 OnNewOutputBuffer）
+  std::atomic<std::int64_t> last_output_us_{0};
 
     OH_AVCodec* codec_{};
     OH_AVBuffer* input_buffer_{};

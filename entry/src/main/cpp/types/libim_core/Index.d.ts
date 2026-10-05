@@ -304,7 +304,10 @@ export interface AirPlayStatus {
   videoPendingOverflow: number;    // 待推队列溢出次数（>0 = 解码跟不上实时）
   videoFillPeak: number;           // 待推队列历史最大深度（只增不减）
   videoDecoderIdrRequests: number; // 因内部溢出而触发的"等 IDR"次数
-  videoDecodeUs: number;           // 实测解码耗时 EMA（微秒，0 = 尚未量到）
+  // 1.0.55 起口径改为"两次真出像素之间的间隔" EMA（微秒，0 = 尚未量到）。
+  // 以前是"每帧阻塞等输出等了多久"（含等待上限，并不是解码耗时）；改成
+  // 非阻塞取帧（对齐上游 decode_once）后没有等待可量，改为量真实产出节奏。
+  videoDecodeUs: number;
   // 冻结诊断（1.0.50）。"延迟低 + 帧率极低" 这个组合必须靠 videoFrozenMs 解释：
   // 冻结（等 IDR）期间队列被清空 ⇒ 延迟读数反而很低，但画面是定住的。
   videoFrozenMs: number;           // 本次已冻结的毫秒数（0 = 当前没在冻结）
