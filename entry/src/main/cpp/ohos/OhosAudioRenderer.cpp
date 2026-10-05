@@ -93,8 +93,15 @@ constexpr std::size_t kMaxPacketFrames = 576;
 // 重传，缓冲浅就意味着抖动窗口一破就拿静音补包，听感就是断续和电音。
 // 代价要说清：音频起播延迟从 ~90ms 涨到 ~190ms；上游没有做音视频同步（我们也
 // 没有），这是用 ~100ms 的音画偏移换能听。
-constexpr std::size_t kStartupPackets = 16;    // ≈ 190ms @44.1k（上游 180ms）
-constexpr std::size_t kHighWaterPackets = 32;  // ≈ 380ms（上游 400ms）
+// ★ 2026-10-05 v1.0.60 撤回：起播预缓冲 16 包（≈190ms）+ 积压 32 包（≈380ms）
+//   是按"上游无线档"的口径对齐的（WasapiRenderer 的 NetworkJitter 档），但它假设
+//   的是 Windows 上有 AudioGraph 时基做同步。**鸿蒙侧没有音画同步**（上游也没有
+//   —— 搜 capture_session.cpp 没有 audio-video sync 逻辑），所以音频延迟 570ms
+//   与视频延迟 250ms 之间是**必然错位** ~280ms（嘴唇对不上）。
+//   回到 v1.0.50 的口径：起播 4 包（≈87ms）+ 积压 6 包（≈130ms）→ 音频总延迟
+//   ~220ms，与视频侧更接近。代价：起播瞬间可能短暂 0-1 包欠载（< 5ms，可听不到）。
+constexpr std::size_t kStartupPackets = 4;     // ≈ 87ms @44.1k
+constexpr std::size_t kHighWaterPackets = 6;  // ≈ 130ms
 // 环形缓冲容量（帧）。上游 500ms；@48kHz = 24000，取 24576（2 的幂便于取模）。
 constexpr std::size_t kRingCapacityFrames = 24576;
 
@@ -124,10 +131,7 @@ public:
         if (playback_enabled_) {
             open_stream(volume);
         } else {
-            // ★ 2026-10-05：构造时不打开流，把目标音量存进 volume_units_。
-            volume_units_.store(static_cast<std::uint32_t>(std::lround(
-                std::clamp(volume, 0.0F, 1.0F) * 10000.0F)),
-                std::memory_order_relaxed);
+            volume_.store(volume);
         }
     }
 
@@ -193,16 +197,16 @@ public:
     }
 
     void set_volume(float volume) noexcept override {
-        // ★ 2026-10-05：音量改成 PCM 增益 ramp（对照上游 WasapiRenderer.cpp:314-335）。
-        //   上游这套消除了"启停/调音量时咔咔"的可闻爆音，我们之前调系统接口
-        //   `OH_AudioRenderer_SetVolume` 是瞬时切换，硬件层听到的就是硬切 → 咔。
-        //   现在音量只改 `volume_units_`（PCM ramp 的目标），系统级音量固定 1.0f
-        //   让所有幅度变化都在 PCM 上做线性 ramp —— 一个 endpoint buffer 内
-        //   完成，听感上是平滑过渡。
-        if (!std::isfinite(volume)) return;
-        const auto clamped = std::clamp(volume, 0.0F, 1.0F);
-        volume_units_.store(static_cast<std::uint32_t>(std::lround(clamped * 10000.0F)),
-            std::memory_order_relaxed);
+        // ★ 2026-10-05 v1.0.60 撤回 v1.0.58 的 PCM 增益 ramp：那条改的方向错了。
+        //   上游 `WasapiRenderer.cpp:314-335` 的 PCM ramp 是为了消除"音量滑杆/启停
+        //   时的硬切咔咔"，但用户的核心症状是"持续电音/底噪/延迟大/和画面错位"，
+        //   PCM ramp 对这几条**没有因果**。v1.0.58 没用，撤回到系统级音量。
+        volume_.store(volume);
+#if IM_HAVE_OHOS_OHAUDIO
+        if (renderer_ != nullptr) {
+            OH_AudioRenderer_SetVolume(renderer_, volume);
+        }
+#endif
     }
 
     void stop() noexcept override {
@@ -210,7 +214,6 @@ public:
             std::scoped_lock lock(mutex_);
             if (stopped_) return;
             stopped_ = true;
-            current_gain_units_ = 0; // ★ 重置：下次 ramp 从 0 开始（即使复用同一实例）
         }
         // 释放音频对象时必须放开 mutex_：OHAudio 的写回调会去抢同一把锁，
         // 持锁 Stop/Release 会和回调线程互等。
@@ -304,33 +307,6 @@ private:
             std::memset(destination + offset, 0, bytes - offset);
             ++underruns_;
         }
-        // ★ 2026-10-05：PCM 增益 ramp（对照上游 WasapiRenderer.cpp:314-335）。
-        //   在一个 endpoint buffer 内从 start_gain 线性插值到 target_gain：
-        //     - 启播时：start=0 → target=volume，淡入听不到爆音
-        //     - 停止时：target=0，衰减到静音不咔
-        //     - 调音量时：start=上次的尾值 → target=新值，平滑过渡
-        //   立体声 48kHz × 192 帧回调 ≈ 18k 次 int32 乘法/回调，可忽略。
-        if (frames_to_copy > 0) {
-            const auto target_gain = playback_enabled_.load(std::memory_order_relaxed)
-                ? volume_units_.load(std::memory_order_relaxed)
-                : 0U;
-            const auto start_gain = current_gain_units_;
-            const auto delta = static_cast<std::int64_t>(target_gain) -
-                static_cast<std::int64_t>(start_gain);
-            auto* samples = reinterpret_cast<std::int16_t*>(destination);
-            const auto channels = static_cast<std::size_t>(format_.channels_per_frame);
-            for (std::size_t f = 0; f < frames_to_copy; ++f) {
-                const auto gain = static_cast<std::int64_t>(start_gain) +
-                    delta * static_cast<std::int64_t>(f + 1U) /
-                    static_cast<std::int64_t>(frames_to_copy);
-                for (std::size_t c = 0; c < channels; ++c) {
-                    const size_t idx = f * channels + c;
-                    const auto scaled = static_cast<std::int32_t>(samples[idx]) * gain / 10000;
-                    samples[idx] = static_cast<std::int16_t>(scaled);
-                }
-            }
-            current_gain_units_ = target_gain;
-        }
         return frames_to_copy;
     }
 
@@ -404,11 +380,8 @@ private:
             renderer_ = nullptr;
             throw std::runtime_error("OH_AudioStreamBuilder_GenerateRenderer 失败");
         }
-        volume_units_.store(static_cast<std::uint32_t>(std::lround(
-            std::clamp(volume, 0.0F, 1.0F) * 10000.0F)),
-            std::memory_order_relaxed);
-        current_gain_units_ = 0; // ★ 重置：下次 ramp 从 0 开始，避免复用上次的尾值
-        OH_AudioRenderer_SetVolume(renderer_, 1.0F); // 系统级恒 1，音量全交 PCM ramp
+        volume_.store(volume);
+        OH_AudioRenderer_SetVolume(renderer_, volume);
         OH_AudioRenderer_Start(renderer_);
 
         // ── 把真值记进日志：这几个数决定了"声音为什么是现在这样" ────────
@@ -473,11 +446,7 @@ private:
     bool started_{};
     bool stopped_{};
     std::atomic<bool> playback_enabled_{false};
-    // ★ 2026-10-05：音量改成 PCM 增益 ramp。`volume_units_` 是 ramp 的目标增益
-    //   （0..10000）。current_gain_units_ 是上次 dequeue 末尾的实时增益
-    //   （仅 render 线程访问、pull() 持锁，故无需原子）。
-    std::atomic<std::uint32_t> volume_units_{10000};
-    std::uint32_t current_gain_units_{0};
+    std::atomic<float> volume_{1.0F};
 };
 
 } // namespace
