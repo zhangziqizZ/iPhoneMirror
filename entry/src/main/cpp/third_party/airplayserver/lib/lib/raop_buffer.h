@@ -22,6 +22,17 @@ typedef struct raop_buffer_s raop_buffer_t;
 
 typedef int (*raop_resend_cb_t)(void *opaque, unsigned short seqno, unsigned short count);
 
+/* ★ 2026-10-05：整头用 extern "C" 包起来。
+ * 本头描述的是 C 库（raop_buffer.c 编译出的目标文件里符号是**未修饰**的），
+ * 而 1.0.54 起它被 C++ 侧（OhosAirPlayReceiver.cpp）包含。少了这个包裹，
+ * C++ 会按名字修饰去找 raop_audio_decode_errors_total(int) 之类，链接期直接
+ * `undefined symbol` —— 编译期完全不报错，只有最终链 .so 时才炸（用户那边
+ * 就是这一步挂的 00308018）。放在 include 之后：只为函数声明生效，
+ * logger.h / raop_rtp.h 自己已有各自的链接规格处理，不需要被包进来。 */
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 raop_buffer_t *raop_buffer_init(logger_t *logger,
                                 const unsigned char *aeskey,
                                 const unsigned char *aesiv,
@@ -39,5 +50,9 @@ void raop_buffer_destroy(raop_buffer_t *raop_buffer);
  * 听感是"那一下没声"，但若没有这个计数，排查时根本分不清"解码总失败"
  * 和"几乎没失败"。跨会话不归零：宿主在会话开始时自己记差分。 */
 unsigned long long raop_audio_decode_errors_total(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

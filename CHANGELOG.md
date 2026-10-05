@@ -43,6 +43,18 @@
 5. **UDP 内核接收缓冲加大到 256KB**（尽力而为）：收包线程逐包就地解密+解码，
    内核队列一满就静默丢包，这部分连重传都救不回来。
 
+### 修复：链接失败（`undefined symbol: raop_audio_decode_errors_total`）
+
+上一节新增的 AAC 解码错误计数定义在 C 文件里（`raop_buffer.c`），而 C++ 侧
+（`OhosAirPlayReceiver.cpp`）包含它的头文件时没有 `extern "C"` ⇒ C++ 按名字
+修饰去找符号，编译期不报错，**直到最终链 `libim_core.so` 才炸**（构建挂
+00308018 / ld.lld: undefined symbol）。`raop_buffer.h` 现已整体包上
+`extern "C"`（放在 include 之后，只为函数声明生效）。
+
+★ 这类错误本机 `try_compile.sh` 抓不到——它只 `-c` 编译、不链接。已补一个
+链接探针（`.build-check/link_probe.cpp`）：它 include 该头并调用那个函数，
+与 vendored 的 `.o` 一起链一次即可证符号对得上。
+
 ### 诊断：新增「AAC解码错误 N」读数
 
 音频诊断行新增解码失败计数（本会话差分）。判读：>0 且持续上涨 = 收到的包
