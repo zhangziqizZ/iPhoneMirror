@@ -134,6 +134,10 @@ typedef struct ImAirPlayStats {
     // 口径不含 iPhone 编码与网络前段（那段只有发送端知道）；
     // 0 = 尚无出帧样本。avg 涨到几百 ms = 解码跟不上实时（对照 video_queue_dropped）。
     int video_latency_ms;
+    // 延迟归因失败次数（1.0.56）：出帧没能配对到它的输入包 ⇒ 这一帧的延迟
+    // 没被计入 EMA。>0 且延迟恒为"—"= 解码器没回传 PTS 或顺序异常，得改用
+    // 别的口径；>0 但延迟有值 = 只是偶发（丢帧/参数集帧），可忽略。
+    uint64_t video_latency_unmatched;
     // 最后一次 OnError 的错误码文本，例 "ohos avcodec error=14"。
     char video_decoder_last_error[IM_AIRPLAY_TEXT_MAX];
     int clients;                 // 当前连接数

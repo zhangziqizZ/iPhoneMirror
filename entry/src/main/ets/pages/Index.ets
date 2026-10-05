@@ -2216,6 +2216,13 @@ struct Index {
             ? `、出帧间隔${(ap.videoDecodeUs / 1000).toFixed(0)}ms` +
               (ap.videoDecodeUs > 16667 ? '(慢于一帧)' : '')
             : '') +
+          // ★ 延迟归因账（1.0.56）。非阻塞取帧后出帧属于上一个包，延迟必须
+          //   按帧自己的输入包算；对不上的帧直接不计入 EMA，在这里留个数 ——
+          //   否则"延迟显示「—」"分不清是"还没量到"还是"永远量不到"。
+          (ap.videoLatencyUnmatched > 0
+            ? `、延迟未归因${ap.videoLatencyUnmatched}` +
+              (ap.videoLatencyMs > 0 ? '' : '(★延迟读数不可信)')
+            : '') +
           // ★ 冻结读数（1.0.50）。冻结期间队列被清空 ⇒ 延迟读数反而很低，
           //   不显式说出来就会被读成"延迟已经好了"，而实际画面是定住的。
           (ap.videoFrozenMs > 0 ? `、★画面冻结中${ap.videoFrozenMs}ms(在等关键帧)` : '') +

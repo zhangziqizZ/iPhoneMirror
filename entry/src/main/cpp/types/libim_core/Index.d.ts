@@ -317,6 +317,10 @@ export interface AirPlayStatus {
   // "缺集待解 N"，看不出是配置包残缺还是流里没带 SPS。
   videoParamPpsOnly: number;
   videoLatencyMs: number;        // 端到端延迟实测 ms：收包入队→解码出帧（EMA；0=尚无出帧样本）
+  // 延迟归因失败次数（1.0.56）：出帧没能按 PTS 配对到它的输入包 ⇒ 这一帧的
+  // 延迟没被计入 EMA。延迟恒为「—」且这个值在涨 = 归因口径失效（解码器没回传
+  // PTS），此时 videoLatencyMs 不可信；延迟有值 + 它缓慢增长 = 偶发丢帧，正常。
+  videoLatencyUnmatched: number;
   videoDecodeErrors: number; // OH_VideoDecoder::OnError 累计次数
   videoDecoderLastError: string; // 最近一次 OnError 的错误码文本
   decoderDiag: DecoderDiag;      // 解码链断点定位（pushed/callbacks/size 等）

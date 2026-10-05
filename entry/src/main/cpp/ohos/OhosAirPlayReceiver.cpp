@@ -211,6 +211,30 @@ std::atomic<uint64_t> g_param_pps_only_config{0};
 std::atomic<int64_t> g_video_latency_last_ms{0};
 std::atomic<int64_t> g_video_latency_avg_ms{0};   // EMA（α≈0.125），帧间平滑
 
+// ── 延迟归因：出帧 ↔ 输入包 的配对表（1.0.56）──────────────────────────
+// 为什么需要它：1.0.55 把"喂一帧 → 阻塞等这一帧吐出来"改成了非阻塞取帧
+// （对照上游 decode_once）。副作用是**出帧发生在下一次输入被推入时**——
+// 于是一次 decode_annex_b 调用里拿到的像素，属于**上一个**包。
+//
+// 而旧代码拿的是 `packet.arrive_ms`（本次调用那个包的到达时刻）去减，等于
+// 给每帧的延迟凭空扣掉一个帧间隔（60fps 下 16ms，8fps 下 125ms）。这是个
+// 系统性的"偏低"读数，而且是**我这次改动自己造出来的**——不看穿它就会把
+// 修复幅度读大了（正是"不许假成功"要盯的那类数）。
+//
+// 配对口径：解码器原样回传 PTS（pump 时 attr.pts = pts/10，出帧时
+// timestamp_100ns = attr.pts*10），所以出帧侧用 `timestamp_100ns / 10` 反查
+// 与入队侧 `pts / 10` 严格相等，不会因整除掉位而对不上。
+// 只由解码线程访问（ProcessMirrorPacket 是它的唯一调用者）⇒ 无需加锁。
+struct InflightStamp {
+    int64_t pts_us;      // 入队时的 packet.pts / 10（与出帧侧同一口径）
+    int64_t arrive_ms;   // 该包进接收端队列的时刻
+};
+std::deque<InflightStamp> g_inflight_stamps;
+constexpr std::size_t kInflightStampLimit = 16;   // 兜底上限，防任何异常下无限涨
+// 归因失败计数：出帧对不上任何在途包（解码器没回传 PTS / 顺序异常）。
+// 静默丢弃必须记账，否则"延迟显示 —"到底是"还没量到"还是"永远量不到"分不清。
+std::atomic<uint64_t> g_video_latency_unmatched{0};
+
 // Annex-B 逐个 NAL 回调。fn(type, payload_begin, payload_end)。兼容 3/4 字节起始码。
 template <typename Fn>
 void ForEachNal(const std::vector<std::uint8_t> &bytes, Fn &&fn) {
@@ -666,6 +690,13 @@ void ProcessMirrorPacket(const MirrorPacket &packet) {
     } else {
         g_decoder_overflow_streak.store(0, std::memory_order_relaxed);
     }
+    // 入队即记账：这一包的「PTS↔到达时刻」记进配对表，出帧时按 PTS 反查。
+    // 必须在 decode 之前——配对表是"在途"语义。
+    if (g_inflight_stamps.size() >= kInflightStampLimit) {
+        g_inflight_stamps.pop_front();
+    }
+    g_inflight_stamps.push_back(InflightStamp{packet.pts / 10, packet.arrive_ms});
+
     std::vector<iPhoneMirror::media::DecodedFrame> frames;
     try {
         frames = g_video_decoder->decode_annex_b(
@@ -675,27 +706,46 @@ void ProcessMirrorPacket(const MirrorPacket &packet) {
         SetError(e.what());
         return;
     }
-    // 延迟实测：这包从进接收端队列到解码出帧花了多久（只在真出帧时计——
-    // 空帧/错误帧的延迟没有意义）。EMA 平滑避免单帧抖动把读数甩来甩去。
-    if (packet.arrive_ms > 0 && !frames.empty()) {
-        const std::int64_t latency_ms = SteadyNowMs() - packet.arrive_ms;
-        if (latency_ms >= 0 && latency_ms < 100000) {
-            g_video_latency_last_ms.store(latency_ms, std::memory_order_relaxed);
-            const std::int64_t prev =
-                g_video_latency_avg_ms.load(std::memory_order_relaxed);
-            const std::int64_t ema =
-                prev <= 0 ? latency_ms : (prev * 7 + latency_ms * 1) / 8;
-            g_video_latency_avg_ms.store(ema, std::memory_order_relaxed);
-        }
-    }
     for (auto &frame : frames) {
         // present() 只是把帧投递给渲染线程（move 进去，避免每帧 1.7MB 拷贝），
         // 所以"有没有像素"要在 move 之前问。
         const bool has_pixels = !frame.nv12.empty();
+        // ★ 延迟实测（1.0.56 改口径）：必须用**这一帧自己**对应输入包的到达
+        //   时刻，不能用本次 decode 传进去那个包的（packet.arrive_ms）。
+        //   1.0.55 起取帧是非阻塞的，出帧属于上一个包；拿 packet.arrive_ms 算
+        //   会系统性偏小一整个帧间隔 —— 帧率越低偏得越多，是个会骗人的数。
+        std::int64_t source_arrive_ms = 0;
+        if (has_pixels) {
+            const std::int64_t pts_us = frame.timestamp_100ns / 10;
+            // 先把"PTS 早于本帧、且永远不会出画面"的条目弹掉（被丢帧/解不出的），
+            // 再取队首——队首 PTS 相等才是真配对，对不上就记一次归因失败。
+            while (!g_inflight_stamps.empty() && g_inflight_stamps.front().pts_us < pts_us) {
+                g_inflight_stamps.pop_front();
+            }
+            if (!g_inflight_stamps.empty() && g_inflight_stamps.front().pts_us == pts_us) {
+                source_arrive_ms = g_inflight_stamps.front().arrive_ms;
+                g_inflight_stamps.pop_front();
+            } else {
+                g_video_latency_unmatched.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
         OhosPreviewRenderer::instance().present(std::move(frame));
         // 只有解码器真正交出像素才算"通了"：空帧（OnError 后、缺参考帧等）不计。
         if (has_pixels) {
             g_decoded_frames.fetch_add(1, std::memory_order_relaxed);
+        }
+        // EMA 平滑避免单帧抖动把读数甩来甩去。归因失败的帧直接跳过——
+        // 不拿错误的分母凑出一个"看起来有值"的平均数。
+        if (source_arrive_ms > 0) {
+            const std::int64_t latency_ms = SteadyNowMs() - source_arrive_ms;
+            if (latency_ms >= 0 && latency_ms < 100000) {
+                g_video_latency_last_ms.store(latency_ms, std::memory_order_relaxed);
+                const std::int64_t prev =
+                    g_video_latency_avg_ms.load(std::memory_order_relaxed);
+                const std::int64_t ema =
+                    prev <= 0 ? latency_ms : (prev * 7 + latency_ms * 1) / 8;
+                g_video_latency_avg_ms.store(ema, std::memory_order_relaxed);
+            }
         }
     }
 }
@@ -1152,6 +1202,8 @@ int im_airplay_start(const char *name, const char *password) {
     g_nal_none.store(0);
     g_video_latency_last_ms.store(0);
     g_video_latency_avg_ms.store(0);
+    g_video_latency_unmatched.store(0);
+    g_inflight_stamps.clear();
     {
         std::lock_guard<std::mutex> err_lock(g_video_decoder_error_lock);
         g_video_decoder_last_error.clear();
@@ -1273,6 +1325,7 @@ void im_airplay_get_stats(ImAirPlayStats *out) {
     out->video_nal_none = g_nal_none.load(std::memory_order_relaxed);
     // 端到端延迟实测（收包入队 → 解码出帧，EMA 平滑；0 = 尚无出帧样本）
     out->video_latency_ms = static_cast<int>(g_video_latency_avg_ms.load(std::memory_order_relaxed));
+    out->video_latency_unmatched = g_video_latency_unmatched.load(std::memory_order_relaxed);
     {
         std::lock_guard<std::mutex> err_lock(g_video_decoder_error_lock);
         std::snprintf(out->video_decoder_last_error, sizeof(out->video_decoder_last_error), "%s",
