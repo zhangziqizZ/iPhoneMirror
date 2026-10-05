@@ -115,6 +115,14 @@ struct DecoderDiag {
     // 软件解码器实测解码耗时 EMA（微秒）。0 = 还没量到。用来直接回答
     // "软解扛不扛得住这个分辨率"——不必再靠 fps 反推。
     std::atomic<std::uint64_t> sw_decode_us{0};
+    // ── 绿屏诊断（1.0.57）────────────────────────────────────────────────
+    // chroma_empty_frames > 0 = 解码器吐出来的帧里 UV 平面是全零的（拷错了位置
+    // 或者压根没写 chroma），渲染出来是满屏纯绿。这些帧被**丢弃**而不是上屏，
+    // 所以"画面全黑 + 这个数在涨"要把两者连起来读。
+    std::atomic<std::uint64_t> chroma_empty_frames{0};
+    // 因连续废帧而自动关掉低延迟模式的次数。>0 = 低延迟在本机上会改缓冲布局，
+    // 那条路走不通，已按同档重建解码器。
+    std::atomic<std::uint32_t> low_latency_disabled{0};
 };
 // 解码器组件名（CreateByName 用的名字）。原子存不了字符串，用互斥锁保护的
 // 全局串——只在 create 时写、snapshot 时读，竞争概率可忽略。
@@ -437,6 +445,33 @@ bool annex_b_has_nal_type(std::span<const std::uint8_t> data, std::uint8_t want_
 //     自己的在途帧 + 这一个槽"就够，再多纯粹是把延迟堆给用户看。
 static constexpr std::size_t kMaxPendingInput = 2;
 
+// 连续多少帧"UV 平面全零"才认定这一档配置产出的是废帧（而不是偶发脏帧）。
+static constexpr std::uint32_t kChromaEmptyStreakLimit = 3;
+
+// NV12 的 UV 平面是否**全零**。
+//
+// 为什么判这一条：NV12 的 chroma 中性值是 128（哪怕是纯黑白画面，UV 也全是
+// 128），真实内容里 UV 字节全为 0 的画面几乎不存在。出现"UV 全 0"只有一种
+// 合理解释：**我们根本没拷到 chroma** —— 行距推导错了，src_uv 指到了 Y 平面
+// 后面的对齐填充区（通常被清零）。而 YUV(0,0,0) 转 RGB 恰好是 RGB(0,135,0)
+// 纯绿 —— 用户说的"画面全绿"就是它。
+//
+// 退化到这条分支的路径已经写在 OnNewOutputBuffer 里：attr.size 正好等于
+// width*height*3/2 时我们认为布局是紧致的（stride == width），可一旦底层实际
+// 有字节对齐、而 attr.size 报的是"逻辑大小"，这个假设就失效。
+static bool chroma_plane_all_zero(const std::vector<std::uint8_t> &pixels,
+    std::uint32_t width, std::uint32_t height) {
+    const std::size_t luma = static_cast<std::size_t>(width) * height;
+    const std::size_t chroma = luma / 2;
+    if (chroma == 0 || pixels.size() < luma + chroma) return false;
+    const std::uint8_t *uv = pixels.data() + luma;
+    const std::size_t step = chroma > 64 ? chroma / 64 : 1;
+    for (std::size_t i = 0; i < chroma; i += step) {
+        if (uv[i] != 0) return false;
+    }
+    return true;
+}
+
 class OhosVideoDecoder final : public IVideoDecoder {
 public:
     explicit OhosVideoDecoder(DecoderPreference preference)
@@ -482,6 +517,9 @@ public:
                 pending_input_.clear();
                 return {};
             }
+            // 绿屏自愈（1.0.57）：关掉低延迟后按同一档重建。放在这里是因为
+            // 这里是解码线程，安全；回调里销毁解码器会 UB。
+            apply_restart_locked();
             if (codec_ == nullptr) {
                 try {
                     create_locked();
@@ -703,6 +741,46 @@ private:
     //   参数集 + 一个 IDR 之后还没有任何像素出来，就该换档了。
     static constexpr std::uint32_t kStrategyProbeFrames = 8;
 
+    // 出现一帧"UV 全零"的废帧。只记账 + 累计连续数，**不做任何重建**——
+    // 调用点是解码器的输出回调，绝不能在人家回调里销毁解码器自己。
+    void on_chroma_empty_locked() {
+        Diag().chroma_empty_frames.fetch_add(1, std::memory_order_relaxed);
+        if (chroma_empty_streak_ < kChromaEmptyStreakLimit) {
+            ++chroma_empty_streak_;
+            return;
+        }
+        if (!low_latency_) return; // 关过了还是绿的 ⇒ 不是它的锅，交给策略链推进
+        low_latency_ = false;
+        Diag().low_latency_disabled.fetch_add(1, std::memory_order_relaxed);
+        strategy_restart_requested_ = true;
+        logging::write(logging::Level::Warning, "decoder",
+            "低延迟模式下连续输出 UV 全零的帧（渲染出来是纯绿）⇒ 关掉低延迟并按"
+            "同一档重建解码器");
+    }
+
+    // 执行"按当前档重建解码器"（在解码线程上跑，不在任何回调里）。
+    void apply_restart_locked() {
+        if (!strategy_restart_requested_) return;
+        strategy_restart_requested_ = false;
+        if (codec_ != nullptr) {
+            OH_VideoDecoder_Stop(codec_);
+            OH_VideoDecoder_Destroy(codec_);
+            codec_ = nullptr;
+        }
+        decoded_.clear();
+        pending_input_.clear();
+        have_input_buffer_ = false;
+        input_buffer_ = nullptr;
+        pushed_to_codec_ = 0;
+        chroma_empty_streak_ = 0;
+        try {
+            create_locked();
+        } catch (const std::exception &) {
+            strategy_chain_active_ = false;
+            failed_ = true;
+        }
+    }
+
     void maybe_switch_strategy_locked() {
         if (!strategy_chain_active_) return;
         // 判据只看"真出像素"（pixels_since_create_），不看"有回调"。一个只会
@@ -808,7 +886,11 @@ private:
         //   input and output data more than required by the codec standards"
         //   —— 同样是不让解码器为了排序多攥着帧。投屏是实时流，排序带来的
         //   延迟毫无收益。失败只是丢这个优化，不影响解码本身。
-        if (!OH_AVFormat_SetIntValue(description, OH_MD_KEY_VIDEO_ENABLE_LOW_LATENCY, 1)) {
+        //   1.0.57：加了 low_latency_ 开关。开着它出来的帧如果 UV 全零（= 纯绿），
+        //   说明这面机器上它会换输出缓冲布局（我们靠 attr.size 推 stride 的假设
+        //   随之失效），那就自动关掉重建 —— 详见 on_chroma_empty_locked。
+        if (low_latency_ &&
+            !OH_AVFormat_SetIntValue(description, OH_MD_KEY_VIDEO_ENABLE_LOW_LATENCY, 1)) {
             logging::write(logging::Level::Warning, "decoder",
                 "低延迟模式设置失败（OH_MD_KEY_VIDEO_ENABLE_LOW_LATENCY），"
                 "解码器会按标准多留若干帧做重排，延迟会高");
@@ -1122,11 +1204,22 @@ private:
         //   `outputs_since_create_ != 0 就停止切换` —— 于是一个只会吐空帧的
         //   坏档位会被当成"成功"，链永远卡在上面不再往下试（档 2/3 永不使用）。
         //   判据必须与"有没有画面"同维度，否则策略链在测一个它不该测的东西。
-        if (!pixels.empty()) {
+        // ★ 2026-10-05（1.0.57）：**坏像素不算"出像素"**。
+        //   以前的判据只有"回调有没有像素"，一个只会吐绿屏帧的档位会被当成
+        //   可用档位，策略链永不推进 —— 用户就只能对着绿屏干看着。现在废帧不进
+        //   outputs_/pixels_ 计数，策略链会照常往下试；同时由
+        //   on_chroma_empty_locked 判断要不要直接关掉低延迟模式重建。
+        const bool usable_pixels = !pixels.empty() &&
+            !chroma_plane_all_zero(pixels, width, height);
+        if (!pixels.empty() && !usable_pixels) {
+            self->on_chroma_empty_locked();
+        }
+        if (usable_pixels) {
+            self->chroma_empty_streak_ = 0;
             ++self->outputs_since_create_;
             ++self->pixels_since_create_;
         }
-        if (!pixels.empty()) {
+        if (usable_pixels) {
             DecodedFrame frame;
             frame.width = width;
             frame.height = height;
@@ -1190,6 +1283,15 @@ private:
     std::uint32_t disp_width_{};
     std::uint32_t disp_height_{};
     DecoderStrategy strategy_{DecoderStrategy::HwEncSize};
+    // ★ 低延迟模式开关（1.0.57，绿屏自愈）：true = configure 时设
+    //   OH_MD_KEY_VIDEO_ENABLE_LOW_LATENCY。一旦确认这面机器上开着它出来的帧
+    //   UV 全零（= 纯绿），就永久关掉并按同一档重建解码器 —— 用户在绿屏里干等
+    //   没有任何意义。默认开：它是 1.0.55 对照上游补的那条，先试才有收益。
+    bool low_latency_{true};
+    std::uint32_t chroma_empty_streak_{0};
+    // 由输出回调置位、由 decode_common（解码线程）执行 —— **绝不在解码器的回调
+    // 里销毁解码器自己**，那等于在人家函数栈还没返回时拆地基。
+    bool strategy_restart_requested_{false};
     bool strategy_chain_active_{false};
     std::uint32_t frames_since_create_{0};
     std::uint32_t outputs_since_create_{0};
@@ -1308,6 +1410,8 @@ extern "C" void im_video_decoder_diag(iPhoneMirror::media::DecoderDiagSnapshot* 
     out->fill_peak            = d.fill_peak.load(std::memory_order_relaxed);
     out->needs_idr            = d.needs_idr.load(std::memory_order_relaxed);
     out->sw_decode_us         = d.sw_decode_us.load(std::memory_order_relaxed);
+    out->chroma_empty_frames  = d.chroma_empty_frames.load(std::memory_order_relaxed);
+    out->low_latency_disabled = d.low_latency_disabled.load(std::memory_order_relaxed);
     {
         std::lock_guard<std::mutex> name_lock(g_decoder_name_mutex);
         std::snprintf(out->decoder_name, sizeof(out->decoder_name), "%s",

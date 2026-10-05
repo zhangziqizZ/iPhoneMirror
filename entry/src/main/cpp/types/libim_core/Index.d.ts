@@ -197,6 +197,12 @@ export interface DecoderDiag {
   configHeadB03: number;       // Configure 用的参数集前 4 字节（00000001 67 = SPS 开头；…28 = 只有 PPS）
   configHeadB47: number;       // 参数集第 5-8 字节
   configures: number;          // configure_annex_b 调用次数（>1 = 中途换过参数集并重建解码器）
+  // 绿屏诊断（1.0.57）：NV12 的 UV 平面全零 ⇒ 这一帧渲染出来是纯绿。这类废帧
+  // 会被丢弃不上屏（也不算"出过像素"），所以要读它才能解释"在看、屏幕没画"。
+  chromaEmptyFrames: number;
+  // 因连续废帧而自动关闭低延迟模式的次数：>0 = 本机开低延迟会改变输出缓冲
+  // 布局、行距推导失效，已自动回退到标准模式。
+  lowLatencyDisabled: number;
   decoderName: string;         // 实际创建的解码器组件名（含 hw/sw 标记）
 }
 

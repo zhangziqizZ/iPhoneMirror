@@ -87,12 +87,16 @@ constexpr std::size_t kMaxPacketFrames = 576;
 // 起播前预缓冲几个包。★ 2026-10-04（1.0.54）4→8：实测（欠载 362 次/26s）
 // 43ms 的预缓冲在 Wi-Fi 抖动下远远不够，欠载就是"那次回调没数据、补静音"
 // ——听感为断续/卡顿。8 包 @44.1kHz ≈ 87ms。
-constexpr std::size_t kStartupPackets = 8;
-// 积压上限（超过就丢最旧的，宁可丢也别让延迟越攒越大）。★ 6→16（≈208ms）：
-// 原来的 6 包 ≈ 65ms 与起播门限只差两包，突发到达就触发"丢最旧"，实测
-// 丢旧帧数 ≈ 已播帧数（每秒都有一半音频被丢）。放宽容忍带后，丢帧只在
-// 真正积压时发生；有抖动窗+重传兜底，延迟由 dequeue 的 4 包窗口约束。
-constexpr std::size_t kHighWaterPackets = 16;
+// ★ 2026-10-05（1.0.57）：门限口径整体换成**对照上游**（WasapiRenderer.cpp 的
+// NetworkJitter 档：容量 500ms、起播 180ms、高水位 400ms）。此前是我们自己一轮轮
+// 试出来的值（87ms / 208ms / 371ms），比上游浅一半 —— 而 AirPlay 音频是 UDP +
+// 重传，缓冲浅就意味着抖动窗口一破就拿静音补包，听感就是断续和电音。
+// 代价要说清：音频起播延迟从 ~90ms 涨到 ~190ms；上游没有做音视频同步（我们也
+// 没有），这是用 ~100ms 的音画偏移换能听。
+constexpr std::size_t kStartupPackets = 16;    // ≈ 190ms @44.1k（上游 180ms）
+constexpr std::size_t kHighWaterPackets = 32;  // ≈ 380ms（上游 400ms）
+// 环形缓冲容量（帧）。上游 500ms；@48kHz = 24000，取 24576（2 的幂便于取模）。
+constexpr std::size_t kRingCapacityFrames = 24576;
 
 class OhosAudioRenderer final : public IAudioRenderer {
 public:
@@ -101,7 +105,7 @@ public:
         : format_(format), playback_enabled_(playback_enabled) {
         validate_format(format);
         const auto layout = detail::checked_wasapi_buffer_layout(format,
-            /*minimum_capacity_frames=*/16384);
+            /*minimum_capacity_frames=*/kRingCapacityFrames);
         if (!layout) {
             throw std::invalid_argument("ohos audio: 缓冲区布局计算失败");
         }

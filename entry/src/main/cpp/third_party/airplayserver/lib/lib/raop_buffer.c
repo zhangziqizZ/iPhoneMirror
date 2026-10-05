@@ -467,7 +467,17 @@ raop_buffer_dequeue(raop_buffer_t *raop_buffer, int *length, unsigned int* pts, 
 		/* If we do no resends, always return the first entry */
 	} else if (!entry->available) {
 		/* Check how much we have space left in the buffer */
-		if (buflen < 4) {  // Reduced from RAOP_BUFFER_LENGTH to start playback faster (~40ms vs 640ms)
+		/* ★ 2026-10-05（1.0.57，对照上游）：4 → 16，与上游一致
+		 * （third_party/airplay-server/patches/Apply-AudioCodecPatch.ps1 里
+		 *  把 RAOP_BUFFER_LENGTH 改成 16）。
+		 * 这里是**重传等待窗**：已排到的包还没到时，只要积压没超过这个值就
+		 * 返回 NULL 等重传递上来，而不是立刻拿静音顶替。窗口只有 4 包（≈44ms）
+		 * 时，Wi-Fi 上一个几十毫秒的抖动就会让大量包被静音替代 —— 那正是反复
+		 * 出现的"电音/炸"。16 包（≈175ms @44.1k）足够覆盖一次重传往返。
+		 * 注意它自我限流：后续包持续到达 ⇒ buflen 迟早 ≥ 16 ⇒ 真丢了也会在
+		 * ~175ms 内换成静音，不会永久卡住。
+		 */
+		if (buflen < 16) {
 			/* Return nothing and hope resend gets on time */
 			return NULL;
 		}

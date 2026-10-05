@@ -806,6 +806,9 @@ napi_value JsAirPlayGetStatus(napi_env env, napi_callback_info /*info*/) {
     set_u32("configHeadB03", diag.config_head_b0_3);
     set_u32("configHeadB47", diag.config_head_b4_7);
     set_u64("configures", diag.configures);
+    // 绿屏诊断（1.0.57）：UV 平面全零 ⇒ 会被渲染成纯绿的废帧，已丢弃不上屏。
+    set_u64("chromaEmptyFrames", diag.chroma_empty_frames);
+    set_u32("lowLatencyDisabled", diag.low_latency_disabled);
     set_utf8(env, decoderDiag, "decoderName", diag.decoder_name);
     napi_set_named_property(env, object, "decoderDiag", decoderDiag);
 

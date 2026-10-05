@@ -97,6 +97,11 @@ struct DecoderDiagSnapshot {
     std::uint32_t fill_peak{0};   // 待推队列历史最大深度（只增不减）
     std::uint64_t needs_idr{0};   // 解码器请求宿主进入"等 IDR"（溢出后置位）
     std::uint64_t sw_decode_us{0}; // 实测解码耗时 EMA（微秒，0=未量到）
+    // ── 绿屏诊断（1.0.57）────────────────────────────────────────────────
+    // chroma_empty_frames：UV 平面全零 ⇒ 渲染成纯绿的废帧数（已丢弃不上屏）。
+    // low_latency_disabled：因连续废帧而自动关闭低延迟模式的次数。
+    std::uint64_t chroma_empty_frames{0};
+    std::uint32_t low_latency_disabled{0};
     char decoder_name[96]{0};            // 实际创建的解码器组件名（含 hw/sw 标记）
 };
 

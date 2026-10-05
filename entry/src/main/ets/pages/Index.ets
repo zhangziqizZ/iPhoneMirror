@@ -2223,6 +2223,11 @@ struct Index {
             ? `、延迟未归因${ap.videoLatencyUnmatched}` +
               (ap.videoLatencyMs > 0 ? '' : '(★延迟读数不可信)')
             : '') +
+          // ★ 绿屏诊断（1.0.57）。NV12 的 UV 全零 ⇒ 渲染出来是纯绿，这类废帧
+          //   已丢弃不上屏（也不算"出过像素"），所以"屏幕没画面"要读它：>0 说明
+          //   解码器吐的帧本身就是废的，不是渲染侧的问题。
+          (d.chromaEmptyFrames > 0 ? `、★绿屏废帧${d.chromaEmptyFrames}` : '') +
+          (d.lowLatencyDisabled > 0 ? `、已自动关低延迟${d.lowLatencyDisabled}次` : '') +
           // ★ 冻结读数（1.0.50）。冻结期间队列被清空 ⇒ 延迟读数反而很低，
           //   不显式说出来就会被读成"延迟已经好了"，而实际画面是定住的。
           (ap.videoFrozenMs > 0 ? `、★画面冻结中${ap.videoFrozenMs}ms(在等关键帧)` : '') +
