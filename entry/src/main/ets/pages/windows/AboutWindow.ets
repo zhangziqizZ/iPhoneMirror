@@ -242,6 +242,9 @@ export class ChangelogRelease {
  * 点开**（用户 2026-10-02 晚间更正：上一版把旧版做成了不可展开，点不开）。
  */
 const CHANGELOG_RELEASES: ChangelogRelease[] = [
+  new ChangelogRelease('1.0.59', '2026-10-05', [
+    '撤回：v1.0.55 开的低延迟模式（OH_MD_KEY_VIDEO_ENABLE_LOW_LATENCY=1）—— 它改变了硬件解码器输出缓冲布局（stride>width），而 attr.size 报的是逻辑大小，导致 UV 拷到错位置、画面色彩全错。永久关掉，恢复 v1.0.55 之前的色彩正确状态。代价：v1.0.55 兑现的 ≈233ms 周期性滞后恢复，延迟回到 250-300ms 量级',
+  ]),
   new ChangelogRelease('1.0.58', '2026-10-05', [
     '修复：音频「咔咔」爆音 —— 启播/暂停/调音量时系统级音量瞬时切换是有声的硬切，对照上游在 PCM 回调里加线性增益 ramp，让音量在一个 endpoint buffer（~10ms）内平滑过渡；启播从 0 淡入，停播衰减到 0，调音量也不咔',
   ]),
