@@ -242,6 +242,9 @@ export class ChangelogRelease {
  * 点开**（用户 2026-10-02 晚间更正：上一版把旧版做成了不可展开，点不开）。
  */
 const CHANGELOG_RELEASES: ChangelogRelease[] = [
+  new ChangelogRelease('1.0.61', '2026-10-11', [
+    '视频诊断：加收包率（videoRxRate）显示，区分"iPhone 源端 30 fps 已拿满" vs "源端 60 fps 我们丢了一半"。状态行追加 收包 N fps/解码 N fps（已拿满 / ★丢 N fps）。下次截图一眼分清，决定要不要把队列上限 2 → 5–6',
+  ]),
   new ChangelogRelease('1.0.60', '2026-10-05', [
     '撤回 v1.0.58 的 PCM 增益 ramp —— 那条改的方向错了，PCM ramp 与"持续电音/底噪/延迟/错位"没有因果，撤回到系统级音量（OH_AudioRenderer_SetVolume）',
     '收紧音频缓冲到 v1.0.50 口径 —— 起播预缓冲 16 包→4 包、积压 32 包→6 包。鸿蒙侧没有音画同步（上游也没做），音频延迟 570ms 与视频 250ms 必然错位 ~280ms；现在音频总延迟 ~220ms，与视频更接近',

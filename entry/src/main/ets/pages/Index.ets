@@ -1242,6 +1242,13 @@ struct Index {
   // 上轮轮询的 decodedFrames / 时间戳（fps 差分用，不参与渲染故不加 @State）。
   private prevAirplayDecoded: number = -1;
   private prevAirplayPollMs: number = 0;
+  // ★ 2026-10-11 视频诊断：收包率（基于 videoFrames 差分），用来一眼分清
+  //   "iPhone 源端 30 fps"（已拿满） vs "源端 60 fps 但我们丢了一半"。
+  //   airplayFps 量的是解码器真出帧，videoRxRate 量的是 iPhone 实际发来多少；
+  //   两者相等 = 解码器跟得上、丢帧不在我们侧；差很多 = 我们侧丢帧（队列太浅）。
+  @State videoRxRate: number = 0;
+  private prevAirplayVideoFrames: number = -1;
+  private prevAirplayVideoMs: number = 0;
   @State usbMode: number = 0;
   @State languageIndex: number = AppStorage.get<number>(LANG_INDEX_KEY) ?? 0;
   @State themeIndex: number = 0;
@@ -1675,14 +1682,27 @@ struct Index {
                 ? (this.airplayFps * 0.7 + instant * 0.3)
                 : instant;
             }
+            // ★ 收包率：videoFrames 差分 = iPhone 实际发来多少。与 airplayFps 对比：
+            //   两者相等 ⇒ 已拿满；videoRxRate > airplayFps ⇒ 我们侧丢帧。
+            const rxInstant: number = (apNow.videoFrames - this.prevAirplayVideoFrames) / dtSec;
+            if (rxInstant >= 0 && rxInstant < 240) {
+              this.videoRxRate = this.videoRxRate > 0
+                ? (this.videoRxRate * 0.7 + rxInstant * 0.3)
+                : rxInstant;
+            }
           }
         }
         this.prevAirplayDecoded = apNow.decodedFrames;
         this.prevAirplayPollMs = nowMs;
+        this.prevAirplayVideoFrames = apNow.videoFrames;
+        this.prevAirplayVideoMs = nowMs;
       } else {
         this.airplayFps = 0;
         this.prevAirplayDecoded = -1;
         this.prevAirplayPollMs = 0;
+        this.videoRxRate = 0;
+        this.prevAirplayVideoFrames = -1;
+        this.prevAirplayVideoMs = 0;
       }
     }
     // 同上：USB 采集状态空闲时也不变，别用"新对象"骗 ArkUI 重建整棵树。
@@ -2350,13 +2370,30 @@ struct Index {
           ` · ${readout}${decodeErr}${rxNote}${audioNote}`;
       }
       return `iPhone 已连接 · 实时镜像中（已收 ${ap.videoFrames} 帧 / 解码 ${ap.decodedFrames} 帧）`
-        + `${dropNote}${decodeErr}${this.airplay_rx_stale_text(ap)}${audioNote}`;
+        + `${dropNote}${decodeErr}${this.airplay_rx_stale_text(ap)}${audioNote}`
+        + `${this.video_rx_rate_note()}`;
     }
     // 已确认广播中：把应答里用的本机 IP 与已应答查询数摊给用户，便于排查"搜到连不上"——
     // 之前那次就是 A 记录里的 IP 写死成了 iPhone 自己，导致它点到自己连不上。
     const ipNote: string = ap.mdnsLocalIp.length > 0 ? ` · 本机 ${ap.mdnsLocalIp}` : '';
     const answeredNote: string = ` · 已应答 ${ap.mdnsAnswered} 次查询`;
     return `已在局域网广播（RAOP ${ap.raopPort} / AirPlay ${ap.airplayPort}）${ipNote}${answeredNote}，等待 iPhone 连接`;
+  }
+
+  /**
+   * 收包率 vs 解码率（注脚）。两者一致 ⇒ 已拿满；
+   * videoRxRate > airplayFps ⇒ 我们侧丢帧（队列太浅 / 软解跟不上）。
+   * ★ 2026-10-11 加：用来一眼分清"iPhone 源端 30 fps" vs "源端 60 fps 我们丢了一半"。
+   */
+  video_rx_rate_note(): string {
+    if (this.videoRxRate <= 0 || this.airplayFps <= 0) {
+      return '';
+    }
+    const drop: number = this.videoRxRate - this.airplayFps;
+    if (drop <= 1) {
+      return ` · 收包${this.videoRxRate.toFixed(0)}fps/解码${this.airplayFps.toFixed(0)}fps（已拿满）`;
+    }
+    return ` · 收包${this.videoRxRate.toFixed(0)}fps/解码${this.airplayFps.toFixed(0)}fps（★丢${drop.toFixed(0)}fps）`;
   }
 
   airplay_running(): boolean {
