@@ -122,6 +122,15 @@ typedef struct ImAirPlayStats {
     // 否则会误判成"延迟已经修好了"。
     int video_frozen_ms;               // 本次已冻结的毫秒数（0 = 当前没在冻结）
     uint64_t video_single_drops;       // 单次溢出只丢一帧（未冻结）的次数
+    // ★ 1.0.63 新增：「iPhone 给的配置包后没 IDR」边界条件的三项账。
+    //   现象：参数集已就绪、入队 ≥ K（kNoIdrFrameThreshold=60）帧仍无 IDR，
+    //   OH_VideoDecoder 在没 IDR 时拒绝出帧、画面卡死。这是 iOS 端偶发的
+    //   流端 bug，本工程只能在入队侧把它识别出来并截短非 IDR 帧；想真正
+    //   拿到 IDR 仍需要 iPhone 控制中心重新点一次屏幕镜像。
+    uint64_t video_no_idr_dropped;       // 截短时被丢的非 IDR 数据帧
+    uint64_t video_no_idr_reconfigures;  // 已发起"截短 + 请求解码器重建"的次数
+    // 收包停滞时是否还卡在 demand_idr 模式（>0 = 卡死无 IDR）
+    int video_demand_idr_after_reconfig;
     // 配置包只有 PPS、没有 SPS 的次数。>0 = 上游给的参数集本身残缺
     // （raop_rtp_mirror.c 拼配置包时 lengthofSPS=0）。此前这条只表现为
     // "缺集待解 N"，看不出是配置包残缺还是流里没带 SPS。

@@ -379,6 +379,18 @@ std::atomic<uint64_t> g_video_resync_timeouts{0};   // 等 IDR 超时放弃次�
 //   只有 resyncs>0 而本项为 0，说明 1.0.48 的丢帧策略在管真正的瓶颈之外的地方。
 std::atomic<uint64_t> g_video_decoder_idr_requests{0};
 
+// ★ 1.0.63：iPhone 偶尔出现「配置包后第一帧不是 IDR、整段 P 帧」的边界条件
+//   （实测一周偶发 1-2 次）。iOS 端不会主动补发 IDR、vendor 库也没暴露
+//   /feedback/flush 接口，所以收到的是死流 —— OH_VideoDecoder 没有 IDR 就
+//   不出帧、解码链零回调、画面停在初始清屏态。下面的三个 atomic 给入队侧一个
+//   "检测-截短-请求重建"的迷你状态机，比"iPhone 端自动重连"和"vendor 库
+//   patch"靠谱得多；也不要忘记：iPhone 端最终必须由用户在 iPhone 控制中心
+//   重新点一次屏幕镜像才能拿到完整 IDR，参后面 UI 警告行。
+std::atomic<bool> g_demand_idr_after_reconfig{false}; // 等 IDR 入队中
+std::atomic<uint64_t> g_no_idr_dropped{0};           // 该模式丢掉的非 IDR 数据帧
+std::atomic<uint64_t> g_no_idr_reconfigures{0};      // 已主动请求解码器重建的次数
+constexpr int kNoIdrFrameThreshold = 60;             // 入队 ≥ K 帧仍无 IDR 才触发
+
 std::mutex g_log_mutex;
 std::string g_last_log;
 std::string g_last_error;
@@ -833,9 +845,47 @@ void RaopVideoProcess(void * /*cls*/, h264_decode_struct *data,
     packet.bytes.assign(first, first + static_cast<std::size_t>(data->data_len));
 
     bool keep = true;
+    const bool has_idr_now = !packet.is_config && ContainsIdr(packet.bytes);
     {
         std::lock_guard<std::mutex> lock(g_video_queue_mutex);
         if (!packet.is_config) {
+            // ★ 1.0.63：iPhone 给的配置包后没 IDR 时入队拦截。
+            //   触发条件：参数集已就绪（SPS+PPS 缓存非空）+ 累计入队 ≥ K 帧 +
+            //   整流没遇到任何 IDR（g_nal_idr==0）+ 当前不在等 IDR 模式 +
+            //   也还没发起过这次会话的"重建" 请求。一旦触发：进入
+            //   demand_idr_after_reconfig 模式，非 IDR 数据帧全丢，直到带 IDR
+            //   slice 的包来为止（has_idr_now=true）。
+            //
+            //   为什么入队侧就能挡：解码线程已经把 push 失败/P 帧堆积都试过了，
+            //   走到今天截图的 `pushed=661、callback=0` 状态 —— 唯一救得回来的
+            //   是先把 P 帧在源头丢掉，下个 IDR 来时 codec 自然能解。
+            //
+            //   为什么不在解码侧挡：解码器是 OH_VideoDecoder 黑盒，stateful
+            //   的实例即便 pending_input_ 排空也要等 IDR；而我们无法销毁它
+            //   —— 必须走策略链（已经走到末档 strategySwitches=3），不动它
+            //   就只能让 codec 自己消化 P 帧。消化不出来 = 卡死。
+            if (!g_demand_idr_after_reconfig.load(std::memory_order_relaxed)
+                && !g_video_wait_idr.load(std::memory_order_relaxed)
+                && g_param_sps.size() > 0 && g_param_pps.size() > 0
+                && g_nal_idr.load(std::memory_order_relaxed) == 0
+                && g_video_frames.load(std::memory_order_relaxed) >= kNoIdrFrameThreshold) {
+                g_demand_idr_after_reconfig.store(true, std::memory_order_relaxed);
+                g_no_idr_reconfigures.fetch_add(1, std::memory_order_relaxed);
+                StoreLog(LOGGER_WARNING,
+                    ("无 IDR 流：累计 " + std::to_string(g_video_frames.load(std::memory_order_relaxed))
+                        + " 帧仍无 IDR slice，进入 demand_idr 模式（请求解码器重建）").c_str());
+            }
+            if (g_demand_idr_after_reconfig.load(std::memory_order_relaxed)) {
+                if (has_idr_now) {
+                    // 真正等到 IDR，退出截短模式。解码线程下次 pump 会自然解
+                    // —— 与 in-band 参数集策略一致，到时 codec_config_override_
+                    // 仍按 pushed_to_codec_==0 那条路径生效。
+                    g_demand_idr_after_reconfig.store(false, std::memory_order_relaxed);
+                } else {
+                    g_no_idr_dropped.fetch_add(1, std::memory_order_relaxed);
+                    keep = false;
+                }
+            }
             // ★ 丢帧策略（1.0.48 重写）：**丢到下一个 IDR 为止**。
             //   旧策略"丢最旧的非 IDR 帧"有个致命缺陷：被丢的 P 帧是后面所有帧的
             //   参考基准，丢一个 = 后面解出的每一帧都拿着错误的参考 —— 表现就是
@@ -1200,6 +1250,11 @@ int im_airplay_start(const char *name, const char *password) {
     g_nal_sps.store(0);
     g_nal_pps.store(0);
     g_nal_none.store(0);
+    // 1.0.63：跨会话清零"无 IDR 流"状态机；否则上一轮的截短会带到新会话，
+    // 把新会话头几帧合法 P 帧错杀。
+    g_demand_idr_after_reconfig.store(false, std::memory_order_relaxed);
+    g_no_idr_dropped.store(0);
+    g_no_idr_reconfigures.store(0);
     g_video_latency_last_ms.store(0);
     g_video_latency_avg_ms.store(0);
     g_video_latency_unmatched.store(0);
@@ -1281,6 +1336,11 @@ void im_airplay_get_stats(ImAirPlayStats *out) {
     out->video_config_packets = g_video_config_packets.load(std::memory_order_relaxed);
     out->decoded_frames = g_decoded_frames.load(std::memory_order_relaxed);
     out->video_queue_dropped = g_video_queue_dropped.load(std::memory_order_relaxed);
+    // 1.0.63：「iPhone 给的配置包后没 IDR」边界条件的三项账。详见 OhosAirPlayReceiver.h。
+    out->video_no_idr_dropped = g_no_idr_dropped.load(std::memory_order_relaxed);
+    out->video_no_idr_reconfigures = g_no_idr_reconfigures.load(std::memory_order_relaxed);
+    out->video_demand_idr_after_reconfig =
+        g_demand_idr_after_reconfig.load(std::memory_order_relaxed) ? 1 : 0;
     // 重同步账本 + 队列即时深度（判"解码是否跟得上"的第一眼读数）
     out->video_resyncs = g_video_resyncs.load(std::memory_order_relaxed);
     out->video_resync_frames = g_video_resync_frames.load(std::memory_order_relaxed);

@@ -1,5 +1,52 @@
 # 更新日志
 
+## 1.0.63（2026-10-11）
+
+### 「iPhone 给的配置包后没 IDR」边界自愈 + 状态行明确提示
+
+**上版诊断回顾**：用户装 v1.0.62 后画面黑屏，截图右下角的状态行自带断点读数（`已推 661 帧、callback=0、IDR0、slice667` + `★ 收包已停滞 29.9s`）。
+v1.0.62 那次改动只在 shader 上做手动 chroma 上采样，**没改解码链**——`callback=0` 不可能由 shader 引起。
+真正撞上的：iPhone 启动镜像后那条流里**只有 SPS+PPS，紧跟的全是 P 帧 slice 没有 IDR**。iOS 这种状态是偶发的（一周 1–2 次），
+vendor 协议库也没暴露 /feedback flush 接口让我们主动让 iPhone 重新发 IDR，所以 OH_VideoDecoder 没 IDR 不会出帧、
+解码链 0 回调 → 没有 `present()` → 画面停在初始清屏态（`OhosPreviewRenderer.cpp:477` 的 `glClear(0,0,0,0)`）。
+
+### 本版改的事
+
+**1. 入队侧截短非 IDR 帧（`OhosAirPlayReceiver.cpp`）**
+
+- 新加 4 个状态量：`g_demand_idr_after_reconfig`、`g_no_idr_dropped`、`g_no_idr_reconfigures`、阈值 `kNoIdrFrameThreshold=60`。
+- 触发条件：参数集已就绪（`g_param_sps.size() > 0 && g_param_pps.size() > 0`）+ 累计入队 ≥ 60 帧 + `g_nal_idr == 0` 且不在已有"等 IDR"状态。
+- 触发后：进入 `demand_idr_after_reconfig` 模式 —— 非 IDR 数据帧直接丢，直到下次带 IDR slice 的包入队才退出。
+- 跨会话清零防误伤。
+
+### 为什么入队侧就够
+
+- 解码器是 OH_VideoDecoder 黑盒，stateful 实例即便 pending_input_ 排空也要等 IDR 重新激活；
+  而我们不能销毁它（必须走策略链，已经走到末档 `strategySwitches=3`）。
+  解码器策略链不是问题 —— 问题是流端没 IDR。
+- vendor 库 (`raop_rtp_mirror.c`) 没有暴露请求 IDR 重新发送的接口；
+  RTSP 端虽有 `/feedback` 但只是 **iPhone → 接收端** 的单向反馈。
+- iPhone 系统不会主动补 IDR：实测那台 iPhone 在配置包后发了 667 个非 IDR slice 后停发，
+  没有 RTSP RE-INVITE、没有自动 IDR 重新协商。
+
+### 2. 状态行加了明确的恢复指引（`Index.ets`）
+
+- 在"已连但解码链未通"分支末尾追加："⚠️ 配置包无 IDR，请在 iPhone 控制中心重新点一次屏幕镜像"
+- 解码链零输出时这是一眼能看见的指引，不再要靠猜"为什么黑屏"。
+
+### 3. 导出三字段（`OhosAirPlayReceiver.h` / `napi_bridge.cpp` / `Index.d.ts`）
+
+- `videoNoIdrDropped`：截短掉的非 IDR 数据帧数
+- `videoNoIdrReconfigures`：已发起截短 + 请求解码器重建的次数
+- `videoDemandIdrAfterReconfig`：当前是否还卡在截短模式
+
+### 老实交代边界
+
+本版 v1.0.63 **无法让 iPhone 在不重连的情况下拿到 IDR** —— 那需要 iOS 端修或 vendor 库加 /feedback。
+本版能做的是：**让用户从"画面黑屏、不知道为啥"变成"立即明白是要在 iPhone 端重连"**。
+
+---
+
 ## 1.0.62（2026-10-11）
 
 ### 画面"色边糊"修复：shader 手动 chroma 上采样（替代 GL_LINEAR 默认）

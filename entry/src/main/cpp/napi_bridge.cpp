@@ -702,6 +702,13 @@ napi_value JsAirPlayGetStatus(napi_env env, napi_callback_info /*info*/) {
     // 队列有上界，超了就丢最旧的**数据**包并在这里 +1（参数集永不丢弃）。
     set_f64(env, object, "videoQueueDropped",
         static_cast<double>(stats.video_queue_dropped));
+    // 1.0.63：「iPhone 给的配置包后没 IDR」边界条件（参 OhosAirPlayReceiver.h）
+    set_f64(env, object, "videoNoIdrDropped",
+        static_cast<double>(stats.video_no_idr_dropped));
+    set_f64(env, object, "videoNoIdrReconfigures",
+        static_cast<double>(stats.video_no_idr_reconfigures));
+    set_f64(env, object, "videoDemandIdrAfterReconfig",
+        static_cast<double>(stats.video_demand_idr_after_reconfig));
     // 参数集包数：videoFrames 涨而它为 0 ⇒ 解码器从未被配置（SPS/PPS 没来）。
     set_f64(env, object, "videoConfigPackets",
         static_cast<double>(stats.video_config_packets));

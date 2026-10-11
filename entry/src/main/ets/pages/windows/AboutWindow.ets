@@ -242,6 +242,11 @@ export class ChangelogRelease {
  * 点开**（用户 2026-10-02 晚间更正：上一版把旧版做成了不可展开，点不开）。
  */
 const CHANGELOG_RELEASES: ChangelogRelease[] = [
+  new ChangelogRelease('1.0.63', '2026-10-11', [
+    '"iPhone 配置包无 IDR"边界自愈：v1.0.62 那次画面黑屏的真因是 iOS 偶发只给 SPS+PPS 不给 IDR（vendor 库没暴露 /feedback 让接收端主动让 iPhone 重发），不是 shader 问题。本版在入队侧检测"参数集已就绪 + 入队 ≥ 60 帧仍无 IDR" → 进入 demand_idr 模式截短非 IDR 帧，等 IDR slice 来了再放行',
+    '状态行补"⚠️ 配置包无 IDR，请在 iPhone 控制中心重新点一次屏幕镜像"指引 —— 真有 IDR 缺失的话最稳的恢复路径是 iPhone 端重连，目前工程能力做不到不重连自愈',
+    '导出诊断 videoNoIdrDropped / videoNoIdrReconfigures / videoDemandIdrAfterReconfig 三字段',
+  ]),
   new ChangelogRelease('1.0.62', '2026-10-11', [
     '画面"色边糊"修复：shader 改用 texelFetch + 4 邻居手动双线性 chroma 上采样，替代 GL_LINEAR 默认滤波。NV12 UV 平面是 4:2:0，色度物理上限只有 1/4（修不掉），但算法叠加的糊应该明显减轻。如果还有糊 = 源端物理糊（修不动）',
   ]),

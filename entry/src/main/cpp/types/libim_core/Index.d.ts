@@ -318,6 +318,14 @@ export interface AirPlayStatus {
   // 冻结（等 IDR）期间队列被清空 ⇒ 延迟读数反而很低，但画面是定住的。
   videoFrozenMs: number;           // 本次已冻结的毫秒数（0 = 当前没在冻结）
   videoSingleDrops: number;        // 单次溢出只丢一帧（未冻结）的次数
+  // 1.0.63：「iPhone 给的配置包后没 IDR」边界条件（详见 OhosAirPlayReceiver.h）。
+  // 现象：参数集已就绪但入队 ≥ K 帧（kNoIdrFrameThreshold=60）仍无 IDR，
+  // OH_VideoDecoder 没有 IDR 不出帧、画面卡死。这是 iOS 端偶发的流端 bug，
+  // 本工程只能在入队侧识别并截短非 IDR 帧；UI 看 videoNoIdrDropped > 0
+  // 且 videoDemandIdrAfterReconfig=1 时弹"请在 iPhone 控制中心重新点一次"。
+  videoNoIdrDropped: number;
+  videoNoIdrReconfigures: number;
+  videoDemandIdrAfterReconfig: number;
   // 配置包只有 PPS、没有 SPS 的次数。>0 = **上游给的参数集本身残缺**
   //（raop_rtp_mirror.c 拼配置包时 lengthofSPS 解析成 0）。此前只表现为
   // "缺集待解 N"，看不出是配置包残缺还是流里没带 SPS。

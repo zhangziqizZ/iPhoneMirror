@@ -2366,8 +2366,14 @@ struct Index {
         // ★ 收包停滞读数必须在这里出现：这一支正是"帧数停住不动"的场景，
         //   没有它就只能猜"iPhone 停发"还是"我们收包线程卡死"。
         const rxNote: string = this.airplay_rx_stale_text(ap);
+        // ★ 1.0.63：补一行"无 IDR 流"的明确提示 —— 当入队侧截短 + IDR
+        //   计数恒为 0 时，告诉我们这条流得在 iPhone 控制中心重连，画面才
+        //   能出来。看 decodingNote 比看 readout 那堆数字快得多。
+        const noIdrHint: string = ap.videoDemandIdrAfterReconfig > 0
+          ? ' · ⚠️ 配置包无 IDR，请在 iPhone 控制中心重新点一次屏幕镜像'
+          : '';
         return `iPhone 已连接 · 已收 ${ap.videoFrames} 帧但解码器 0 帧输出（解码链未通）` +
-          ` · ${readout}${decodeErr}${rxNote}${audioNote}`;
+          ` · ${readout}${decodeErr}${rxNote}${audioNote}${noIdrHint}`;
       }
       return `iPhone 已连接 · 实时镜像中（已收 ${ap.videoFrames} 帧 / 解码 ${ap.decodedFrames} 帧）`
         + `${dropNote}${decodeErr}${this.airplay_rx_stale_text(ap)}${audioNote}`
