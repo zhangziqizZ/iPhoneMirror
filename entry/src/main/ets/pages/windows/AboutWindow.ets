@@ -242,6 +242,9 @@ export class ChangelogRelease {
  * 点开**（用户 2026-10-02 晚间更正：上一版把旧版做成了不可展开，点不开）。
  */
 const CHANGELOG_RELEASES: ChangelogRelease[] = [
+  new ChangelogRelease('1.0.62', '2026-10-11', [
+    '画面"色边糊"修复：shader 改用 texelFetch + 4 邻居手动双线性 chroma 上采样，替代 GL_LINEAR 默认滤波。NV12 UV 平面是 4:2:0，色度物理上限只有 1/4（修不掉），但算法叠加的糊应该明显减轻。如果还有糊 = 源端物理糊（修不动）',
+  ]),
   new ChangelogRelease('1.0.61', '2026-10-11', [
     '视频诊断：加收包率（videoRxRate）显示，区分"iPhone 源端 30 fps 已拿满" vs "源端 60 fps 我们丢了一半"。状态行追加 收包 N fps/解码 N fps（已拿满 / ★丢 N fps）。下次截图一眼分清，决定要不要把队列上限 2 → 5–6',
   ]),

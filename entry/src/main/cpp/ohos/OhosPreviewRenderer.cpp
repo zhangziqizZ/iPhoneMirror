@@ -111,8 +111,22 @@ void main() {
     // 采集流是 BT.709 limited range；这里与 details 的 CPU 色彩数学保持同一套
     // 系数（上游 VideoFormats.h 的 YuvConversionParameters 默认值）。
     float y = (texture(y_texture, uv).r - 0.0625) * 1.16438;
-    float cb = texture(uv_texture, uv).r - 0.5;
-    float cr = texture(uv_texture, uv).g - 0.5;
+    // ★ 2026-10-11：手动 chroma 上采样，替代默认 GL_LINEAR。
+    //   NV12 的 UV 平面是 4:2:0（W/2×H/2），每 2×2 个 Y 像素共享一个 cb/cr。
+    //   GL_LINEAR 在 chroma 边界上做简单双线性平均，会让锐利的色度边缘（按钮
+    //   边框 / 皮肤 / 渐变）糊掉。这里显式按 4:2:0 chroma 的真实中心对齐
+    //   做 4 邻居双线性，比 GL_LINEAR 在 chroma 上更准确。
+    vec2 ts = vec2(textureSize(uv_texture, 0));
+    vec2 sample_pos = uv * ts - 0.5;
+    ivec2 base = clamp(ivec2(floor(sample_pos)), ivec2(0), ivec2(ts) - 1);
+    vec2 frac = clamp(sample_pos - vec2(base), vec2(0.0), vec2(1.0));
+    vec4 c00 = texelFetch(uv_texture, base, 0);
+    vec4 c10 = texelFetch(uv_texture, min(base + ivec2(1, 0), ivec2(ts) - 1), 0);
+    vec4 c01 = texelFetch(uv_texture, min(base + ivec2(0, 1), ivec2(ts) - 1), 0);
+    vec4 c11 = texelFetch(uv_texture, min(base + ivec2(1, 1), ivec2(ts) - 1), 0);
+    vec4 uv_sample = mix(mix(c00, c10, frac.x), mix(c01, c11, frac.x), frac.y);
+    float cb = uv_sample.r - 0.5;
+    float cr = uv_sample.g - 0.5;
     vec3 rgb = vec3(y + 1.5748 * cr,
                     y - 0.187324 * cb - 0.468124 * cr,
                     y + 1.8556 * cb);
