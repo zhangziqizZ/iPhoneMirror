@@ -67,8 +67,17 @@ GitHub 提供**私密漏洞报告**（Security Advisories）功能，本仓库�
 - **AppGallery 上架**会让本应用暴露在更广攻击面下 ——
   审核机制无法保证没有改包。请从**官方渠道**下载本应用的安装包
   （GitHub Releases → AppGallery → 官网）。
-- **鸿蒙 USB DDK 权限**：首次插入 iPhone 时会弹系统授权。
-  任何时刻应用都只能访问**用户授权过的** USB 设备。
+- **鸿蒙 USB DDK 权限**：`ohos.permission.ACCESS_DDK_USB` 的 `availableLevel`
+  是 `system_basic`，ACG 签发的调试 profile 里没有对应 ACL ⇒ **带上它安装会报
+  `9568289`**。它已被临时移出权限声明，因此本包不做 USB 访问（也就不弹授权）。
+  恢复后仍需用户逐台授权 —— 未经授权的设备永远不能被访问。
+- **plist 解析无递归深度上限（已知，暂不修）**：RTSP 握手期间解析 iPhone 发来的
+  二进制 plist 走的是第三方实现（`third_party/airplayserver` 内的 `bplist_parse_object`），
+  它自身递归且**没有深度上限**。构造足够深的嵌套 plist 理论上可耗尽调用栈。
+  **为什么暂不修**：① 攻击者须先在**同一局域网**连上你的 AirPlay 会话才有地方喂数据；
+  ② 修补点在第三方 vendored 源码内，一旦本地 fork 就失去"与上游逐文件可比对"这条
+  本工程最值钱的资产。**已评估为可接受风险，记录在此。** 若你愿意接受 fork 代价，
+  欢迎提 PR —— 那会是一次波及第三方依赖的改动，请先开 issue 讨论。
 - **蓝牙权限**：ACCESS_BLUETOOTH 是 `user_grant`，
   没弹过窗的设备**永远不能被访问**。
 - **多设备并存**：同时连两台 iPhone 时，各自的 GATT 服务和 HID

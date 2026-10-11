@@ -242,6 +242,11 @@ export class ChangelogRelease {
  * 点开**（用户 2026-10-02 晚间更正：上一版把旧版做成了不可展开，点不开）。
  */
 const CHANGELOG_RELEASES: ChangelogRelease[] = [
+  new ChangelogRelease('1.0.64', '2026-10-11', [
+    '对外文档诚实性收紧（纯文档改动，不含任何代码改动）：README 不再宣称 USB 有线投屏可用 —— ACCESS_DDK_USB 必须进 AGC 签名 profile 的 ACL 才能装包，现已临时移出，改用 ⚠️ 并说明请走 AirPlay',
+    '第三方许可声明不再失实：THIRD_PARTY_NOTICES.md 原先整份是 Windows 版内容（ffmpeg.exe / *.ps1 / WPF-UI / Markdig 在鸿蒙版都不存在），且其中"应用不链接 receiver"那句在鸿蒙版不成立 —— CMake 里是真实的静态链接。已在文件头列明实际链入的三个组件及其许可',
+    'SECURITY.md 记一笔已知限制：vendored plist 解析无递归深度上限。暂不修 —— 攻击者须先连上你的 AirPlay 会话；且修补点在第三方源码内，代价是失去与上游逐文件可比对的能力',
+  ]),
   new ChangelogRelease('1.0.63', '2026-10-11', [
     '"iPhone 配置包无 IDR"边界自愈：v1.0.62 那次画面黑屏的真因是 iOS 偶发只给 SPS+PPS 不给 IDR（vendor 库没暴露 /feedback 让接收端主动让 iPhone 重发），不是 shader 问题。本版在入队侧检测"参数集已就绪 + 入队 ≥ 60 帧仍无 IDR" → 进入 demand_idr 模式截短非 IDR 帧，等 IDR slice 来了再放行',
     '状态行补"⚠️ 配置包无 IDR，请在 iPhone 控制中心重新点一次屏幕镜像"指引 —— 真有 IDR 缺失的话最稳的恢复路径是 iPhone 端重连，目前工程能力做不到不重连自愈',

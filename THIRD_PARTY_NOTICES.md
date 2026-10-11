@@ -5,6 +5,34 @@ tree or release package. Each component remains under its upstream license.
 The root GNU General Public License v3.0 only applies to original iPhoneMirror
 material and does not replace, narrow or relicense any component listed below.
 
+> ## ⚠ 鸿蒙移植读者：请先读这段，后文大部分条目**不适用于你**
+>
+> 本文件是**从上游 Windows 版整体搬来**的，正文里的条目大量描写 Windows 专属
+> 技术栈（`ffmpeg.exe`、PowerShell 脚本 `*.ps1` / `*.psd1`、WPF-UI、Markdig、
+> `quicktime_video_hack` 测试夹具等）。这些**在鸿蒙移植里一个都不存在**，
+> 也不参与构建，后文保留仅为向上游溯源。
+>
+> **鸿蒙移植实际连进 `libim_core.so` 的第三方组件只有三个**，均位于
+> `entry/src/main/cpp/third_party/airplayserver/`：
+>
+> | 组件 | 许可 | 链接方式 | 源内位置 |
+> |---|---|---|---|
+> | AirPlayServer 接收端运行时 | MIT | 静态 | `vendored/LICENSE-airplayserver` |
+> | PlayFair | **GPL-3.0** | 静态 | `vendored/lib/lib/playfair/LICENSE.md` |
+> | Fraunhofer FDK AAC | FDK AAC License | 静态 | `vendored/lib/lib/fdk-aac/MODULE_LICENSE_FRAUNHOFER` |
+>
+> 本项目本体以 **GPL-3.0-only** 发布；PlayFair 同为 GPL-3.0，因此静态合并后
+> 组合作品仍以 GPL-3.0 分发（与上文第一段的声明一致 —— 移植即衍生作品，遵循
+> GPL-3.0 section 5(a)）。
+>
+> **合规要点**：下方 AirPlayServer 一节里那句 *"the application does not link to
+> the receiver"* 描写的是**上游 Windows 版的进程隔离架构**（外部 DLL + named pipe），
+> 在鸿蒙版**不成立** —— `entry/src/main/cpp/CMakeLists.txt` 里明确写着
+> `target_link_libraries(im_core ... airplay_receiver)`，是真的静态链接。
+> 该句保留仅为原文溯源，请勿据其判断鸿蒙版的许可义务。
+>
+> *本节新增于 2026-10-11；此前本文件未做任何平台适配。*
+
 ## quicktime_video_hack protocol fixtures
 
 The binary fixtures in `src/Core/tests/fixtures/quicktime_video_hack/` are

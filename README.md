@@ -15,7 +15,15 @@ USB 有线采集与 AirPlay 无线接收同在一套界面里，低延迟、不�
 
 ## ⚠ 请先读：当前版本的功能成熟度
 
-本版本请把 **「USB 有线投屏 / AirPlay 无线接收 / 预览渲染 / 音频」当作主要功能**。
+本版本请把 **「AirPlay 无线接收 / 预览渲染 / 音频」当作主要功能**。
+
+** USB 有线投屏在当前分发的包里用不了 —— 这是已知限制，不是你的线或手机的问题。**
+USB DDK 需要 `ohos.permission.ACCESS_DDK_USB`，该权限的 `availableLevel` 是
+`system_basic`，必须进签名 profile 的 `acls.allowed-acls` 才允许安装；本工程调试
+profile 由 AGC 签发、本地改不了，带上它安装会直接报错 `9568289`。因此它已被临时
+移出 [`module.json5`](entry/src/main/module.json5) 的权限声明里（那里有完整注释），
+代价就是 USB 通道在本包中不可用。**请用 AirPlay 无线镜像**，它是完整可用的。
+（[2026-10-01 起生效 · 详见 CHANGELOG](CHANGELOG.md)）
 
 **蓝牙反向控制（鼠标放到投屏画面上操控 iPhone）仍在实现阶段，不保证可用。**
 目前的表现可能是：iPhone 的蓝牙列表里能看到本机、也能配对成功，但 **iPhone 上
@@ -27,7 +35,7 @@ USB 有线采集与 AirPlay 无线接收同在一套界面里，低延迟、不�
 
 ## 关键能力
 
-- ✅ USB 有线投屏（iPhone/iPad，Lightning 与 USB-C）
+- ⚠️ USB 有线投屏（iPhone/iPad，Lightning 与 USB-C）—— **当前分发的包装不了/用不了，原因见上方「请先读」**。代码在、ACL 签名到位即可启用，不是功能未实现
 - ✅ AirPlay 无线接收（局域网内 iPhone 屏幕镜像）
 - ✅ D3D11/EGL 预览渲染、多设备并存
 - 🧪 蓝牙反控鼠标（鼠标放到投屏画面上即可操控 iPhone）—— **开发者预览，仍在实现阶段，不保证可用**。iOS 18+ 用户另须开「辅助触控」+ 在系统蓝牙设置里配对，详见 [SUPPORT.md](SUPPORT.md)

@@ -1,5 +1,45 @@
 # 更新日志
 
+## 1.0.64（2026-10-11）
+
+### 对外文档的诚实性收紧（**纯文档，不含任何代码改动**）
+
+起因：外部审计（DeepSeek）对三方对照工作区跑了一份 `Core` 层差异报告。我逐条复核后，
+采纳其中**零风险且与事实一致**的两条，驳回其余。**本版不碰任何源码**。
+
+**修的两件事**：
+
+1. **README 不再宣称 USB 有线投屏可用**。
+   `module.json5` 里 `ACCESS_DDK_USB` 已被注释移出（该权限 `availableLevel` 是 `system_basic`，
+   必须进 AGC 签名 profile 的 `acls.allowed-acls`，带上安装直接报 `9568289`）。
+   但 README 功能清单仍白纸黑字写着 `✅ USB 有线投屏` —— 用户按文档插线必然失败，
+   还会以为是自己的线或手机坏了。已改为 `⚠️` 并在「请先读」段写明原因与替代方案（用 AirPlay）。
+
+2. **第三方许可声明不再失实**。
+   `THIRD_PARTY_NOTICES.md` 整份是从上游 Windows 版搬来的：FFmpeg 8.1.2 的 `ffmpeg.exe`、
+   PowerShell 脚本 `*.ps1`/`*.psd1`、WPF-UI、Markdig……这些在鸿蒙移植里**都不存在**。
+   更关键的是 AirPlayServer 一节那句 *"the application does not link to the receiver"*
+   描写的是 Windows 版的进程隔离架构（外部 DLL + named pipe），而鸿蒙版
+   `CMakeLists.txt` 里明写 `target_link_libraries(im_core ... airplay_receiver)`
+   —— 是**真的静态链接**。据该句判断许可义务会得出错误结论。
+   已在文件头加醒目章节：列明鸿蒙版实际链进 `libim_core.so` 的**三个**第三方组件
+   （AirPlayServer / MIT、PlayFair / GPL-3.0、FDK AAC / Fraunhofer）及真实路径，
+   并注明后文 Windows 条目仅作溯源。
+
+**记一笔但暂不改（已在 SECURITY.md §五写明理由）**：
+vendored `plist.c` 的 `bplist_parse_object` 自身递归、**无深度上限**，理论上可被超深嵌套
+plist 耗尽调用栈。暂不修的两个理由：① 攻击者须先在同一局域网连上你的 AirPlay 会话；
+② 修补点在第三方源码内，本地 fork 会失去「Core 层与上游逐文件可比对」这条最值钱的资产
+（三方刚验证过：与 Linux 分支仅 4 个文件差异、纯新增、零删除零改写）。
+
+**驳回的一条**：审计建议把 `build-profile.json5` 的 SDK 从 23 提到 26 并对 `Index.ets`
+补 2 个类型导入。不采纳 —— 现有 SDK 23 在你机器上**构建成功过多次**（v1.0.60/61/62 均已实机验证），
+而改到 26 会强制要求 DevEco 26.0.0+，有把「能构建」变成「不能构建」的风险；
+且主仓 `Index.ets` 内 `DecoderDiag` / `PreviewRendererDiag` 两个标识符 grep 零命中，
+报告的 6 处类型错误落点未能复核到。**若你的 DevEco 确为 26.0.0+，告我一声，我再单独处理。**
+
+自检：纯 Markdown 改动，不涉及 ArkTS / C++，`try_compile.sh` 与 `check_arkts_types.py` 不适用。
+
 ## 1.0.63（2026-10-11）
 
 ### 「iPhone 给的配置包后没 IDR」边界自愈 + 状态行明确提示
