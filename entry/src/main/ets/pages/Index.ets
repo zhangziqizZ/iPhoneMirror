@@ -2330,6 +2330,24 @@ struct Index {
         ? ` · 解码滞后丢弃 ${ap.videoQueueDropped} 包`
         : '';
       const audioNote: string = ` · ${this.airplay_audio_text(ap)}`;
+      // 渲染链诊断：解码器解出帧却仍黑屏时，这是区分"解码器"与"渲染器/着色器"
+      // 的唯一窗口。presentCalls>0 而 drawOk=0 ⇒ 渲染器把每帧都丢了（看
+      // dropNoDisplay / swapFailures / makeCurrentFailures）；attached=0 ⇒ surface 没挂上。
+      // ★ 1.0.65 新增：此前这条数据已通过 NAPI 发出（previewDiag），但状态行从未
+      //   读取它，于是"改了着色器后直接不显示"这类**渲染侧**回归一直被误读成
+      //   "解码链未通"，排查方向整个错。现在把它补进判读。
+      const pr = ap.previewDiag;
+      let renderNote: string = '';
+      if (pr) {
+        if (pr.attached === 0 && pr.attachCalls > 0) {
+          renderNote = ` · 预览未挂载(surface未就绪${pr.reattachAttempts > 0 ? '·已自愈重试' + pr.reattachAttempts + '次' : ''})`;
+          if (pr.lastError.length > 0) renderNote += `：${pr.lastError}`;
+        } else if (pr.presentCalls > 0 && pr.drawOk === 0) {
+          renderNote = ` · 解码有帧但预览0次上屏(draw=${pr.drawCalls}/swap失败${pr.swapFailures}/makeCurrent失败${pr.makeCurrentFailures}`;
+          if (pr.dropNoDisplay > 0) renderNote += `·未挂载丢帧${pr.dropNoDisplay}`;
+          renderNote += ')';
+        }
+      }
       if (ap.videoFrames > 0 && ap.decodedFrames === 0) {
         // 解码器没产出，但 raop 视频帧在来 → 链路某段不通，必须讲清楚。
         // ★ 把断点判据直接摊在状态行上：一张截图就能定位，不用再翻镜像面板。
@@ -2370,10 +2388,18 @@ struct Index {
         //   计数恒为 0 时，告诉我们这条流得在 iPhone 控制中心重连，画面才
         //   能出来。看 decodingNote 比看 readout 那堆数字快得多。
         const noIdrHint: string = ap.videoDemandIdrAfterReconfig > 0
-          ? ' · ⚠️ 配置包无 IDR，请在 iPhone 控制中心重新点一次屏幕镜像'
+          ? ' · ⚠️ 配置包无 IDR：可在 App 内点「应用/停止」重连，或去 iPhone 控制中心重新点一次屏幕镜像'
           : '';
         return `iPhone 已连接 · 已收 ${ap.videoFrames} 帧但解码器 0 帧输出（解码链未通）` +
-          ` · ${readout}${decodeErr}${rxNote}${audioNote}${noIdrHint}`;
+          ` · ${readout}${decodeErr}${rxNote}${audioNote}${noIdrHint}${renderNote}`;
+      }
+      // 解码器在出帧、但渲染器一次都没画成功 ⇒ 画面必然黑，根因在渲染侧
+      // （着色器编译失败 / EGL 上下文没落到渲染线程 / surface 尺寸为 0）。
+      // 这正是"改了着色器后画面直接不显示"那类回归的判定位：此前没有这一支，
+      // 这类情况会被上面的 happy-path 误报成"实时镜像中"，属典型"假成功"。
+      if (pr && ap.decodedFrames > 0 && pr.drawOk === 0) {
+        return `iPhone 已连接 · 解码器在出帧(${ap.decodedFrames})但预览 0 次上屏（渲染器/着色器问题）` +
+          ` · ${renderNote}${decodeErr}${this.airplay_rx_stale_text(ap)}${audioNote}`;
       }
       return `iPhone 已连接 · 实时镜像中（已收 ${ap.videoFrames} 帧 / 解码 ${ap.decodedFrames} 帧）`
         + `${dropNote}${decodeErr}${this.airplay_rx_stale_text(ap)}${audioNote}`
