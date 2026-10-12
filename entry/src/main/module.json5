@@ -51,8 +51,10 @@
         // ───────── 独立预览窗口：必须是「独立 Ability」而不是子窗口 ─────────
         // 两条硬约束把它逼成了 Ability（详见 StandalonePreviewAbility.ets 文件头）：
         //   ① 子窗生命周期挂在**主窗口**上 —— 主窗口最小化，子窗跟着不显示。
-        //      官方的「独立子窗」要 API 26 的 SubWindowOptions.zLevelAboveParentLoosened，
-        //      本工程 compileSdkVersion = 6.1.0(23)，没有这个字段。
+        //      官方的「独立子窗」要 API 26 的 SubWindowOptions.zLevelAboveParentLoosened。
+        //      本工程 compileSdkVersion 原为 6.1.0(23)（刻意留 23 以用 Ability 绕开官方子窗），
+        //      后升到 26.0.0(26) 以匹配 DevEco 已装的 SDK；升 26 后官方子窗 API 已可用，
+        //      但预览窗口仍沿用 Ability 方案，未切换。
         //   ② 用户要的「只能等比例放大缩小」靠 setContentAspectRatio，而它
         //      **只认主窗口、且只在自由悬浮窗（FLOATING）下生效**。
         //
