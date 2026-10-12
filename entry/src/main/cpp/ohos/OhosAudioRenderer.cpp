@@ -172,8 +172,25 @@ public:
                 queued_frames_ = keep;
                 dropped_frames_ += skip;
             } else {
+                // ★ 2026-10-12 修（音频回音/电音/卡顿的根因）：**删掉原来的
+                //   `queued_frames_ += frames;`** —— push_bytes() 内部（本文件 :256）
+                //   已经在按实际写入的字节数累加 queued_frames_，这里再加一次就是
+                //   每包计两倍。
+                //
+                //   对照上游：WasapiRenderer.cpp:189 只有一处 `queued_frames_ += frames`
+                //   （它没有 push_bytes 助手，直接写 + 一次自增）；LinuxPipeWire 同
+                //   （:126 一处）。鸿蒙移植抽出 push_bytes() 时把原来那句留下了，
+                //   于是只有本端是双倍。
+                //
+                //   后果（三个症状都能对上）：
+                //   ① 计数器虚高 ⇒ pull() 的 min(frames_wanted, queued_frames_) 许可
+                //      复制超过环内真实数据量的帧 ⇒ 读到已播过的旧 PCM ⇒ **回音**；
+                //   ② 读到陈旧/未初始化数据 ⇒ **电音**；
+                //   ③ 虚高越过 permitted_existing ⇒ plan_wasapi_enqueue 误判积压、
+                //      丢旧帧并把 read_frame_ 推到无效位置 ⇒ **卡顿/断续**。
+                //   另：v1.0.54 实测「欠载 362 次/26s」很可能就是本 bug 造成的假象
+                //   （当时调预缓冲 4→8→16→4 都是在跟这个影子打架）。
                 push_bytes(pcm);
-                queued_frames_ += frames;
             }
         }
         if (dropped != 0) {
