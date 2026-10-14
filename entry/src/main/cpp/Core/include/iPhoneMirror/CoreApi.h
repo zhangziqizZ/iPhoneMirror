@@ -255,6 +255,31 @@ struct MediaCastRequest {
     wchar_t url[MaxMediaUrl];
 };
 
+constexpr std::uint32_t MaxTouchSlots = 5;
+constexpr std::uint32_t MaxKeyboardUsages = 30;
+
+enum class ReverseControlState : std::int32_t {
+    Idle = 0,
+    Connecting = 1,
+    Ready = 2,
+    Error = 3,
+};
+
+struct TouchPoint {
+    std::int32_t pointerId;
+    char action[8];
+    float normalizedX;
+    float normalizedY;
+};
+
+struct ReverseControlStatus {
+    std::uint32_t struct_size;
+    std::uint32_t api_version;
+    std::int32_t state;
+    wchar_t lastErrorCode[64];
+    wchar_t lastErrorMessage[192];
+};
+
 } // namespace iPhoneMirror
 
 IM_API std::int32_t IM_CALL im_initialize();
@@ -461,5 +486,21 @@ IM_API std::int32_t IM_CALL im_session_set_window_corner_profile(
 IM_API std::int32_t IM_CALL im_session_set_window_rotation(
     iPhoneMirror::SessionHandle handle, void* hwnd, std::int32_t quarter_turns);
 
+
+IM_API std::int32_t IM_CALL im_start_reverse_control(const wchar_t* udid);
+IM_API std::int32_t IM_CALL im_stop_reverse_control();
+IM_API std::int32_t IM_CALL im_get_reverse_control_status(
+    iPhoneMirror::ReverseControlStatus* status);
+IM_API std::int32_t IM_CALL im_send_touch(
+    const iPhoneMirror::TouchPoint* points,
+    std::uint32_t count);
+IM_API std::int32_t IM_CALL im_send_keyboard(
+    const std::uint8_t* usages,
+    std::uint32_t count,
+    std::int32_t release_all);
+IM_API std::int32_t IM_CALL im_send_button(
+    std::uint16_t usage_page,
+    std::uint16_t usage_code,
+    const char* state);
 
 IM_API const wchar_t* IM_CALL im_last_error();

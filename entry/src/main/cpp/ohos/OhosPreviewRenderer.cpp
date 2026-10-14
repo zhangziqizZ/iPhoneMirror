@@ -614,15 +614,16 @@ struct OhosPreviewRenderer::Impl {
             }
 
             if (gl_ready.load(std::memory_order_acquire)) {
-                // USB 路径：等不到推来的帧就自己去采集桥取一帧（沿用旧 4ms 节奏）。
-                cv.wait_for(lock, std::chrono::milliseconds(kPreviewPollIntervalMs));
                 if (!surface_request_pending && !pending_frame.has_value() &&
                     !quit_requested) {
                     lock.unlock();
+                    (void)ohos_bridge::wait_frame_available(std::chrono::milliseconds(100));
                     auto frame = ohos_bridge::latest_render_frame();
                     if (frame) draw(*frame);
                     lock.lock();
                     if (frame) diag_pump_frames.fetch_add(1, std::memory_order_relaxed);
+                } else {
+                    cv.wait_for(lock, std::chrono::milliseconds(kPreviewPollIntervalMs));
                 }
             } else {
                 // 没挂上 surface 时不必轮询，否则空转 250 次/秒。

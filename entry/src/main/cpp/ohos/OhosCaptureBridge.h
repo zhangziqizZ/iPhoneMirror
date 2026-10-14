@@ -12,11 +12,19 @@
 
 #include "Media/VideoFormats.h"
 
+#include <chrono>
 #include <memory>
 
 namespace iPhoneMirror::ohos_bridge {
 
 // 没有会话在跑、或还没有帧到达时返回 nullptr。
 [[nodiscard]] std::shared_ptr<const media::DecodedFrame> latest_render_frame();
+
+// 采集侧在写入新帧后调用，通知渲染线程帧已就绪。
+void notify_frame_available();
+
+// 渲染线程等待帧就绪通知。超时返回 false（兜底防死锁）。
+[[nodiscard]] bool wait_frame_available(
+    std::chrono::milliseconds timeout = std::chrono::milliseconds(100));
 
 } // namespace iPhoneMirror::ohos_bridge

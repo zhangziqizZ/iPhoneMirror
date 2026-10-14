@@ -20,13 +20,13 @@
       {
         "name": "default",
         "material": {
-          "storePassword": "00000020B63EF9A84630F8ABA3D1D4175DA929909844899E66E9022CF9EFF7E9CBF3CAE4F6785F734405340A0923072E",
-          "certpath": "/storage/Users/currentUser/Documents/ohos/config/default_iPhoneMirror-ohosE-ruv-wiSXCxcYNEO_d25wptlUB44-wkzK2SOce9chk.cer",
+          "storePassword": "00000020B4C1FDBB3C67E889B18DBB91B5F88597F5BB9D20393B6A69D78EDB5B904CD7AED52238CA37AA3BAF562F77F9",
+          "certpath": "/storage/Users/currentUser/.ohos/config/default_iPhoneMirror-ohosR4ohWN0zyHuPJ1b9XHU7QXye14w9oi7PV7OJXSZHGTk.cer",
           "keyAlias": "debugKey",
-          "keyPassword": "00000020B63EF9A84630F8ABA3D1D4175DA929909844899E66E9022CF9EFF7E9CBF3CAE4F6785F734405340A0923072E",
-          "profile": "/storage/Users/currentUser/Documents/ohos/config/default_iPhoneMirror-ohosE-ruv-wiSXCxcYNEO_d25wptlUB44-wkzK2SOce9chk.p7b",
+          "keyPassword": "00000020B4C1FDBB3C67E889B18DBB91B5F88597F5BB9D20393B6A69D78EDB5B904CD7AED52238CA37AA3BAF562F77F9",
+          "profile": "/storage/Users/currentUser/.ohos/config/default_iPhoneMirror-ohosR4ohWN0zyHuPJ1b9XHU7QXye14w9oi7PV7OJXSZHGTk.p7b",
           "signAlg": "SHA256withECDSA",
-          "storeFile": "/storage/Users/currentUser/Documents/ohos/config/default_iPhoneMirror-ohosE-ruv-wiSXCxcYNEO_d25wptlUB44-wkzK2SOce9chk.p12"
+          "storeFile": "/storage/Users/currentUser/.ohos/config/default_iPhoneMirror-ohosR4ohWN0zyHuPJ1b9XHU7QXye14w9oi7PV7OJXSZHGTk.p12"
         },
         "type": "HarmonyOS"
       }

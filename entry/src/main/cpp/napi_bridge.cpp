@@ -956,6 +956,143 @@ napi_value JsSetLogFile(napi_env env, napi_callback_info info) {
     return int32_result(env, result);
 }
 
+napi_value JsStartReverseControl(napi_env env, napi_callback_info info) {
+    std::string udid;
+    if (!arg_string(env, info, udid)) {
+        return int32_result(env,
+            static_cast<std::int32_t>(iPhoneMirror::Result::InvalidArgument));
+    }
+    const std::wstring wide = utf8_to_wide(udid);
+    return int32_result(env, im_start_reverse_control(wide.c_str()));
+}
+
+napi_value JsStopReverseControl(napi_env env, napi_callback_info /*info*/) {
+    return int32_result(env, im_stop_reverse_control());
+}
+
+napi_value JsGetReverseControlStatus(napi_env env, napi_callback_info /*info*/) {
+    iPhoneMirror::ReverseControlStatus status{};
+    status.struct_size = sizeof(iPhoneMirror::ReverseControlStatus);
+    status.api_version = iPhoneMirror::ApiVersion;
+    const std::int32_t result = im_get_reverse_control_status(&status);
+
+    napi_value object = nullptr;
+    napi_create_object(env, &object);
+    set_i32(env, object, "status", result);
+    set_i32(env, object, "state", static_cast<std::int32_t>(status.state));
+    set_utf8(env, object, "lastErrorCode", wide_to_utf8(status.lastErrorCode).c_str());
+    set_utf8(env, object, "lastErrorMessage", wide_to_utf8(status.lastErrorMessage).c_str());
+    return object;
+}
+
+napi_value JsSendTouch(napi_env env, napi_callback_info info) {
+    const std::int32_t invalid =
+        static_cast<std::int32_t>(iPhoneMirror::Result::InvalidArgument);
+    std::size_t argc = 1;
+    napi_value args[1] = {nullptr};
+    if (napi_get_cb_info(env, info, &argc, args, nullptr, nullptr) != napi_ok ||
+        argc < 1) {
+        return int32_result(env, invalid);
+    }
+    bool is_array = false;
+    if (napi_is_array(env, args[0], &is_array) != napi_ok || !is_array) {
+        return int32_result(env, invalid);
+    }
+    std::uint32_t count = 0;
+    if (napi_get_array_length(env, args[0], &count) != napi_ok || count == 0 ||
+        count > iPhoneMirror::MaxTouchSlots) {
+        return int32_result(env, invalid);
+    }
+    std::vector<iPhoneMirror::TouchPoint> points(count);
+    for (std::uint32_t i = 0; i < count; ++i) {
+        napi_value element = nullptr;
+        if (napi_get_element(env, args[0], i, &element) != napi_ok) {
+            return int32_result(env, invalid);
+        }
+        double pointerId = 0, normalizedX = 0, normalizedY = 0;
+        if (!object_number(env, element, "pointerId", pointerId) ||
+            !object_number(env, element, "normalizedX", normalizedX) ||
+            !object_number(env, element, "normalizedY", normalizedY)) {
+            return int32_result(env, invalid);
+        }
+        points[i].pointerId = static_cast<std::int32_t>(pointerId);
+        points[i].normalizedX = static_cast<float>(normalizedX);
+        points[i].normalizedY = static_cast<float>(normalizedY);
+        napi_value actionVal = nullptr;
+        if (napi_get_named_property(env, element, "action", &actionVal) != napi_ok) {
+            return int32_result(env, invalid);
+        }
+        std::string actionStr;
+        if (!value_string(env, actionVal, actionStr)) {
+            return int32_result(env, invalid);
+        }
+        std::memset(points[i].action, 0, sizeof(points[i].action));
+        std::strncpy(points[i].action, actionStr.c_str(), sizeof(points[i].action) - 1);
+    }
+    return int32_result(env, im_send_touch(points.data(), count));
+}
+
+napi_value JsSendKeyboard(napi_env env, napi_callback_info info) {
+    const std::int32_t invalid =
+        static_cast<std::int32_t>(iPhoneMirror::Result::InvalidArgument);
+    std::size_t argc = 2;
+    napi_value args[2] = {nullptr, nullptr};
+    if (napi_get_cb_info(env, info, &argc, args, nullptr, nullptr) != napi_ok ||
+        argc < 2) {
+        return int32_result(env, invalid);
+    }
+    bool is_array = false;
+    if (napi_is_array(env, args[0], &is_array) != napi_ok || !is_array) {
+        return int32_result(env, invalid);
+    }
+    std::uint32_t count = 0;
+    if (napi_get_array_length(env, args[0], &count) != napi_ok ||
+        count > iPhoneMirror::MaxKeyboardUsages) {
+        return int32_result(env, invalid);
+    }
+    std::vector<std::uint8_t> usages(count);
+    for (std::uint32_t i = 0; i < count; ++i) {
+        napi_value element = nullptr;
+        if (napi_get_element(env, args[0], i, &element) != napi_ok) {
+            return int32_result(env, invalid);
+        }
+        double val = 0;
+        if (napi_get_value_double(env, element, &val) != napi_ok || val < 0 || val > 255) {
+            return int32_result(env, invalid);
+        }
+        usages[i] = static_cast<std::uint8_t>(val);
+    }
+    bool releaseAll = false;
+    if (napi_get_value_bool(env, args[1], &releaseAll) != napi_ok) {
+        return int32_result(env, invalid);
+    }
+    return int32_result(env, im_send_keyboard(usages.data(), count, releaseAll ? 1 : 0));
+}
+
+napi_value JsSendButton(napi_env env, napi_callback_info info) {
+    const std::int32_t invalid =
+        static_cast<std::int32_t>(iPhoneMirror::Result::InvalidArgument);
+    std::size_t argc = 3;
+    napi_value args[3] = {nullptr, nullptr, nullptr};
+    if (napi_get_cb_info(env, info, &argc, args, nullptr, nullptr) != napi_ok ||
+        argc < 3) {
+        return int32_result(env, invalid);
+    }
+    double usagePage = 0, usageCode = 0;
+    if (napi_get_value_double(env, args[0], &usagePage) != napi_ok ||
+        napi_get_value_double(env, args[1], &usageCode) != napi_ok) {
+        return int32_result(env, invalid);
+    }
+    std::string stateStr;
+    if (!value_string(env, args[2], stateStr)) {
+        return int32_result(env, invalid);
+    }
+    return int32_result(env, im_send_button(
+        static_cast<std::uint16_t>(usagePage),
+        static_cast<std::uint16_t>(usageCode),
+        stateStr.c_str()));
+}
+
 } // namespace
 
 EXTERN_C_START
@@ -988,6 +1125,12 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"usbDiagnostics",   nullptr, JsUsbDiagnostics,   nullptr, nullptr, nullptr, napi_default, nullptr},
         {"getEnvironment",   nullptr, JsGetEnvironment,   nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setLogFile",       nullptr, JsSetLogFile,       nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"startReverseControl", nullptr, JsStartReverseControl, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"stopReverseControl", nullptr, JsStopReverseControl, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"getReverseControlStatus", nullptr, JsGetReverseControlStatus, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"sendTouch", nullptr, JsSendTouch, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"sendKeyboard", nullptr, JsSendKeyboard, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"sendButton", nullptr, JsSendButton, nullptr, nullptr, nullptr, napi_default, nullptr},
     };
     napi_define_properties(env, exports, sizeof(desc) / sizeof(desc[0]), desc);
     return exports;

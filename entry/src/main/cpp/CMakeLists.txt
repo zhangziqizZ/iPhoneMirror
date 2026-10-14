@@ -73,6 +73,10 @@ set(IPHONEMIRROR_CORE_OHOS_SOURCES
     ${IM_OHOS_DIR}/OhosUsbDdk.cpp
     ${IM_OHOS_DIR}/OhosUsbTransport.cpp
     ${IM_OHOS_DIR}/OhosVideoDecoder.cpp
+    ${IM_OHOS_DIR}/OhosInputBridge.cpp
+    ${IM_OHOS_DIR}/OhosUsbMux.cpp
+    ${IM_OHOS_DIR}/OhosCoreDeviceTunnel.cpp
+    ${IM_OHOS_DIR}/OhosHidMessage.cpp
 )
 
 # ---------------------------------------------------------------------------
@@ -149,6 +153,7 @@ target_link_libraries(im_core
     ace_napi.z            # NAPI 运行时
     libhilog_ndk.z.so     # 日志（Logging.cpp 走 OH_LOG_Print）
     libnative_window.so   # XComponent surface → OHNativeWindow
+    libnative_buffer.so   # OH_NativeBuffer stride 查询（解码器输出缓冲行距）
     libEGL.so             # 预览 GL 上下文
     libGLESv3.so
     libnative_media_core.so      # AVCodec 公共类型

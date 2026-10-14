@@ -14,6 +14,7 @@
 
 #include "Logging.h"
 #include "Media/VideoFormats.h"
+#include "OhosCaptureBridge.h"
 
 #include <algorithm>
 #include <atomic>
@@ -37,10 +38,19 @@
 #    include <multimedia/player_framework/native_avformat.h>
 #    define IM_HAVE_OHOS_AVCODEC 1
 #  endif
+#  if __has_include(<native_window/external_window.h>)
+#    include <native_window/external_window.h>
+#    include <native_buffer/native_buffer.h>
+#    define IM_HAVE_OHOS_NATIVE_WINDOW 1
+#  endif
 #endif
 
 #ifndef IM_HAVE_OHOS_AVCODEC
 #  define IM_HAVE_OHOS_AVCODEC 0
+#endif
+
+#ifndef IM_HAVE_OHOS_NATIVE_WINDOW
+#  define IM_HAVE_OHOS_NATIVE_WINDOW 0
 #endif
 
 // 鸿蒙 OH_VideoDecoder::OnError 累计触发次数（at file scope, NOT inside the
@@ -139,9 +149,10 @@ namespace iPhoneMirror::media {
 namespace {
 
 // AVCC → Annex-B。上游样本是「每个 NALU 前置 nalu_length_size 字节长度」。
-std::vector<std::uint8_t> to_annex_b(std::span<const std::uint8_t> sample,
+std::span<const std::uint8_t> to_annex_b(std::span<const std::uint8_t> sample,
     std::uint8_t length_size) {
-    std::vector<std::uint8_t> output;
+    thread_local std::vector<std::uint8_t> output;
+    output.clear();
     output.reserve(sample.size() + 16);
     std::size_t offset = 0;
     const std::size_t width = length_size == 0 ? 4 : length_size;
@@ -161,7 +172,7 @@ std::vector<std::uint8_t> to_annex_b(std::span<const std::uint8_t> sample,
             sample.begin() + static_cast<std::ptrdiff_t>(offset + length));
         offset += length;
     }
-    return output;
+    return std::span<const std::uint8_t>(output);
 }
 
 // H.264 SPS 解析（最小版）：从 Annex-B 字节里找 NAL type=7（SPS），按
@@ -588,8 +599,9 @@ public:
     std::vector<DecodedFrame> decode(std::span<const std::uint8_t> length_prefixed_sample,
         std::int64_t timestamp_100ns, std::int64_t duration_100ns) override {
         (void)duration_100ns;
+        auto annex_b = to_annex_b(length_prefixed_sample, format_.nalu_length_size);
         return decode_common(
-            to_annex_b(length_prefixed_sample, format_.nalu_length_size), timestamp_100ns);
+            std::vector<std::uint8_t>(annex_b.begin(), annex_b.end()), timestamp_100ns);
     }
 
     // AirPlay raop 镜像回调给的已经是 Annex-B（NAL 前带 00 00 00 01 起始码），
@@ -615,6 +627,25 @@ public:
             annex_b_codec_config.end());
         have_codec_config_override_ = !codec_config_override_.empty();
         Diag().configures.fetch_add(1, std::memory_order_relaxed);
+        // ★ 2026-10-14 诊断：参数集到来时打一行（codec/提示尺寸/参数集大小）。
+        //   用途①：原神场景确认 iPhone 是否切 HEVC（真机截图只见 AVC，若原神
+        //   启动时这行变成 HEVC 即实锤）；用途②：分辨率切换（如
+        //   2562×1440→810×1440）后确认本函数确被重新触发——若它被调了而画面
+        //   仍冻结，问题才在别处（等 IDR/队列断供）。
+        logging::write(logging::Level::Info, "decoder",
+            std::format("configure_annex_b：codec={} 提示尺寸={}x{} 参数集={}B",
+                hevc ? "HEVC" : "AVC", width, height,
+                annex_b_codec_config.size()));
+        // ★ 2026-10-14（对齐原版 1.8.5）：原版 MediaFoundation 解码器
+        //   （MediaFoundationDecoder.cpp:1105,1116）**永远开 low_latency、
+        //   没有关闭路径**。鸿蒙侧此前 persistently_disabled 是单向的——
+        //   一旦因 UV 全零被关就永不恢复，长会话里硬解+低延迟被永久阉割。
+        //   新参数集 = 新流，旧怪癖未必复现，这里重置让它重新获得机会；
+        //   若设备确实仍出 UV 全零，on_chroma_empty_locked 会再次关掉
+        //   （有界代价：每个新流至多 kChromaEmptyStreakLimit 帧绿屏）。
+        low_latency_ = true;
+        low_latency_persistently_disabled_ = false;
+        hw_ll_retry_done_ = false;
         {
             // 参数集头：一眼看出是 SPS 开头（00 00 00 01 67/64）还是 PPS 开头（28）。
             const auto cb = [&](std::size_t k) -> std::uint32_t {
@@ -749,8 +780,9 @@ private:
             ++chroma_empty_streak_;
             return;
         }
-        if (!low_latency_) return; // 关过了还是绿的 ⇒ 不是它的锅，交给策略链推进
+        if (!low_latency_) return;
         low_latency_ = false;
+        low_latency_persistently_disabled_ = true;
         Diag().low_latency_disabled.fetch_add(1, std::memory_order_relaxed);
         strategy_restart_requested_ = true;
         logging::write(logging::Level::Warning, "decoder",
@@ -790,6 +822,60 @@ private:
         if (frames_since_create_ < kStrategyProbeFrames) return;
         const int next = static_cast<int>(strategy_) + 1;
         if (next >= static_cast<int>(DecoderStrategy::Count)) return; // 全试完
+        // ★ 2026-10-14 档位退出诊断：之前链上对"这一档为什么死"零记录，真机
+        //   截图只能看到最终落在 (sw)，硬解死因（无回调 / attr.size 太小 /
+        //   UV 全零）全靠猜。每档退出时把判据与诊断计数打一行（计数是全局
+        //   累计值，相邻两行相减即得本档增量）。
+        logging::write(logging::Level::Warning, "decoder",
+            std::format(
+                "解码档位退出：档={} 探帧={} 可用像素={} 输出回调(全局)={} "
+                "too_small(全局)={} last_attr={} onstream={}x{} decoded={}x{}",
+                static_cast<int>(strategy_), frames_since_create_,
+                pixels_since_create_,
+                Diag().output_callbacks.load(std::memory_order_relaxed),
+                Diag().output_too_small.load(std::memory_order_relaxed),
+                Diag().last_output_attr_size.load(std::memory_order_relaxed),
+                Diag().last_onstream_width.load(std::memory_order_relaxed),
+                Diag().last_onstream_height.load(std::memory_order_relaxed),
+                decoded_width_, decoded_height_));
+        // ★ 2026-10-14 硬解零像素的针对性重试：硬件档探帧期 0 可用像素时，
+        //   先怀疑 OH_MD_KEY_VIDEO_ENABLE_LOW_LATENCY 在该设备硬解上的兼容性
+        //   （真机已见两种低延迟怪癖：UV 全零、以及疑似完全不出帧→掉软解），
+        //   同档关低延迟重建再探一轮，仍不行才推进下一档。原版在 Windows MFT
+        //   上永远开低延迟，但 OHOS 硬解是另一套实现，不能照搬。每实例每流
+        //   只试一次（hw_ll_retry_done_ 闸门，configure_annex_b 时重置），
+        //   最坏多探 8 帧，代价有界。
+        const bool is_hw_tier = strategy_ == DecoderStrategy::HwEncSize ||
+                                strategy_ == DecoderStrategy::HwDispSize;
+        if (is_hw_tier && low_latency_ && !low_latency_persistently_disabled_ &&
+            !hw_ll_retry_done_) {
+            hw_ll_retry_done_ = true;
+            low_latency_ = false;
+            Diag().low_latency_disabled.fetch_add(1, std::memory_order_relaxed);
+            frames_since_create_ = 0;
+            outputs_since_create_ = 0;
+            pixels_since_create_ = 0;
+            if (codec_ != nullptr) {
+                OH_VideoDecoder_Stop(codec_);
+                OH_VideoDecoder_Destroy(codec_);
+                codec_ = nullptr;
+            }
+            decoded_.clear();
+            pending_input_.clear();
+            have_input_buffer_ = false;
+            input_buffer_ = nullptr;
+            pushed_to_codec_ = 0;
+            chroma_empty_streak_ = 0;
+            logging::write(logging::Level::Warning, "decoder",
+                "硬件档探帧零像素 ⇒ 关低延迟同档重试（低延迟兼容性排查）");
+            try {
+                create_locked();
+            } catch (const std::exception &) {
+                strategy_chain_active_ = false;
+                failed_ = true;
+            }
+            return;
+        }
         if (codec_ != nullptr) {
             OH_VideoDecoder_Stop(codec_);
             OH_VideoDecoder_Destroy(codec_);
@@ -889,7 +975,7 @@ private:
         //   1.0.57：加了 low_latency_ 开关。开着它出来的帧如果 UV 全零（= 纯绿），
         //   说明这面机器上它会换输出缓冲布局（我们靠 attr.size 推 stride 的假设
         //   随之失效），那就自动关掉重建 —— 详见 on_chroma_empty_locked。
-        if (low_latency_ &&
+        if (low_latency_ && !low_latency_persistently_disabled_ &&
             !OH_AVFormat_SetIntValue(description, OH_MD_KEY_VIDEO_ENABLE_LOW_LATENCY, 1)) {
             logging::write(logging::Level::Warning, "decoder",
                 "低延迟模式设置失败（OH_MD_KEY_VIDEO_ENABLE_LOW_LATENCY），"
@@ -1147,10 +1233,32 @@ private:
                     // （NV12 size = stride × height × 3/2）。attr.size 紧凑相等时
                     // 直接整块拷；更大时按行拷——不处理的话画面会斜着裂开。
                     std::uint32_t stride_bytes = width;
-                    if (static_cast<std::uint32_t>(attr.size) != *needed && height > 0) {
+#if IM_HAVE_OHOS_NATIVE_WINDOW
+                    if (stride_bytes == width) {
+                        OH_NativeBuffer* nativeBuffer = OH_AVBuffer_GetNativeBuffer(buffer);
+                        if (nativeBuffer != nullptr) {
+                            OH_NativeBuffer_Config config{};
+                            OH_NativeBuffer_GetConfig(nativeBuffer, &config);
+                            if (config.stride > 0) {
+                                stride_bytes = static_cast<std::uint32_t>(config.stride);
+                            }
+                            OH_NativeBuffer_Unreference(nativeBuffer);
+                        }
+                    }
+#endif
+                    if (stride_bytes == width && height > 0) {
                         const std::uint32_t derived =
-                            static_cast<std::uint32_t>(attr.size) * 2u / (3u * height);
-                        if (derived >= width) stride_bytes = derived;
+                            static_cast<std::uint32_t>(attr.size) / (height * 3u / 2u);
+                        if (derived >= width) {
+                            stride_bytes = derived;
+                        } else if (self->low_latency_) {
+                            self->low_latency_ = false;
+                            self->low_latency_persistently_disabled_ = true;
+                            Diag().low_latency_disabled.fetch_add(1, std::memory_order_relaxed);
+                            self->strategy_restart_requested_ = true;
+                            logging::write(logging::Level::Warning, "decoder",
+                                "stride derivation failed (derived < width), disabling low-latency to avoid chroma corruption");
+                        }
                     }
 
                     // ★ 2026-10-02 延迟专项（两处都在"收包→上屏"的关键路径上）：
@@ -1252,6 +1360,7 @@ private:
                 }
             }
             Diag().output_with_pixels.fetch_add(1, std::memory_order_relaxed);
+            ohos_bridge::notify_frame_available();
         } else {
             Diag().output_no_pixels.fetch_add(1, std::memory_order_relaxed);
         }
@@ -1268,6 +1377,9 @@ private:
     OH_AVBuffer* input_buffer_{};
     std::uint32_t input_index_{};
     bool have_input_buffer_{};
+#if IM_HAVE_OHOS_NATIVE_WINDOW
+    OHNativeWindow* output_surface_{};
+#endif
     // 当前这个解码器实例已成功推入的帧数。用来判定"本实例的首帧"——首帧必须
     // 带上 in-band 参数集（SPS/PPS），否则解码器无从得知编码参数。
     std::uint64_t pushed_to_codec_{};
@@ -1301,7 +1413,11 @@ private:
     //   撤回 v1.0.55 的低延迟开关；保留 v1.0.55 的非阻塞取帧（那是另一条独立
     //   改动）。代价：v1.0.55 测得的 ≈233ms 周期性滞后恢复，延迟回到 250-300ms 量级，
     //   与"颜色对"二选一。先要颜色对。
-    bool low_latency_{false};
+    bool low_latency_{true};
+    bool low_latency_persistently_disabled_{false};
+    // 硬解档"关低延迟同档重试"只做一次的闸门（防止无限重建），见
+    // maybe_switch_strategy_locked；configure_annex_b 时随新流重置。
+    bool hw_ll_retry_done_{false};
     std::uint32_t chroma_empty_streak_{0};
     // 由输出回调置位、由 decode_common（解码线程）执行 —— **绝不在解码器的回调
     // 里销毁解码器自己**，那等于在人家函数栈还没返回时拆地基。

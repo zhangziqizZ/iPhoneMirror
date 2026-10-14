@@ -22,11 +22,13 @@
 #include "Logging.h"
 #include "Media/VideoFormats.h"
 #include "OhosCaptureBridge.h"
+#include "OhosInputBridge.h"
 #include "OhosPreviewRenderer.h"
 #include "OhosUsbDiagnostics.h"
 #include "Text/Utf.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <format>
 #include <memory>
@@ -39,6 +41,8 @@ namespace {
 std::mutex state_mutex;
 bool initialized{};
 std::mutex capture_mutex;
+std::condition_variable capture_frame_cv;
+bool capture_frame_available{false};
 std::unique_ptr<iPhoneMirror::capture::CaptureSession> capture_session;
 std::wstring last_error;
 iPhoneMirror::device::DeviceManager device_manager;
@@ -61,6 +65,43 @@ void copy_text(wchar_t (&destination)[Capacity], std::wstring_view source) {
     const auto length = std::min(source.size(), Capacity - 1);
     std::copy_n(source.begin(), length, destination);
     destination[length] = L'\0';
+}
+
+// 与上游 Core/src/CoreApi.cpp 的校验/映射逐条对齐（那不是本工程编译单元，
+// 这里把它在鸿蒙侧需要的那份语义原样补上，避免两处口径漂移）。
+bool valid_video_preferences(std::uint32_t width, std::uint32_t height,
+    std::uint32_t target_fps) noexcept {
+    if ((width == 0) != (height == 0)) return false;
+    if (width != 0 && (width < 16 || height < 16 || width > 8192 || height > 8192)) {
+        return false;
+    }
+    return target_fps <= 120;
+}
+
+bool valid_capture_option_extensions(
+    const iPhoneMirror::CaptureOptions& options) noexcept {
+    return options.reserved[2] <= 2 && options.reserved[3] <= 2 &&
+        options.reserved[4] <= 2 &&
+        valid_video_preferences(options.reserved[0], options.reserved[1], 0);
+}
+
+iPhoneMirror::capture::CapturePreferences preferences_from_options(
+    const iPhoneMirror::CaptureOptions& options) noexcept {
+    return {
+        .render_max_width = options.requested_width,
+        .render_max_height = options.requested_height,
+        .target_fps = options.target_fps,
+        .play_audio = options.play_audio != 0,
+        .audio_volume = options.audio_volume,
+        .usb_requested_width = options.reserved[0],
+        .usb_requested_height = options.reserved[1],
+        .usb_projection_mode =
+            static_cast<iPhoneMirror::capture::UsbProjectionMode>(options.reserved[2]),
+        .decoder_preference =
+            static_cast<iPhoneMirror::media::DecoderPreference>(options.reserved[3]),
+        .color_output_preference =
+            static_cast<iPhoneMirror::media::ColorOutputPreference>(options.reserved[4]),
+    };
 }
 
 std::int32_t refresh_devices_locked(iPhoneMirror::DeviceInfo* devices,
@@ -123,11 +164,21 @@ bool copy_bgra_from_nv12(const iPhoneMirror::media::DecodedFrame& frame,
         static_cast<std::size_t>(frame.width) * frame.height;
     if (frame.nv12.size() < luma_bytes + luma_bytes / 2) return false;
 
+    // 等比缩放采样：把输出像素均匀映射回源帧（最近邻，覆盖整幅画面），而不是
+    // 只取左上角一块。修复前 source_x/source_y 直接用 column/row，等于裁剪。
     for (std::uint32_t row = 0; row < output_height; ++row) {
-        const std::uint32_t source_y = std::min(row, frame.height - 1);
+        const std::uint32_t source_y = output_height <= 1
+            ? 0U
+            : static_cast<std::uint32_t>(
+                (static_cast<std::uint64_t>(row) * (frame.height - 1)) /
+                (output_height - 1));
         const std::uint32_t chroma_row = source_y / 2;
         for (std::uint32_t column = 0; column < output_width; ++column) {
-            const std::uint32_t source_x = std::min(column, frame.width - 1);
+            const std::uint32_t source_x = output_width <= 1
+                ? 0U
+                : static_cast<std::uint32_t>(
+                    (static_cast<std::uint64_t>(column) * (frame.width - 1)) /
+                    (output_width - 1));
             const std::size_t luma_index = static_cast<std::size_t>(source_y) * frame.width + source_x;
             const std::size_t chroma_index = luma_bytes +
                 static_cast<std::size_t>(chroma_row) * frame.width + (source_x / 2) * 2;
@@ -297,7 +348,8 @@ const wchar_t* IM_CALL im_last_error() { return last_error.c_str(); }
 // 有线 USB 采集。共享状态机、USB DDK 传输、AVCodec 解码器与 OHAudio 播放器
 // 在鸿蒙这一侧都已就位，所以这里跑的是真链路。use_usbdk 恒为 false：UsbDk 是
 // Windows 后端，CaptureSession 在鸿蒙上只会选到 LibUsb1 那一支。
-std::int32_t IM_CALL start_capture_locked(const wchar_t* serial, bool play_audio) {
+std::int32_t start_capture_locked(const wchar_t* serial,
+    const iPhoneMirror::capture::CapturePreferences& preferences) {
     if (serial == nullptr || *serial == L'\0') {
         return fail(iPhoneMirror::Result::InvalidArgument, L"serial 不能为空");
     }
@@ -310,7 +362,7 @@ std::int32_t IM_CALL start_capture_locked(const wchar_t* serial, bool play_audio
     iPhoneMirror::ohos_usb_diag::clear();
     try {
         auto session = std::make_unique<iPhoneMirror::capture::CaptureSession>(
-            iPhoneMirror::text::wide_to_utf8(serial), play_audio);
+            iPhoneMirror::text::wide_to_utf8(serial), preferences);
         session->start(false);
         capture_session = std::move(session);
         last_error.clear();
@@ -327,6 +379,12 @@ std::int32_t IM_CALL start_capture_locked(const wchar_t* serial, bool play_audio
     }
 }
 
+std::int32_t start_capture_locked(const wchar_t* serial, bool play_audio) {
+    iPhoneMirror::capture::CapturePreferences preferences;
+    preferences.play_audio = play_audio;
+    return start_capture_locked(serial, preferences);
+}
+
 std::int32_t IM_CALL im_start_capture(const wchar_t* serial) {
     return start_capture_locked(serial, true);
 }
@@ -336,15 +394,24 @@ std::int32_t IM_CALL im_start_capture_ex(const wchar_t* serial,
     return start_capture_locked(serial, play_audio != 0);
 }
 
-// 只有"带选项"这一入口没实现，采集本身是能跑的：把 CaptureOptions 逐字段映射
-// 是独立的工作项，一边启动一边悄悄丢掉一半选项，正是这个文件拒绝制造的那种
-// 假成功。
+// 带选项的启动：与上游 CoreApi.cpp 的 im_start_capture_with_options 同一套校验与
+// 字段映射。修复前这里是 not_implemented，而 ArkTS 主入口 start() 只走这一条，
+// 导致有线投屏永远点不起来。
 std::int32_t IM_CALL im_start_capture_with_options(const wchar_t* serial,
     const iPhoneMirror::CaptureOptions* options) {
     if (serial == nullptr || options == nullptr) {
         return fail(iPhoneMirror::Result::InvalidArgument, L"参数不能为空");
     }
-    return not_implemented(L"带选项的采集启动（CaptureOptions 逐字段映射）", L"阶段 P1");
+    if (options->struct_size != sizeof(iPhoneMirror::CaptureOptions) ||
+        !valid_video_preferences(options->requested_width,
+            options->requested_height, options->target_fps) ||
+        !std::isfinite(options->audio_volume) ||
+        options->audio_volume < 0.0F || options->audio_volume > 1.0F ||
+        !valid_capture_option_extensions(*options)) {
+        return fail(iPhoneMirror::Result::InvalidArgument,
+            L"CaptureOptions 参数无效");
+    }
+    return start_capture_locked(serial, preferences_from_options(*options));
 }
 
 std::int32_t IM_CALL im_stop_capture() {
@@ -456,6 +523,12 @@ std::int32_t IM_CALL im_force_preview_refresh() {
 
 std::int32_t IM_CALL im_set_video_preferences(std::uint32_t max_width,
     std::uint32_t max_height, std::uint32_t max_fps) {
+    // 与上游 im_set_video_preferences 对齐：先做参数校验，拒绝编组层把负数强转
+    // 成的 UINT32_MAX 等非法值，避免其进入 set_target_fps。
+    if (!valid_video_preferences(max_width, max_height, max_fps)) {
+        return fail(iPhoneMirror::Result::InvalidArgument,
+            L"本地渲染尺寸或帧率参数无效");
+    }
     std::scoped_lock lock(capture_mutex);
     if (!capture_session) {
         return fail(iPhoneMirror::Result::CaptureBackendUnavailable, L"没有正在运行的采集会话");
@@ -692,4 +765,109 @@ std::shared_ptr<const media::DecodedFrame> latest_render_frame() {
     return capture_session ? capture_session->next_render_frame() : nullptr;
 }
 
+void notify_frame_available() {
+    {
+        std::scoped_lock lock(capture_mutex);
+        capture_frame_available = true;
+    }
+    capture_frame_cv.notify_one();
+}
+
+bool wait_frame_available(std::chrono::milliseconds timeout) {
+    std::unique_lock<std::mutex> lock(capture_mutex);
+    capture_frame_cv.wait_for(lock, timeout, [] { return capture_frame_available; });
+    if (capture_frame_available) {
+        capture_frame_available = false;
+        return true;
+    }
+    return false;
+}
+
 } // namespace iPhoneMirror::ohos_bridge
+
+namespace {
+std::mutex input_bridge_mutex;
+std::unique_ptr<iPhoneMirror::ohos::OhosInputBridge> input_bridge;
+}
+
+std::int32_t IM_CALL im_start_reverse_control(const wchar_t* udid) {
+    if (udid == nullptr || *udid == L'\0') {
+        return fail(iPhoneMirror::Result::InvalidArgument, L"udid 不能为空");
+    }
+    std::scoped_lock lock(input_bridge_mutex);
+    if (input_bridge) {
+        return fail(iPhoneMirror::Result::SessionAlreadyExists, L"反向控制通道已在运行");
+    }
+    input_bridge = std::make_unique<iPhoneMirror::ohos::OhosInputBridge>();
+    const auto result = input_bridge->start(udid);
+    if (result != static_cast<std::int32_t>(iPhoneMirror::Result::Ok)) {
+        input_bridge.reset();
+    }
+    return result;
+}
+
+std::int32_t IM_CALL im_stop_reverse_control() {
+    std::scoped_lock lock(input_bridge_mutex);
+    if (!input_bridge) {
+        return static_cast<std::int32_t>(iPhoneMirror::Result::Ok);
+    }
+    const auto result = input_bridge->stop();
+    input_bridge.reset();
+    return result;
+}
+
+std::int32_t IM_CALL im_get_reverse_control_status(iPhoneMirror::ReverseControlStatus* status) {
+    if (status == nullptr) {
+        return fail(iPhoneMirror::Result::InvalidArgument, L"status 不能为空");
+    }
+    if (status->struct_size != sizeof(iPhoneMirror::ReverseControlStatus)) {
+        return fail(iPhoneMirror::Result::InvalidArgument, L"ReverseControlStatus 结构版本不匹配");
+    }
+    std::scoped_lock lock(input_bridge_mutex);
+    if (!input_bridge) {
+        status->api_version = iPhoneMirror::ApiVersion;
+        status->state = static_cast<std::int32_t>(iPhoneMirror::ReverseControlState::Idle);
+        status->lastErrorCode[0] = L'\0';
+        status->lastErrorMessage[0] = L'\0';
+        return static_cast<std::int32_t>(iPhoneMirror::Result::Ok);
+    }
+    return input_bridge->getStatus(status);
+}
+
+std::int32_t IM_CALL im_send_touch(const iPhoneMirror::TouchPoint* points, std::uint32_t count) {
+    if (points == nullptr || count == 0 || count > iPhoneMirror::MaxTouchSlots) {
+        return fail(iPhoneMirror::Result::InvalidArgument, L"触摸参数无效");
+    }
+    std::scoped_lock lock(input_bridge_mutex);
+    if (!input_bridge) {
+        return static_cast<std::int32_t>(iPhoneMirror::Result::CaptureBackendUnavailable);
+    }
+    return input_bridge->sendTouch(points, count);
+}
+
+std::int32_t IM_CALL im_send_keyboard(const std::uint8_t* usages, std::uint32_t count,
+    std::int32_t release_all) {
+    if (usages == nullptr && release_all == 0) {
+        return fail(iPhoneMirror::Result::InvalidArgument, L"键盘参数无效");
+    }
+    if (count > iPhoneMirror::MaxKeyboardUsages) {
+        return fail(iPhoneMirror::Result::InvalidArgument, L"键盘 usage 数量超限");
+    }
+    std::scoped_lock lock(input_bridge_mutex);
+    if (!input_bridge) {
+        return static_cast<std::int32_t>(iPhoneMirror::Result::CaptureBackendUnavailable);
+    }
+    return input_bridge->sendKeyboard(usages, count, release_all);
+}
+
+std::int32_t IM_CALL im_send_button(std::uint16_t usage_page, std::uint16_t usage_code,
+    const char* state) {
+    if (state == nullptr) {
+        return fail(iPhoneMirror::Result::InvalidArgument, L"按钮状态不能为空");
+    }
+    std::scoped_lock lock(input_bridge_mutex);
+    if (!input_bridge) {
+        return static_cast<std::int32_t>(iPhoneMirror::Result::CaptureBackendUnavailable);
+    }
+    return input_bridge->sendButton(usage_page, usage_code, state);
+}
