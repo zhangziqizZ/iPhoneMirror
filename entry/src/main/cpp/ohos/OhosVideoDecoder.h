@@ -102,6 +102,14 @@ struct DecoderDiagSnapshot {
     // low_latency_disabled：因连续废帧而自动关闭低延迟模式的次数。
     std::uint64_t chroma_empty_frames{0};
     std::uint32_t low_latency_disabled{0};
+    std::uint32_t current_codec{0};
+    std::uint32_t codec_switches{0};
+    std::uint64_t nal_vps{0};
+    std::uint64_t nal_hevc_sps{0};
+    std::uint64_t nal_hevc_pps{0};
+    std::uint32_t last_reconfig_reason{0};
+    std::int64_t last_idr_ms{0};
+    std::int64_t idr_interval_ms{0};
     char decoder_name[96]{0};            // 实际创建的解码器组件名（含 hw/sw 标记）
 };
 
@@ -115,5 +123,9 @@ extern "C" void im_video_decoder_diag(DecoderDiagSnapshot* out);
 // 消费即清是必须的：这是每帧都会读到的请求位，不清零会让宿主反复触发
 // "清队列 + 等 IDR"，把流锁死在等待态。
 extern "C" std::uint64_t im_video_decoder_take_needs_idr();
+
+extern "C" void im_video_decoder_set_codec(uint32_t codec, uint32_t switches);
+
+extern "C" void im_video_decoder_set_idr_stats(int64_t last_ms, int64_t interval_ms);
 
 } // namespace iPhoneMirror::media

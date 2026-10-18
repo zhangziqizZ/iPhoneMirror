@@ -281,7 +281,7 @@ struct ToolButton {
       .height(this.boxHeight)
       .padding({ left: 10, right: 10, top: 7, bottom: 7 })
       .constraintSize({ minWidth: this.minButtonWidth })
-      .borderRadius(11)
+      .borderRadius(10)   // Apple 圆角分级：36 高按钮 → 10（RADIUS_CONTROL），16 会呈药丸感
       .backgroundColor(this.hovered ? CONTROL_FILL : PANEL_ALT)
       .border({ width: 1, color: BORDER })
       .opacity(this.actionEnabled ? 1 : DISABLED_OPACITY)
@@ -308,7 +308,7 @@ struct SectionCard {
     .alignItems(HorizontalAlign.Start)
     .width('100%')
     .padding(16)
-    .borderRadius(16)
+    .borderRadius(12)   // Apple 圆角分级：内容卡片 → 12（RADIUS_CARD）
     .backgroundColor(CARD)
     .border({ width: 1, color: BORDER_SOFT })
     .margin({ top: 12 });
@@ -690,7 +690,7 @@ struct MediaOutputSettingsWindow {
       .fontWeight(FontWeight.Bold)
       .fontColor(this.activeTabIndex === index ? TEXT : MUTED_TEXT)
       .padding({ left: 14, right: 14, top: 8, bottom: 8 })
-      .borderRadius(8)
+      .borderRadius(10)   // Apple 圆角分级：36 高 tab 项 → 10（RADIUS_CONTROL），16 会呈药丸感
       .backgroundColor(this.activeTabIndex === index ? CONTROL_FILL : Color.Transparent)
       .margin(2);
   }
@@ -794,7 +794,7 @@ struct MediaOutputSettingsWindow {
         label: '开始录制',                 // Strings: StartRecording
         on_action: (): void => { this.on_start_recording(); },
       })
-        .margin({ top: 18 });
+        .margin({ top: 16 });
     }
     .alignItems(HorizontalAlign.Start)
     .width('100%');
@@ -869,7 +869,7 @@ struct MediaOutputSettingsWindow {
         label: '开始直播推流',             // Strings: StartStreaming
         on_action: (): void => { this.on_start_streaming(); },
       })
-        .margin({ top: 18 });
+        .margin({ top: 16 });
     }
     .alignItems(HorizontalAlign.Start)
     .width('100%');
@@ -940,14 +940,14 @@ struct MediaOutputSettingsWindow {
         .fontSize(12)
         .fontColor(MUTED_TEXT)
         .width('100%')
-        .margin({ top: 14 });
+        .margin({ top: 12 });
 
       if (this.vcInstallVisible) {
         PrimaryButton({
           label: this.vcInstallActionText,
           on_action: (): void => { this.on_install_virtual_camera(); },
         })
-          .margin({ top: 18 });
+          .margin({ top: 16 });
       }
 
       if (this.vcStartVisible) {
@@ -955,7 +955,7 @@ struct MediaOutputSettingsWindow {
           label: '启动虚拟摄像头',         // Strings: StartVirtualCamera
           on_action: (): void => { this.on_start_virtual_camera(); },
         })
-          .margin({ top: 18 });
+          .margin({ top: 16 });
       }
 
       if (this.vcUninstallVisible) {
@@ -964,7 +964,7 @@ struct MediaOutputSettingsWindow {
           on_action: (): void => { this.on_uninstall_virtual_camera(); },
         })
           .width('100%')
-          .margin({ top: 10 });
+          .margin({ top: 16 });
       }
     }
     .alignItems(HorizontalAlign.Start)
@@ -993,7 +993,7 @@ struct MediaOutputSettingsWindow {
       .fontSize(10)
       .fontColor(MUTED_TEXT)
       .width('100%')
-      .margin({ top: 5 });
+      .margin({ top: 4 });
   }
 
   /** Row * ：TabControl Style=SubWindowTabControl。 */
@@ -1041,7 +1041,7 @@ struct MediaOutputSettingsWindow {
       });
     }
     .width('100%')
-    .margin({ top: 14 })
+    .margin({ top: 16 })
     .alignItems(VerticalAlign.Center);
   }
 

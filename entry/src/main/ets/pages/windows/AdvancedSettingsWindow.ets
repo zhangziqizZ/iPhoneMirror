@@ -180,7 +180,7 @@ struct AdvancedSettingsWindow {
             boxHeight: 54,
             on_text_change: (value: string): void => { this.heightText = value; },
           })
-            .margin({ top: 5 });
+            .margin({ top: 4 });
         }
         .alignItems(HorizontalAlign.Start)
         .layoutWeight(1);
@@ -201,14 +201,14 @@ struct AdvancedSettingsWindow {
             boxHeight: 54,
             on_text_change: (value: string): void => { this.widthText = value; },
           })
-            .margin({ top: 5 });
+            .margin({ top: 4 });
         }
         .alignItems(HorizontalAlign.Start)
         .layoutWeight(1);
       }
       .width('100%')
       .alignItems(VerticalAlign.Bottom)
-      .margin({ top: 5 });
+      .margin({ top: 4 });
 
       // TextBlock ErrorText：ErrorBrush 11 Wrap, Margin 0,10,0,0
       if (this.errorText.length > 0) {

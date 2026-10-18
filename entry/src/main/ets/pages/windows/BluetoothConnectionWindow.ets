@@ -332,7 +332,7 @@ struct BluetoothConnectionWindow {
       }
       .width('100%')
       .padding(12)
-      .borderRadius(8)
+      .borderRadius(12)   // Apple 圆角分级：连接状态卡片 → 12（RADIUS_CARD）
       .backgroundColor(CONTROL_FILL)
       .border({ width: 1, color: BORDER })
       .alignItems(VerticalAlign.Center)

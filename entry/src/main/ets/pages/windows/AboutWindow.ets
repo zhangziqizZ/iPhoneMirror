@@ -160,7 +160,7 @@ import { BusinessError } from '@ohos.base';
 import common from '@ohos.app.ability.common';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { bundleManager, Want } from '@kit.AbilityKit';
-import { UIContext } from '@kit.ArkUI';
+import { SegmentButton, SegmentButtonItemTuple, SegmentButtonOptions, UIContext, uiMaterial } from '@kit.ArkUI';
 import { fileIo, ReadTextOptions } from '@kit.CoreFileKit';
 import {
   SubWindowShell, SubWindowHost, SecondaryButton, PrimaryButton, RoundedTextBox,
@@ -168,12 +168,10 @@ import {
   SUBWINDOW_ROW_GAP, SubWindowSpec,
 } from '../../common/SubWindow';
 import {
-  ACCENT, BORDER, BORDER_SOFT, PANEL_ALT, MUTED_TEXT, TEXT,
-  CONTROL_FILL, ICON_BUTTON_HOVER, SELECTION,
-  PREVIEW_CHROME, PREVIEW_TEXT,
+  ACCENT, DARK, ON_ACCENT, PRIMARY_ACTION,
 } from '../../common/Theme';
 import { FluentSymbol } from '../../common/FluentIcon';
-import { DEVELOPER_MODE_KEY } from '../../common/WindowServices';
+import { DEVELOPER_MODE_KEY, GLOW_ENABLED_KEY, GLOW_DEGRADED_KEY } from '../../common/WindowServices';
 import { t } from '../../common/i18n';
 import {
   UPDATE_OUTCOME_FAILED, UPDATE_OUTCOME_HAS_UPDATE, UPDATE_OUTCOME_NO_RELEASE,
@@ -400,15 +398,15 @@ struct ChangelogGroup {
         Text(this.version)
           .fontSize(13)
           .fontWeight(FontWeight.Medium)
-          .fontColor(TEXT);
+          .fontColor(DARK.TEXT);
         Text(this.date)
           .fontSize(11)
-          .fontColor(MUTED_TEXT)
+          .fontColor(DARK.MUTED_TEXT)
           .margin({ left: 8, top: 1 });
         if (this.isLatest) {
           Text(S_LATEST_TAG())
             .fontSize(10)
-            .fontColor('#FFFFFF')
+            .fontColor(ON_ACCENT)   // 亮蓝 ACCENT 底上的文字走 ON_ACCENT token（Apple 口径：亮底深字）
             .backgroundColor(ACCENT)
             .borderRadius(4)
             .padding({ left: 6, right: 6, top: 2, bottom: 2 })
@@ -418,12 +416,13 @@ struct ChangelogGroup {
         FluentSymbol({
           iconName: this.expanded ? 'ChevronUp20' : 'ChevronDown20',
           iconSize: 16,
-          iconColor: MUTED_TEXT,
+          iconColor: DARK.MUTED_TEXT,
         });
       }
       .width('100%')
       .alignItems(VerticalAlign.Center)
       .padding({ top: 11, bottom: 11 })
+      .hoverEffect(HoverEffect.Highlight)
       .onClick((): void => {
         this.onToggle(this.version);
       });
@@ -437,7 +436,7 @@ struct ChangelogGroup {
               .margin({ right: 8 });
             Text(item)
               .fontSize(12)
-              .fontColor(MUTED_TEXT)
+              .fontColor(DARK.MUTED_TEXT)
               .lineHeight(18)
               .layoutWeight(1);
           }
@@ -739,10 +738,12 @@ function read_log_tail(ctx: common.Context | null): string {
 }
 
 /**
- * 应用图标位（68×68 圆角 14）。
+ * 应用图标位（68×68 大图标底座）。
  *
  * 原版（AboutWindow.xaml:55–62）是
  *   Border Width=68 Height=68 CornerRadius=14  →  里面 Image Width=52 Height=52
+ * 圆角按 Apple 比例分级归卡片档 12（原版 14 介于 12 与 16 之间，取 12 保持
+ * 「圆角方块」观感；68 高的底座用 16 会接近正圆的观感）。
  * 这里按「平台替换 2」用 Fluent 字形顶替那张 Logo 位图，所以盒子尺寸要按墨迹比例折算：
  * 位图的图面会**填满** 52×52；而 PhoneDesktop24 字形的墨迹只占 em 框的 20/24 ≈ 0.833
  * （见 FluentIcon.ets 的取证表）。要让墨迹正好 52，字号取 52 ÷ 0.833 ≈ 62。
@@ -753,13 +754,13 @@ function read_log_tail(ctx: common.Context | null): string {
 struct AboutAppIcon {
   build() {
     Row() {
-      FluentSymbol({ iconName: 'PhoneDesktop24', iconSize: 62, iconColor: TEXT });
+      FluentSymbol({ iconName: 'PhoneDesktop24', iconSize: 62, iconColor: DARK.TEXT });
     }
     .width(68)
     .height(68)
-    .borderRadius(14)
-    .backgroundColor(PANEL_ALT)
-    .border({ width: 1, color: BORDER })
+    .borderRadius(12)   // Apple 圆角分级：68×68 大图标底座 → 12（RADIUS_CARD），原 14 最近的方块档
+    .backgroundColor(DARK.PANEL_ALT)
+    .border({ width: 1, color: DARK.BORDER })
     .justifyContent(FlexAlign.Center)
     .alignItems(VerticalAlign.Center);
   }
@@ -783,7 +784,7 @@ struct SettingsToggle {
         .onChange((value: boolean): void => { this.on_toggle(value); });
       Text(this.toggleLabel)
         .fontSize(12)
-        .fontColor(TEXT)
+        .fontColor(DARK.TEXT)
         .margin({ left: 10 });
     }
     .width('100%')
@@ -795,9 +796,50 @@ struct SettingsToggle {
 @Entry
 @Component
 struct AboutWindow {
-  @State aboutTabIndex: number = ABOUT_TAB_INDEX;
-  /** 当前悬停的页签下标（NAV_TAB_NONE = 无）。对应原版 IsMouseOver 触发器。 */
-  @State hoverTabIndex: number = NAV_TAB_NONE;
+  /**
+   * 官方分段按钮（SegmentButton，@kit.ArkUI）—— 系统设置「应用 | 元服务」同款胶囊控件。
+   * 选中滑块、hover 光斑（沉浸光感）、形变动画全部由系统渲染，不再自绘。
+   *
+   * ★ 单一数据源：selectedIndexes 是 @Link（双向同步），点击 *和拖拽* 都会由组件
+   *   写回这个数组。正文区一律以它为准（currentTabIndex）── 之前额外维护一个
+   *   aboutTabIndex 只在 onItemClicked 里同步，导致「拖拽蓝块时正文不跟着切」
+   *   （拖拽不触发点击回调）。
+   */
+  @State aboutTabIndexes: number[] = [ABOUT_TAB_INDEX];
+
+  /** 当前页签下标：直接取 SegmentButton 回写的选中态，点击/拖拽都覆盖。 */
+  private currentTabIndex(): number {
+    return this.aboutTabIndexes.length > 0 ? this.aboutTabIndexes[0] : ABOUT_TAB_INDEX;
+  }
+  /**
+   * 官方构造方式：SegmentButtonOptions 是 @Observed 类，**不能用对象字面量**（会触发
+   * arkts-no-untyped-obj-literals，且缺 fontColor/selectedFontColor 等十来个必填字段），
+   * 必须走静态工厂 SegmentButtonOptions.capsule(...)。
+   * 同时 options 在 SegmentButton 里是 @ObjectLink，这里的字段必须是 @State（不能是普通成员）。
+   */
+  @State aboutTabOptions: SegmentButtonOptions = SegmentButtonOptions.capsule({
+    // buttons 的数组字面量要显式 as SegmentButtonItemTuple，否则
+    // arkts-no-noninferrable-arr-literals（元素类型不可推断）。
+    buttons: [
+      { text: S_TAB_ABOUT() },
+      { text: S_TAB_UPDATE_SETTINGS() },
+      { text: S_TAB_DIAGNOSTICS() },
+    ] as SegmentButtonItemTuple,
+    multiply: false,
+    // 关于窗口背景固定深色，未选中/选中文字保持浅色；选中背景与「检查更新」主按钮蓝色统一。
+    fontColor: DARK.MUTED_TEXT,
+    selectedFontColor: DARK.TEXT,
+    selectedBackgroundColor: PRIMARY_ACTION,
+  });
+  /**
+   * 官方沉浸光感材质（API 26 起 SegmentButtonOptions 新增 backgroundSystemMaterial）。
+   * 挂在胶囊底板上，得到系统「应用 | 元服务」那样的玻璃质感 + 光斑跟随。
+   */
+  private readonly tabMaterial: uiMaterial.ImmersiveMaterial = new uiMaterial.ImmersiveMaterial({
+    style: uiMaterial.ImmersiveStyle.REGULAR,
+    interactive: true,
+    lightEffect: { color: Color.White },
+  });
   @State versionText: string = 'v0.0.0';
   @State updateStatus: string = S_UPDATE_STATUS_READY_ONLINE;
   /** 「检查更新」是否正在查（按钮据此自禁用，避免连点打出好几个请求）。 */
@@ -817,6 +859,8 @@ struct AboutWindow {
    * 经 AppStorage 由 @StorageLink 跨窗口联动（关于子窗这里写 ↔ 主窗 Index 读）。
    */
   @StorageLink(DEVELOPER_MODE_KEY) devMode: boolean = false;
+  @StorageLink(GLOW_ENABLED_KEY) glowEnabled: boolean = true;
+  @StorageLink(GLOW_DEGRADED_KEY) glowDegraded: boolean = false;
   /** 版本号连点计数，达到 7 即触发开发者模式开启；未开启时每点一次 +1。 */
   @State versionTapCount: number = 0;
   /**
@@ -860,7 +904,12 @@ struct AboutWindow {
    */
   aboutToAppear(): void {
     try {
-      this.aboutTabIndex = AppStorage.get<number>(ARG_KEY_TAB_INDEX) ?? ABOUT_TAB_INDEX;
+      // 打开时可直接指定页签（例如主界面「诊断」直达）：写进 selectedIndexes，
+      // 正文区与蓝块都以它为唯一数据源。
+      this.aboutTabIndexes = [AppStorage.get<number>(ARG_KEY_TAB_INDEX) ?? ABOUT_TAB_INDEX];
+      // 光感底板：backgroundSystemMaterial 是 API 26 新增的可写属性（Read-Only = No），
+      // 放在这里赋值而不是塞进 capsule() 的构造参数，避开构造选项类型不含该字段的风险。
+      this.aboutTabOptions.backgroundSystemMaterial = this.tabMaterial;
       this.checkOnStartup = AppStorage.get<boolean>(SETTINGS_KEY_CHECK_ON_STARTUP) ?? true;
       this.autoDownload = AppStorage.get<boolean>(SETTINGS_KEY_AUTO_DOWNLOAD) ?? false;
       this.allowMirrorFallback = AppStorage.get<boolean>(SETTINGS_KEY_ALLOW_MIRROR) ?? true;
@@ -1136,12 +1185,12 @@ struct AboutWindow {
             Text('iPhoneMirror')
               .fontSize(21)
               .fontWeight(FontWeight.Bold)
-              .fontColor(TEXT)
+              .fontColor(DARK.TEXT)
               .width('100%');
             Text(this.versionText)
               .fontSize(12)
               .fontWeight(FontWeight.Medium)
-              .fontColor(MUTED_TEXT)
+              .fontColor(DARK.MUTED_TEXT)
               .width('100%')
               .margin({ top: 4 })
               .onClick((): void => {
@@ -1168,7 +1217,7 @@ struct AboutWindow {
               });
             Text(S_DESCRIPTION())
               .fontSize(12)
-              .fontColor(MUTED_TEXT)
+              .fontColor(DARK.MUTED_TEXT)
               .lineHeight(18)
               .width('100%')
               .margin({ top: 6 });
@@ -1198,13 +1247,13 @@ struct AboutWindow {
         Column()
           .height(1)
           .width('100%')
-          .backgroundColor(BORDER_SOFT)
+          .backgroundColor(DARK.BORDER_SOFT)
           .margin({ top: 20, bottom: 20 });
 
         section_title(S_UPDATE_STATUS_TITLE());
         Text(this.updateStatus)
           .fontSize(12)
-          .fontColor(MUTED_TEXT)
+          .fontColor(DARK.MUTED_TEXT)
           .lineHeight(18)
           .width('100%')
           .margin({ top: 6, bottom: 14 });
@@ -1260,7 +1309,7 @@ struct AboutWindow {
         section_title(S_UPDATE_SETTINGS_TITLE());
         Text(S_UPDATE_SETTINGS_DESC())
           .fontSize(12)
-          .fontColor(MUTED_TEXT)
+          .fontColor(DARK.MUTED_TEXT)
           .lineHeight(18)
           .width('100%')
           .margin({ top: 6, bottom: 18 });
@@ -1319,7 +1368,7 @@ struct AboutWindow {
         section_title(S_DIAGNOSTICS_TITLE());
         Text(S_DIAGNOSTICS_DESC)
           .fontSize(12)
-          .fontColor(MUTED_TEXT)
+          .fontColor(DARK.MUTED_TEXT)
           .lineHeight(18)
           .width('100%')
           .margin({ top: 6, bottom: 18 });
@@ -1334,7 +1383,7 @@ struct AboutWindow {
 
         Text(this.diagnosticStatus)
           .fontSize(12)
-          .fontColor(MUTED_TEXT)
+          .fontColor(DARK.MUTED_TEXT)
           .lineHeight(18)
           .width('100%')
           .margin({ bottom: 14 });
@@ -1359,7 +1408,7 @@ struct AboutWindow {
         Column()
           .height(1)
           .width('100%')
-          .backgroundColor(BORDER_SOFT)
+          .backgroundColor(DARK.BORDER_SOFT)
           .margin({ top: 12, bottom: 18 });
 
         // Grid：LiveLogHeader（左）+「清空视图」（右，Padding 10,5 / MinHeight 32 / 11）
@@ -1368,13 +1417,14 @@ struct AboutWindow {
           Row() {
             Text(S_CLEAR_VIEW())
               .fontSize(11)
-              .fontColor(TEXT);
+              .fontColor(DARK.TEXT);
           }
           .padding({ left: 10, right: 10, top: 5, bottom: 5 })
           .constraintSize({ minHeight: 32 })
-          .borderRadius(8)
-          .border({ width: 1, color: BORDER })
+          .borderRadius(10)   // Apple 圆角分级：32 高按钮 → 10（RADIUS_CONTROL），原 16 偏药丸
+          .border({ width: 1, color: DARK.BORDER })
           .alignItems(VerticalAlign.Center)
+          .hoverEffect(HoverEffect.Highlight)
           .onClick((): void => { this.on_clear_view(); });
         }
         .width('100%')
@@ -1383,7 +1433,7 @@ struct AboutWindow {
 
         Text(this.liveLogPath)
           .fontSize(10)
-          .fontColor(MUTED_TEXT)
+          .fontColor(DARK.MUTED_TEXT)
           .fontFamily('monospace')
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -1394,7 +1444,7 @@ struct AboutWindow {
         Scroll() {
           Text(this.logText)
             .fontSize(10)
-            .fontColor(PREVIEW_TEXT)
+            .fontColor(DARK.PREVIEW_TEXT)
             .fontFamily('monospace')
             .width('100%')
             .copyOption(CopyOptions.LocalDevice);
@@ -1402,9 +1452,9 @@ struct AboutWindow {
         .width('100%')
         .height(180)
         .padding(10)
-        .borderRadius(10)
-        .backgroundColor(PREVIEW_CHROME)
-        .border({ width: 1, color: BORDER })
+        .borderRadius(12)   // Apple 圆角分级：180 高日志文本区 → 12（RADIUS_CARD）
+        .backgroundColor(DARK.PREVIEW_CHROME)
+        .border({ width: 1, color: DARK.BORDER })
         .scrollBar(BarState.Auto)
         .align(Alignment.Top);
       }
@@ -1421,70 +1471,35 @@ struct AboutWindow {
   }
 
   /**
-   * 原版 TabControl 的三个页签（文字与 Header 一致）。
-   *
-   * 样式逐条对照 src/SharedUI/Controls/ModernControls.xaml：
-   *  · TabItem（`SubWindowTabItem`）：Padding 14,8 / Margin 2 / CornerRadius 8 /
-   *    FontSize 14 / FontWeight SemiBold（**选中与否都是 SemiBold**，不是选中才加粗。
-   *    ArkUI 的 FontWeight 没有 SemiBold 档，用 Medium 近似）/
-   *    文字色 MutedTextBrush → AccentBrush（选中）/ 底色 Transparent →
-   *    SelectionBrush（选中）、IconButtonHoverBrush（悬停且未选中）。
-   *  · 三段等宽由容器的 `UniformGrid Rows="1"` 保证 —— 鸿蒙侧用 layoutWeight(1)。
-   *  · 原版用 `IsKeyboardFocused` 把边框染成 AccentBrush，这里没有键盘焦点概念，省去。
-   */
-  @Builder
-  tab_item(text: string, index: number) {
-    Row() {
-      Text(text)
-        .fontSize(14)
-        .fontWeight(FontWeight.Medium)
-        .fontColor(this.aboutTabIndex === index ? ACCENT : MUTED_TEXT)
-        .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
-    }
-    .justifyContent(FlexAlign.Center)
-    .layoutWeight(1)
-    .padding({ left: 14, right: 14, top: 8, bottom: 8 })
-    .margin(2)
-    .borderRadius(8)
-    .backgroundColor(this.aboutTabIndex === index
-      ? SELECTION
-      : (this.hoverTabIndex === index ? ICON_BUTTON_HOVER : Color.Transparent))
-    .onHover((isHover: boolean): void => {
-      this.hoverTabIndex = isHover ? index : NAV_TAB_NONE;
-    })
-    .onClick((): void => {
-      this.aboutTabIndex = index;
-    });
-  }
-
-  /**
-   * 正文区。原版 body 是 TabControl（`SubWindowTabControl`）：
-   *   容器 Border：ControlFillBrush 底 / BorderSoftBrush 1px 边 / CornerRadius 10 /
-   *   Padding 2；页签行等宽（UniformGrid Rows=1）；内容在容器下方的第二行。
-   * 鸿蒙侧的 Tabs 组件自带一条系统风格的 bar，做不出"容器包住三个等宽块"的观感，
-   * 所以这里按原版结构自绘：外层 Column = 胶囊容器 + 内容区（内容区自带 Scroll）。
+   * 正文区。原版 body 是 TabControl（`SubWindowTabControl`）。
+   * 页签行用官方 SegmentButton（@kit.ArkUI）：系统设置「应用 | 元服务」同款胶囊控件，
+   * 选中滑块 / hover 光斑（沉浸光感）/ 形变动画全部系统渲染；组件不支持通用属性，
+   * 宽度自动取满可用区域、按按钮个数等分，正好对应原版 UniformGrid Rows=1 的等宽行为。
+   * 原版 TabItem 样式（ModernControls.xaml：SemiBold 14 / Muted→Accent / SelectionBrush
+   * 选中底 / IconButtonHoverBrush 悬停底）交由系统胶囊控件自行呈现。
    */
   @Builder
   body() {
     Column() {
-      Row() {
-        this.tab_item(S_TAB_ABOUT(), ABOUT_TAB_INDEX);
-        this.tab_item(S_TAB_UPDATE_SETTINGS(), UPDATE_SETTINGS_TAB_INDEX);
-        this.tab_item(S_TAB_DIAGNOSTICS(), DIAGNOSTICS_TAB_INDEX);
+      // SegmentButton 不支持通用属性（不能直接 .margin()），用容器包一层拿间距；
+      // 底部 12vp 让页签行与正文卡片拉开，视觉上页签整体上移。
+      Column() {
+        SegmentButton({
+          options: this.aboutTabOptions,
+          selectedIndexes: this.aboutTabIndexes,
+          // 官方属性动画（API 24+）：选中态切换的滑块过渡交给组件，不再自己 animateTo。
+          enableStateAnimation: true,
+        })
       }
       .width('100%')
-      .padding(2)                                  // 原版 Border Padding="2"
-      .backgroundColor(CONTROL_FILL)               // ControlFillBrush
-      .border({ width: 1, color: BORDER_SOFT })    // BorderSoftBrush / 1px
-      .borderRadius(10);                           // CornerRadius="10"
+      .margin({ bottom: 12 })
 
       // 内容区（原版 ContentPresenter Grid.Row=1）。三个 tab 自带 Scroll，
       // 用 layoutWeight 占满剩余高度，它们才能正确滚动。
       Column() {
-        if (this.aboutTabIndex === ABOUT_TAB_INDEX) {
+        if (this.currentTabIndex() === ABOUT_TAB_INDEX) {
           this.about_tab();
-        } else if (this.aboutTabIndex === UPDATE_SETTINGS_TAB_INDEX) {
+        } else if (this.currentTabIndex() === UPDATE_SETTINGS_TAB_INDEX) {
           this.update_settings_tab();
         } else {
           this.diagnostics_tab();

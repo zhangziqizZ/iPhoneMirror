@@ -8,6 +8,25 @@
     "deliveryWithInstall": true,
     "installationFree": false,
     "pages": "$profile:main_pages",
+    // ───────────────────────── 沉浸光感（系统沉浸式材质）─────────────────────────
+    // 官方《开启沉浸光感》给出的**应用级**开关，控制本 module 内所有支持沉浸式
+    // 系统材质的组件（Select 的下拉按钮/下拉菜单、Navigation 标题栏、Toast…）：
+    //   default = 不配置时的默认态（API 26 起，未主动设置的组件默认开启）
+    //   enable  = 显式开启   ← 本工程选它：意图明确，不依赖"默认"这个易变口径
+    //   disable = 全局禁用
+    //
+    // ★ 它只管**开 / 关**，不管强度 —— 强度（强 / 均衡 / 弱）是系统设置
+    //   （设置 > 桌面和个性化 > 沉浸光感），App 侧没有任何接口可调
+    //   （已核对官方文档：只能读 uiMaterial.getMaterialInfo()，不能写）。
+    // ★ 组件级（systemMaterial / menuSystemMaterial）优先级高于应用级，
+    //   可单独覆盖；单独关某一处要传 uiMaterial.Material.empty，不是 undefined。
+    // ★ 该配置仅在 entry 类型的 module 中生效（本 module 正是 entry）。
+    "metadata": [
+      {
+        "name": "ohos.arkui.UIMaterial.state",
+        "value": "enable"
+      }
+    ],
     "abilities": [
       {
         "name": "EntryAbility",
@@ -256,6 +275,48 @@
         //   SystemCapability.Window.SessionManager），这才是透明窗口的入口。
         "name": "ohos.permission.SET_WINDOW_TRANSPARENT",
         "reason": "$string:window_transparent_perm_reason",
+        "usedScene": {
+          "abilities": ["EntryAbility"],
+          "when": "always"
+        }
+      },
+      {
+        // 常驻通知 = 托盘入口：窗口被最小化/关闭后，靠通知栏把主窗口唤回来。
+        //
+        // ★ 级别与授权方式：PUBLISH_NOTIFICATION 是 **normal + system_grant** ——
+        //   声明即授权，**不会**弹用户授权框，也**不需要**签名 profile 的
+        //   acls.allowed-acls ⇒ 与 ACCESS_DDK_USB 那类 system_basic 权限不是一回事，
+        //   加这一条**不会**触发 9568289。
+        // ★ 2026-10-17 补上：此前缺这一条，notificationManager.publish 直接回
+        //   `201 Permission denied`，而 TrayManager 把它 catch 掉只打了日志 ⇒
+        //   通知从未真正发出来，用户看到的就是"没有托盘"。
+        "name": "ohos.permission.PUBLISH_NOTIFICATION",
+        "reason": "$string:tray_notification_perm_reason",
+        "usedScene": {
+          "abilities": ["EntryAbility"],
+          "when": "always"
+        }
+      },
+      {
+        // ───────────────────────── 托盘：拦截退出、后台驻留 ─────────────────────────
+        // EntryAbility.onPrepareToTerminate() 需要它：用户从 Dock 右键「关闭」、
+        // 关机这类**绕过窗口级 windowWillClose** 的整应用级退出，靠该回调兜底
+        // 拦截（返回 true = 取消终止），配合 hideAbility() 把应用收进系统托盘
+        // 后台驻留，而不是退出 —— 官方《退出应用（PC/2合1设备）》与
+        // 《PC应用通过系统托盘后台保活》两条文档都要求声明本权限。
+        //
+        // ★ 级别与授权方式（官方权限列表《对所有应用开放》明列）：
+        //   availableLevel  = normal
+        //   grantMode       = system_grant（安装即授权，不弹用户授权框）
+        //   起始版本        = 10
+        // ⇒ normal 级不涉及 ACL 使能字段 ⇒ **不会**触发 9568289，
+        //   AGC 签发的调试 profile 同样有效（与 ACCESS_DDK_USB 那类
+        //   system_basic + provisionEnable=true 的权限本质不同）。
+        // ★ 漏声明时的表现**不是报错、而是静默失效**：onPrepareToTerminate 根本
+        //   不被回调 ⇒ Dock 右键「关闭」直接杀进程，托盘"后台驻留"断掉，
+        //   日志里却看不到任何异常。所以这条必须显式写在这里。
+        "name": "ohos.permission.PREPARE_APP_TERMINATE",
+        "reason": "$string:tray_prepare_terminate_perm_reason",
         "usedScene": {
           "abilities": ["EntryAbility"],
           "when": "always"

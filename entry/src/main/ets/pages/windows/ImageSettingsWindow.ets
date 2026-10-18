@@ -57,7 +57,7 @@ import {
   SubWindowSpec,
 } from '../../common/SubWindow';
 import {
-  TEXT, MUTED_TEXT, BORDER_SOFT, WARNING, ACCENT,
+  TEXT, MUTED_TEXT, BORDER_SOFT, WARNING, WARNING_SURFACE, ACCENT,
   SLIDER_TRACK, SLIDER_TRACK_THICKNESS, SLIDER_THUMB_FILL, SLIDER_THUMB_BORDER,
   SLIDER_THUMB_HOVER, SLIDER_THUMB_SIZE, SLIDER_THUMB_STROKE,
   BUTTON_MIN_HEIGHT, DISABLED_OPACITY,
@@ -559,7 +559,7 @@ struct ImageSettingsWindow {
     NoticeBanner({
       noticeText: '仅对本地预览生效，无法应用到推流、虚拟摄像头、录屏或截图画面。',
       noticeTextColor: WARNING,
-      surfaceColor: '#22FFC55C',
+      surfaceColor: WARNING_SURFACE,   // 走 Theme token：原写字面量 '#22FFC55C'（= WARNING_SURFACE 的值）
       bannerBorderColor: WARNING,
       bannerCorner: 12,
       padH: 14,

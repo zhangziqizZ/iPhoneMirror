@@ -40,11 +40,10 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { display } from '@kit.ArkUI';
 import { FluentSymbol } from './FluentIcon';
 import {
-  APP_BACKGROUND, TEXT, MUTED_TEXT, CARD, BORDER, BORDER_SOFT,
+  APP_BACKGROUND, CARD,
   TEXT_SELECTION,
-  CONTROL_FILL, CONTROL_HOVER, COMBO_BACKGROUND,
   ACCENT, ERROR, WARNING, WARNING_SURFACE,
-  PRIMARY_ACTION, PRIMARY_ACTION_BORDER, PRIMARY_ACTION_TEXT,
+  PRIMARY_ACTION, PRIMARY_ACTION_BORDER,
   PRIMARY_ACTION_DISABLED, PRIMARY_ACTION_DISABLED_TEXT,
   DANGER, DANGER_BUTTON_TEXT,
   BUTTON_CORNER, BUTTON_PADDING_H, BUTTON_PADDING_V, BUTTON_MIN_HEIGHT, BUTTON_FONT_SIZE,
@@ -52,9 +51,9 @@ import {
   SETTINGS_SECTION_CORNER, SETTINGS_SECTION_PADDING,
   TEXTBOX_CORNER, TEXTBOX_PADDING_H, TEXTBOX_PADDING_V, TEXTBOX_MIN_HEIGHT, TEXTBOX_FONT_SIZE,
   TEXTBOX_READONLY_OPACITY,
-  DARK, LIGHT, ThemeColors,
+  DARK,
+  RADIUS_CONTROL,
 } from './Theme';
-import { THEME_SCHEME_KEY } from './theme_manager';
 import { t } from './i18n';
 
 const TAG: string = 'im_subwindow';
@@ -80,7 +79,7 @@ export const SUBWINDOW_HEADER_TEXT_END: number = 48;
 /** SubWindowCloseButton: 40×40 / FontSize 18 / 圆角 8 */
 export const SUBWINDOW_CLOSE_SIZE: number = 40;
 export const SUBWINDOW_CLOSE_ICON_SIZE: number = 18;
-export const SUBWINDOW_CLOSE_CORNER: number = 8;
+export const SUBWINDOW_CLOSE_CORNER: number = RADIUS_CONTROL;
 /** 行间距：各子窗口的行定义里写 16 或 14 */
 export const SUBWINDOW_ROW_GAP: number = 16;
 export const SUBWINDOW_ROW_GAP_NARROW: number = 14;
@@ -98,7 +97,7 @@ export function section_title(text: string) {
   Text(text)
     .fontSize(SUBWINDOW_SECTION_TITLE_SIZE)
     .fontWeight(FontWeight.Bold)
-    .fontColor(TEXT);
+    .fontColor(DARK.TEXT);
 }
 
 /** 卡片内的说明文字（原版：MutedTextBrush / FontSize 11 / Wrap）。 */
@@ -106,7 +105,7 @@ export function section_title(text: string) {
 export function hint_text(text: string) {
   Text(text)
     .fontSize(11)
-    .fontColor(MUTED_TEXT)
+    .fontColor(DARK.MUTED_TEXT)
     .width('100%');
 }
 
@@ -115,7 +114,7 @@ export function hint_text(text: string) {
 export function field_label(text: string) {
   Text(text)
     .fontSize(11)
-    .fontColor(MUTED_TEXT);
+    .fontColor(DARK.MUTED_TEXT);
 }
 
 // ───────────────────── 可复用控件（@Component + 函数属性传回调） ─────────────────────
@@ -146,21 +145,13 @@ export struct SettingsSection {
     .padding({ left: this.padH, right: this.padH, top: this.padV, bottom: this.padV })
     .borderRadius(SETTINGS_SECTION_CORNER)
     .backgroundColor(CARD)
-    .border({ width: 1, color: BORDER });
+    .border({ width: 1, color: DARK.BORDER });
   }
 }
 
 /** 普通按钮 —— App.xaml 隐式 Button 样式（「关闭高级模式」「取消」等）。 */
 @Component
 export struct SecondaryButton {
-  /**
-   * ★ 配色必须自取主题（`@StorageLink` + 调色板），不能用模块级静态常量：
-   *   `TEXT`/`CONTROL_FILL` 等是 **DarkTheme.xaml 的静态值**（近白文字 + 白 8% 底），
-   *   浅色模式下画在浅色卡片上 ⇒ 白字白底、几乎看不见（用户 2026-10-02 截图：
-   *   主窗「设置中心」一列按钮全部隐形）。主窗/子窗共用本组件，主题键在
-   *   AppStorage 全局一份 ⇒ 这里自取即可与宿主页面同进退。
-   */
-  @StorageLink(THEME_SCHEME_KEY) scheme: string = 'dark';
   @Prop label: string = '';
   @Prop buttonWidth: number = 0;
   /** 原版按钮常写 MinWidth="88" / MinWidth="120" 而不是 Width；0 表示不限制。 */
@@ -169,15 +160,11 @@ export struct SecondaryButton {
   @State hovered: boolean = false;
   on_action: () => void = () => {};
 
-  private palette(): ThemeColors {
-    return this.scheme === 'dark' ? DARK : LIGHT;
-  }
-
   build() {
     Text(this.label)
       .fontSize(BUTTON_FONT_SIZE)
       .fontWeight(FontWeight.Bold)
-      .fontColor(this.palette().TEXT)
+      .fontColor(DARK.TEXT)
       .textAlign(TextAlign.Center)
       .height(this.buttonHeight)
       .width(this.buttonWidth > 0 ? this.buttonWidth : undefined)
@@ -187,8 +174,8 @@ export struct SecondaryButton {
         bottom: this.buttonWidth > 0 ? 0 : BUTTON_PADDING_V,
       })
       .borderRadius(BUTTON_CORNER)
-      .backgroundColor(this.hovered ? this.palette().CONTROL_HOVER : this.palette().CONTROL_FILL)
-      .border({ width: 1, color: this.palette().BORDER })
+      .backgroundColor(this.hovered ? DARK.CONTROL_HOVER : DARK.CONTROL_FILL)
+      .border({ width: 1, color: DARK.BORDER })
       .constraintSize({ minWidth: this.minButtonWidth })
       .onHover((isHover: boolean): void => { this.hovered = isHover; })
       .onClick((): void => { this.on_action(); });
@@ -212,7 +199,8 @@ export struct PrimaryButton {
     Text(this.label)
       .fontSize(BUTTON_FONT_SIZE)
       .fontWeight(FontWeight.Bold)
-      .fontColor(this.actionEnabled ? PRIMARY_ACTION_TEXT : PRIMARY_ACTION_DISABLED_TEXT)
+      // 主按钮蓝底用浅色字（DARK.TEXT 在固定深色子窗口上下文中为近白）。
+      .fontColor(this.actionEnabled ? DARK.TEXT : PRIMARY_ACTION_DISABLED_TEXT)
       .textAlign(TextAlign.Center)
       .height(this.buttonHeight)
       .width(this.buttonWidth > 0 ? this.buttonWidth : undefined)
@@ -250,16 +238,16 @@ export struct RoundedTextBox {
       if (this.label.length > 0) {
         Text(this.label)
           .fontSize(11)
-          .fontColor(MUTED_TEXT)
+          .fontColor(DARK.MUTED_TEXT)
           .margin({ bottom: 5 });
       }
       TextInput({ text: this.text })
         .fontSize(this.fontSize)
-        .fontColor(TEXT)
-        .caretColor(TEXT)
+        .fontColor(DARK.TEXT)
+        .caretColor(DARK.TEXT)
         .selectedBackgroundColor(TEXT_SELECTION)
-        .backgroundColor(COMBO_BACKGROUND)
-        .border({ width: 1, color: BORDER })
+        .backgroundColor(DARK.COMBO_BACKGROUND)
+        .border({ width: 1, color: DARK.BORDER })
         .borderRadius(TEXTBOX_CORNER)
         .padding({
           left: TEXTBOX_PADDING_H, right: TEXTBOX_PADDING_H,
@@ -298,7 +286,7 @@ export struct SubWindowCloseButton {
       FluentSymbol({
         iconName: 'Dismiss20',
         iconSize: SUBWINDOW_CLOSE_ICON_SIZE,
-        iconColor: this.hovered ? DANGER_BUTTON_TEXT : TEXT,
+        iconColor: this.hovered ? DANGER_BUTTON_TEXT : DARK.TEXT,
       })
     }
     .width(SUBWINDOW_CLOSE_SIZE)
@@ -383,12 +371,12 @@ export struct SubWindowShell {
           Text(this.title)
             .fontSize(SUBWINDOW_TITLE_SIZE)
             .fontWeight(FontWeight.Bold)
-            .fontColor(TEXT)
+            .fontColor(DARK.TEXT)
             .width('100%');
           if (this.subtitle.length > 0) {
             Text(this.subtitle)
               .fontSize(SUBWINDOW_SUBTITLE_SIZE)
-              .fontColor(MUTED_TEXT)
+              .fontColor(DARK.MUTED_TEXT)
               .lineHeight(SUBWINDOW_SUBTITLE_LINE_HEIGHT)
               .width('100%')
               .margin({ top: SUBWINDOW_SUBTITLE_MARGIN_TOP });
@@ -530,17 +518,17 @@ export struct BadgeChip {
       FluentSymbol({
         iconName: this.iconName,
         iconSize: 14,
-        iconColor: MUTED_TEXT,
+        iconColor: DARK.MUTED_TEXT,
       });
       Text(this.chipText)
         .fontSize(11)
-        .fontColor(MUTED_TEXT)
+        .fontColor(DARK.MUTED_TEXT)
         .margin({ left: 5 });
     }
     .padding({ left: 10, right: 10, top: 5, bottom: 5 })
-    .borderRadius(15)
-    .backgroundColor(CONTROL_FILL)
-    .border({ width: 1, color: BORDER_SOFT })
+    .borderRadius(6)   // Apple 圆角分级：状态芯片 → 6（RADIUS_MICRO）
+    .backgroundColor(DARK.CONTROL_FILL)
+    .border({ width: 1, color: DARK.BORDER_SOFT })
     .alignItems(VerticalAlign.Center)
     .margin({ right: this.chipMarginEnd });
   }

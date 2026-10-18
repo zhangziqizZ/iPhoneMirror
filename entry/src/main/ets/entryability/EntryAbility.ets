@@ -2,13 +2,16 @@ import { AbilityConstant, UIAbility, Want, Configuration, ConfigurationConstant 
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
 import { setSystemDark, SYSTEM_DARK_KEY } from '../common/theme_manager';
-import { WINDOW_ACRYLIC_RESULT_KEY, WINDOW_SHADOW_RESULT_KEY } from '../common/WindowServices';
+import { WINDOW_ACRYLIC_RESULT_KEY, WINDOW_SHADOW_RESULT_KEY, APP_WINDOW_VISIBLE_KEY,
+  MINIMIZE_TO_TRAY_KEY } from '../common/WindowServices';
 import { open_app_preferences, load_acrylic_preferences, load_language_preference,
-  load_hide_pointer_preference } from '../common/AppPreferences';
+  load_hide_pointer_preference, load_glow_preferences, load_tray_preferences } from '../common/AppPreferences';
 import { vp_to_px_ratio } from '../common/SubWindow';
 import { BusinessError } from '@ohos.base';
 import { open_instance_conflict, InstanceConflictRequest } from '../pages/windows/InstanceConflictWindow';
-import { setLogFile } from 'libim_core.so';
+import { TrayManager } from '../common/TrayManager';
+import { StatusBarTray } from '../common/StatusBarTray';
+import { setLogFile, getCaptureStatus, CaptureStatus } from 'libim_core.so';
 // ★ 只导入启动期要用的两个入口：`t()` 由页面自己导入，Ability 这里不用
 //   （留着未使用的导入在严格模式下就是噪声）。
 import { init_language, sync_system_language_at_launch } from '../common/i18n';
@@ -45,6 +48,8 @@ export default class EntryAbility extends UIAbility {
     load_language_preference();
     // 反控接管时的指针偏好（默认保持可见，见 HIDE_POINTER_ON_TAKEOVER_KEY 的注释）。
     load_hide_pointer_preference();
+    load_glow_preferences();
+    load_tray_preferences();
     // ★ 读回存档后立刻把档位灌进 i18n 的缓存（否则首帧 t() 会用默认值建缓存；
     //   且缓存必须在这里建立 —— 主窗每 500ms 整树重渲染，t() 每秒上千次，
     //   不能每次都去读 AppStorage）。
@@ -72,6 +77,13 @@ export default class EntryAbility extends UIAbility {
 
   onDestroy(): void {
     hilog.info(0x0000, TAG, '%{public}s', 'EntryAbility.onDestroy');
+    // Ability 真要没了：摘状态栏托盘图标 + 撤常驻通知（fallback 方案）。
+    // ★ 托盘右键「退出」已在 StatusBarTray.quitApp() 里先摘过图标，这里对
+    //   added=false 是空操作；真正兜的是系统侧 graceful 销毁（关机流程被
+    //   onPrepareToTerminate 放行、或用户关掉「最小化到托盘」后的正常退出）——
+    //   不摘的话进程死后状态栏会留一个点了没反应的死图标，只能重启才清得掉。
+    StatusBarTray.shared().removeIcon();
+    TrayManager.shared().remove();
   }
 
   /**
@@ -96,6 +108,34 @@ export default class EntryAbility extends UIAbility {
     }
   }
 
+  /**
+   * 应用级退出的兜底拦截 —— Dock 右键「关闭」、关机等**绕过窗口级事件**的整应用退出。
+   *
+   * ★ 回调优先级（官方《退出应用（PC/2合1设备）》）：
+   *   窗口关闭：windowWillClose → windowStageClose → onPrepareToTerminate(Async)。
+   *   本工程已注册 windowWillClose ⇒ 点窗口右上角 × 走那条，**不会**走到这里；
+   *   这里兜的是从 Dock 右键菜单关闭、从托盘退出、关机这类整应用级退出
+   *   （AbilityStage 级 onPrepareTermination 未实现，UIAbility 级这个才会被回调）。
+   * ★ 返回值语义（官方 API 参考，极易记反，逐字核对过）：
+   *   true  = **取消**本次终止流程，Ability 不退出（之后自行决定何时 terminateSelf）；
+   *   false = 继续终止（正常退出）。
+   * ★ 配合 hideAbility() = 官方「关闭应用之后，点击托盘，再显示应用界面到前台」
+   *   模式：进程留后台、AirPlay/mDNS 线程照跑，状态栏图标仍在，点图标 showAbility() 唤回。
+   * ★ 需要 ohos.permission.PREPARE_APP_TERMINATE —— 已声明于 module.json5：
+   *   normal + system_grant，安装即授权，不弹框、不走 ACL（不会 9568289）。
+   * ★ 官方注明该回调仅在 2in1 / 平板正常回调（本工程 deviceTypes 正是 2in1）。
+   */
+  onPrepareToTerminate(): boolean {
+    const minimizeToTray: boolean = AppStorage.get<boolean>(MINIMIZE_TO_TRAY_KEY) ?? true;
+    if (minimizeToTray && StatusBarTray.shared().isAdded()) {
+      hilog.info(0x0000, TAG, '%{public}s', 'onPrepareToTerminate：拦截退出，收进托盘');
+      StatusBarTray.shared().hideToTray();
+      return true;
+    }
+    hilog.info(0x0000, TAG, '%{public}s', 'onPrepareToTerminate：允许退出');
+    return false;
+  }
+
   onWindowStageCreate(windowStage: window.WindowStage): void {
     hilog.info(0x0000, TAG, '%{public}s', 'EntryAbility.onWindowStageCreate');
     windowStage.loadContent('pages/Index', (err) => {
@@ -118,6 +158,89 @@ export default class EntryAbility extends UIAbility {
       try {
         const mainWindow: window.Window = windowStage.getMainWindowSync();
         mainWindow.setWindowDecorVisible(false);
+        // 自定义标题栏：保留系统三键但把它们所在区域抬高一点，避免与自绘标题内容贴太近。
+        // 单位 vp（与窗口装饰高度 API 一致）。
+        try {
+          mainWindow.setWindowDecorHeight(56);
+        } catch (decorHeightError) {
+          const dhFailure = decorHeightError as BusinessError;
+          hilog.warn(0x0000, TAG, 'setWindowDecorHeight failed: %{public}s', dhFailure.message);
+        }
+
+        // ── 托盘接入：先试官方「状态栏图标」，失败再降级回常驻通知 ──
+        //
+        // ★ 2026-10-18：用户反馈"你这根本就不是托盘"。原来的做法是
+        //   「常驻通知 + minimize() 到任务栏」—— 通知是通知中心的一条消息、
+        //   minimize 是 Dock 里的一个窗口项，两者都不是托盘。
+        //   鸿蒙 PC 的官方托盘 = **系统状态栏图标**（屏幕右上角），
+        //   官方原话：「当前未提供直接调用即可收起到托盘的接口，开发者可以通过
+        //   调用 addToStatusBar 和 hideAbility 接口来实现」。
+        //   ⇒ 这里优先走 StatusBarTray（addToStatusBar + hideAbility/showAbility）；
+        //     设备不支持或调用失败时，才降级回 TrayManager 的通知方案。
+        const trayReady: boolean = StatusBarTray.shared().initialize(this.context, (): void => {
+          // 异步能力复核发现设备根本不支持状态栏图标时，由 StatusBarTray 回调到这里
+          // 补上通知方案。为什么需要这条异步路径：官方明示「设备不支持时调用
+          // addToStatusBar 后界面上无效果」—— **不抛错**，同步返回值全是假的。
+          // 不补的话，点关闭会既没托盘图标、Dock 项又被 hideAbility 收掉，
+          // 应用像"蒸发"一样消失，用户没有任何入口能把它唤回。
+          TrayManager.shared().initialize(this.context, windowStage);
+          hilog.warn(0x0000, TAG, '状态栏托盘能力复核未通过，已降级回通知方案');
+        });
+        if (!trayReady) {
+          TrayManager.shared().initialize(this.context, windowStage);
+        } else {
+          hilog.info(0x0000, TAG, '托盘走状态栏图标方案，通知方案不启用（避免双重入口）');
+        }
+
+        // 拦截系统关闭按钮：点关闭 → 收起进托盘，而不是退出应用。
+        //
+        // ★ 托盘方案下的"收起"= hideAbility()（官方第二步：关闭/最小化 Dock 栏图标），
+        //   进程与 AirPlay/mDNS 线程全部活着；点状态栏图标 → showAbility() 唤回。
+        //   resolve(true) 表示不关闭；resolve(false)/reject 表示允许关闭。
+        try {
+          mainWindow.on('windowWillClose', (): Promise<boolean> => {
+            return new Promise<boolean>((resolve: (keepOpen: boolean) => void): void => {
+              // 设置页「最小化到托盘」开关（默认开，见 Index.ets 的 minimizeToTray）：
+              // 关时点关闭 = 真退出，不再收托盘 —— 否则用户会遇上
+              // "开关关了、点关闭却退不掉"的反馈与界面不一致。
+              const minimizeToTray: boolean = AppStorage.get<boolean>(MINIMIZE_TO_TRAY_KEY) ?? true;
+              if (!minimizeToTray) {
+                hilog.info(0x0000, TAG, '「最小化到托盘」已关闭，允许退出');
+                resolve(false);
+                return;
+              }
+              if (StatusBarTray.shared().isAdded()) {
+                const hidden: boolean = StatusBarTray.shared().hideToTray();
+                resolve(hidden);
+                return;
+              }
+              const hidden: boolean = TrayManager.shared().hideMainWindow();
+              resolve(hidden);
+            });
+          });
+        } catch (closeInterceptError) {
+          const ciFailure = closeInterceptError as BusinessError;
+          hilog.warn(0x0000, TAG, '拦截窗口关闭事件失败：%{public}s', ciFailure.message);
+        }
+
+        // ★ 窗口可见性 → AppStorage（性能用，见 APP_WINDOW_VISIBLE_KEY 的注释）：
+        //   最小化后主窗的 500ms 心跳会照跑，用户点开恢复的那一刻这批 JS 正好和
+        //   系统恢复动画抢 CPU ⇒ "打开动画掉帧"。这里把可见性广播出去，由 Index
+        //   决定停/启心跳，并在恢复瞬间临时关掉全窗磨砂。
+        //   枚举：SHOWN=1 / ACTIVE=2 / INACTIVE=3 / HIDDEN=4 / RESUMED=5 / PAUSED=6。
+        try {
+          windowStage.on('windowStageEvent', (event: window.WindowStageEventType): void => {
+            const visible: boolean = event === window.WindowStageEventType.SHOWN
+              || event === window.WindowStageEventType.ACTIVE
+              || event === window.WindowStageEventType.RESUMED;
+            AppStorage.setOrCreate(APP_WINDOW_VISIBLE_KEY, visible);
+            hilog.info(0x0000, TAG, '窗口可见性：%{public}s（event=%{public}d）',
+              visible ? '可见' : '不可见', event);
+          });
+        } catch (stageEventError) {
+          const seFailure = stageEventError as BusinessError;
+          hilog.warn(0x0000, TAG, '订阅 windowStageEvent 失败：%{public}s', seFailure.message);
+        }
 
         // 半透明窗口（对齐 Win11 Acrylic 观感，已转正式特性）：主窗背景设为**全透明**，
         // 让 Index 根容器的带 alpha 底色（root_background_color()）直接混到桌面。
@@ -225,6 +348,10 @@ export default class EntryAbility extends UIAbility {
         AppStorage.setOrCreate(WINDOW_SHADOW_RESULT_KEY,
           `阴影关闭=失败 ${shadowFailure.code} ${shadowFailure.message}`);
       }
+
+      // ★ 托盘初始化已在本块开头的「托盘接入」处按「状态栏图标优先、通知降级」
+      //   一次性完成 —— 这里**不能**再调 TrayManager.shared().initialize()：
+      //   状态栏托盘接入成功时它会再发一条常驻通知，出现"状态栏图标 + 通知"双入口。
     });
   }
 
@@ -235,6 +362,32 @@ export default class EntryAbility extends UIAbility {
 
   onWindowStageDestroy(): void {
     hilog.info(0x0000, TAG, '%{public}s', 'EntryAbility.onWindowStageDestroy');
+    // ★ 刻意**不**在这里摘托盘图标：窗口阶段销毁 ≠ 进程死亡。托盘模式下
+    //   hideAbility() 收起应用时，窗口阶段同样会走销毁流程，而状态栏图标
+    //   必须继续活着（用户就靠它把界面唤回来）。摘图标的正确时机只有两处：
+    //   onDestroy（Ability 真销毁）与托盘右键「退出」（quitApp 先摘再 terminateSelf）。
+    // 系统关闭按钮无法拦截：用户点系统三键关闭时这里被触发。投屏中则尽力通过
+    // startAbility 重新拉起（进程可能被杀、不可靠但尽力而为）；未投屏则正常退出。
+    try {
+      const status: CaptureStatus | null = getCaptureStatus();
+      if (status !== null && status.state >= 1 && status.state <= 5) {
+        hilog.warn(0x0000, TAG, '投屏中窗口被关闭，尝试重新拉起');
+        try {
+          this.context.startAbility({
+            bundleName: this.context.abilityInfo.bundleName,
+            abilityName: this.context.abilityInfo.name,
+          });
+        } catch (startError) {
+          const startFailure = startError as BusinessError;
+          hilog.warn(0x0000, TAG, '重新拉起失败：%{public}s', startFailure.message);
+        }
+      } else {
+        hilog.info(0x0000, TAG, '未投屏，正常退出');
+      }
+    } catch (error) {
+      const failure = error as BusinessError;
+      hilog.warn(0x0000, TAG, '检查投屏状态失败：%{public}s', failure.message);
+    }
   }
 
   onForeground(): void {

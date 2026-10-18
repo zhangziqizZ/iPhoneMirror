@@ -150,6 +150,10 @@ import {
 import { FluentSymbol } from '../../common/FluentIcon';
 import { THEME_PREF_KEY, recomputeThemeScheme } from '../../common/theme_manager';
 import {
+  GLOW_ENABLED_KEY, GLOW_STRENGTH_KEY, GLOW_DEGRADED_KEY, TRAY_AVAILABLE_KEY,
+} from '../../common/WindowServices';
+import { TrayManager } from '../../common/TrayManager';
+import {
   show_developer_error_preview,
   show_developer_reverse_control_error_preview,
   show_developer_stopped_preview,
@@ -720,12 +724,26 @@ struct DeveloperToolsWindow {
   /** 原版 RefreshDiagnostics()：版本 / 区域 / 主题 / 文字缩放 / 窗口数。 */
   private refresh_diagnostics(): void {
     this.openWindowNames = this.detect_open_windows();
+    const glowOn: boolean = AppStorage.get<boolean>(GLOW_ENABLED_KEY) ?? true;
+    const glowStrength: number = AppStorage.get<number>(GLOW_STRENGTH_KEY) ?? 1;
+    const glowDegraded: boolean = AppStorage.get<boolean>(GLOW_DEGRADED_KEY) ?? false;
+    const trayAvailable: boolean = AppStorage.get<boolean>(TRAY_AVAILABLE_KEY) ?? false;
+    let strengthLabel: string = '中';
+    if (glowStrength === 0) {
+      strengthLabel = '弱';
+    } else if (glowStrength === 2) {
+      strengthLabel = '强';
+    }
     const lines: string[] = [
       S_RUNTIME_VERSION() + '：' + this.versionText,
       S_RUNTIME_CULTURE() + '：zh-CN',
       S_RUNTIME_THEME() + '：' + THEME_LABELS[this.themeIndex],
       S_RUNTIME_DPI() + '：' + this.read_density().toFixed(2),
       S_RUNTIME_WINDOWS() + '：' + this.openWindowNames.length.toString(),
+      '光感：' + (glowOn ? '开' : '关') + ' · 强度' + strengthLabel +
+        (glowDegraded ? ' · 已降级' : ' · 正常'),
+      '托盘：' + (trayAvailable ? '可用' : '不可用') + ' · 窗口' +
+        (TrayManager.shared().isWindowVisible() ? '可见' : '隐藏'),
     ];
     this.diagnosticsText = lines.concat(INTEGRITY_LINES).join('\n');
   }
@@ -877,7 +895,7 @@ struct DeveloperToolsWindow {
       .fontWeight(FontWeight.Bold)
       .fontColor(WARNING)
       .padding({ left: 8, right: 8, top: 3, bottom: 3 })
-      .borderRadius(8)
+      .borderRadius(6)   // Apple 圆角分级：小徽章 → 6（RADIUS_MICRO）
       .backgroundColor(WARNING_SURFACE)
       .border({ width: 1, color: WARNING });
   }
@@ -939,7 +957,7 @@ struct DeveloperToolsWindow {
       Text(S_PARAM_LANGUAGE())
         .fontSize(11)
         .fontColor(MUTED_TEXT)
-        .margin({ top: 14, bottom: 3 });
+        .margin({ top: 13, bottom: 3 });
       Select(language_options())
         .selected(this.languageIndex)
         .value(I18N_LANG[active_lang()][this.languageIndex])
@@ -995,20 +1013,20 @@ struct DeveloperToolsWindow {
       Text(S_PARAM_PRESET())
         .fontSize(11)
         .fontColor(MUTED_TEXT)
-        .margin({ top: 14, bottom: 3 });
+        .margin({ top: 13, bottom: 3 });
       Row() {
         SecondaryButton({
           label: S_PRESET_COMPACT(),
           minButtonWidth: 94,
           on_action: (): void => { this.on_preset('compact'); },
         })
-          .margin({ right: 6 });
+          .margin({ right: 8 });
         SecondaryButton({
           label: S_PRESET_DEFAULT(),
           minButtonWidth: 94,
           on_action: (): void => { this.on_preset('default'); },
         })
-          .margin({ right: 6 });
+          .margin({ right: 8 });
         SecondaryButton({
           label: S_PRESET_MAXIMIZE(),
           minButtonWidth: 94,
@@ -1082,7 +1100,7 @@ struct DeveloperToolsWindow {
     }
     .width('100%')
     .alignItems(VerticalAlign.Center)
-    .margin({ top: 3 });
+    .margin({ top: 4 });
   }
 
   @Builder
@@ -1135,7 +1153,7 @@ struct DeveloperToolsWindow {
       .height(150)
       .margin({ top: 10 })
       .padding(10)
-      .borderRadius(10)
+      .borderRadius(12)   // Apple 圆角分级：150 高日志区 → 12（RADIUS_CARD）
       .backgroundColor(CONTROL_FILL)
       .border({ width: 1, color: BORDER_SOFT })
       .scrollBar(BarState.Auto)

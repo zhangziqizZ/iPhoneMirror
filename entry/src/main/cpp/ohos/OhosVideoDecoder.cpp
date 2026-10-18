@@ -133,6 +133,14 @@ struct DecoderDiag {
     // 因连续废帧而自动关掉低延迟模式的次数。>0 = 低延迟在本机上会改缓冲布局，
     // 那条路走不通，已按同档重建解码器。
     std::atomic<std::uint32_t> low_latency_disabled{0};
+    std::atomic<std::uint32_t> current_codec{0};
+    std::atomic<std::uint32_t> codec_switches{0};
+    std::atomic<std::uint64_t> nal_vps{0};
+    std::atomic<std::uint64_t> nal_hevc_sps{0};
+    std::atomic<std::uint64_t> nal_hevc_pps{0};
+    std::atomic<std::uint32_t> last_reconfig_reason{0};
+    std::atomic<std::int64_t> last_idr_ms{0};
+    std::atomic<std::int64_t> idr_interval_ms{0};
 };
 // 解码器组件名（CreateByName 用的名字）。原子存不了字符串，用互斥锁保护的
 // 全局串——只在 create 时写、snapshot 时读，竞争概率可忽略。
@@ -383,6 +391,74 @@ SpsSize ParseH264Sps(std::span<const std::uint8_t> annex_b) {
     return out;
 }
 
+SpsSize ParseHevcSps(std::span<const std::uint8_t> annex_b) {
+    SpsSize out{};
+    std::size_t i = 0;
+    while (i + 3 < annex_b.size()) {
+        if (annex_b[i] == 0 && annex_b[i + 1] == 0) {
+            std::size_t sc_len = 0;
+            if (annex_b[i + 2] == 1) sc_len = 3;
+            else if (i + 3 < annex_b.size() && annex_b[i + 2] == 0 && annex_b[i + 3] == 1) sc_len = 4;
+            else { ++i; continue; }
+            const std::size_t nalu_start = i + sc_len;
+            if (nalu_start >= annex_b.size()) break;
+            const std::uint8_t nal_type = (annex_b[nalu_start] >> 1) & 0x3Fu;
+            if (nal_type != 33) {
+                i = nalu_start;
+                continue;
+            }
+            const std::vector<std::uint8_t> rbsp =
+                unescape_rbsp(annex_b.subspan(nalu_start + 2));
+            BitReader br(rbsp.data(), rbsp.size());
+            br.read_bits(4);
+            const std::uint32_t max_sub_layers_minus1 = br.read_bits(3);
+            br.read_bits(1);
+            br.read_bits(2);
+            br.read_bits(1);
+            br.read_bits(5);
+            br.read_bits(32);
+            for (std::uint32_t j = 0; j < max_sub_layers_minus1; ++j) {
+                br.read_bits(2);
+            }
+            if (max_sub_layers_minus1 > 0) {
+                for (std::uint32_t j = 0; j < max_sub_layers_minus1; ++j) {
+                    br.read_bits(16);
+                }
+            }
+            br.read_ue();
+            const std::uint32_t chroma_format_idc = br.read_ue();
+            if (chroma_format_idc > 3) return out;
+            const std::uint32_t pic_width = br.read_ue();
+            const std::uint32_t pic_height = br.read_ue();
+            out.width = pic_width;
+            out.height = pic_height;
+            out.display_width = pic_width;
+            out.display_height = pic_height;
+            if (br.read_bits(1) != 0) {
+                const std::uint32_t crop_left = br.read_ue();
+                const std::uint32_t crop_right = br.read_ue();
+                const std::uint32_t crop_top = br.read_ue();
+                const std::uint32_t crop_bottom = br.read_ue();
+                if (pic_width > crop_left + crop_right) {
+                    out.display_width = pic_width - crop_left - crop_right;
+                }
+                if (pic_height > crop_top + crop_bottom) {
+                    out.display_height = pic_height - crop_top - crop_bottom;
+                }
+            }
+            if (out.width == 0 || out.height == 0 || out.width > 8192 ||
+                out.height > 8192 || out.display_width == 0 || out.display_height == 0) {
+                return out;
+            }
+            out.ok = true;
+            return out;
+        } else {
+            ++i;
+        }
+    }
+    return out;
+}
+
 // 拼 Annex-B 形式的参数集，作为 OH_MD_KEY_CODEC_CONFIG 喂给解码器。
 //
 // 为什么必须喂：iPhone 送的是 AVCC，SPS/PPS(/VPS) 放在 avcC 也就是
@@ -455,6 +531,8 @@ bool annex_b_has_nal_type(std::span<const std::uint8_t> data, std::uint8_t want_
 //     投屏是实时流，队列里每多一帧就是多一帧的端到端延迟；抖动吸收靠"解码器
 //     自己的在途帧 + 这一个槽"就够，再多纯粹是把延迟堆给用户看。
 static constexpr std::size_t kMaxPendingInput = 2;
+
+static constexpr std::int64_t kRandomAccessGiveupMs = 2000;
 
 // 连续多少帧"UV 平面全零"才认定这一档配置产出的是废帧（而不是偶发脏帧）。
 static constexpr std::uint32_t kChromaEmptyStreakLimit = 3;
@@ -568,6 +646,19 @@ public:
                     static_cast<std::uint32_t>(pending_input_.size()),
                     std::memory_order_relaxed);
             }
+            if (waiting_for_random_access_) {
+                const std::int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count();
+                const bool has_idr = annex_b_has_nal_type(
+                    std::span<const uint8_t>(bytes.data(), bytes.size()), 5);
+                if (has_idr) {
+                    waiting_for_random_access_ = false;
+                } else if (now_ms - wait_random_access_start_ms_ >= kRandomAccessGiveupMs) {
+                    waiting_for_random_access_ = false;
+                } else {
+                    return {};
+                }
+            }
             pump_input_locked();
             // 策略链探帧：配置后推了 N 帧仍零输出回调 → 自动切下一档策略。
             if (strategy_chain_active_) {
@@ -643,7 +734,7 @@ public:
         //   新参数集 = 新流，旧怪癖未必复现，这里重置让它重新获得机会；
         //   若设备确实仍出 UV 全零，on_chroma_empty_locked 会再次关掉
         //   （有界代价：每个新流至多 kChromaEmptyStreakLimit 帧绿屏）。
-        low_latency_ = true;
+        low_latency_ = false;
         low_latency_persistently_disabled_ = false;
         hw_ll_retry_done_ = false;
         {
@@ -674,11 +765,14 @@ public:
         input_buffer_ = nullptr;
         failed_ = false;
         drain_complete_ = false;
+        const bool was_hevc = format_.codec == static_cast<std::uint32_t>(coremedia::VideoCodec::Hevc);
+        codec_changed_ = (hevc != was_hevc);
         format_ = coremedia::FormatDescription{};
         format_.codec = static_cast<std::uint32_t>(
             hevc ? coremedia::VideoCodec::Hevc : coremedia::VideoCodec::H264);
         // SPS 解析拿真值：失败回退到调用方给的提示值，并累计失败次数供 UI 诊断。
-        const SpsSize sps = ParseH264Sps(annex_b_codec_config);
+        const SpsSize sps = hevc ? ParseHevcSps(annex_b_codec_config)
+                                  : ParseH264Sps(annex_b_codec_config);
         if (sps.ok) {
             enc_width_ = sps.width;
             enc_height_ = sps.height;
@@ -694,7 +788,9 @@ public:
             Diag().sps_parse_failures.fetch_add(1, std::memory_order_relaxed);
         }
         // 策略链从第一档（硬件 + 编码尺寸）开始。
-        strategy_ = DecoderStrategy::HwEncSize;
+        if (codec_changed_) {
+            strategy_ = DecoderStrategy::HwEncSize;
+        }
         strategy_chain_active_ = true;
         pushed_to_codec_ = 0;
         frames_since_create_ = 0;
@@ -702,6 +798,9 @@ public:
         pixels_since_create_ = 0;
         Diag().strategy.store(0, std::memory_order_relaxed);
         ++generation_;
+        waiting_for_random_access_ = true;
+        wait_random_access_start_ms_ = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
         create_locked();
     }
 
@@ -770,7 +869,7 @@ private:
     //   （软解一帧 100ms+ 时 30 帧 = 3 秒以上），用户在这段时间里只看到
     //   黑屏/卡住。而"这一档能不能用"其实看头几帧就有结论了：喂够 in-band
     //   参数集 + 一个 IDR 之后还没有任何像素出来，就该换档了。
-    static constexpr std::uint32_t kStrategyProbeFrames = 8;
+    static constexpr std::uint32_t kStrategyProbeFrames = 15;
 
     // 出现一帧"UV 全零"的废帧。只记账 + 累计连续数，**不做任何重建**——
     // 调用点是解码器的输出回调，绝不能在人家回调里销毁解码器自己。
@@ -956,10 +1055,12 @@ private:
         }
 
         OH_AVFormat* description = OH_AVFormat_Create();
-        OH_AVFormat_SetIntValue(description, OH_MD_KEY_WIDTH,
-            static_cast<std::int32_t>(format_.width));
-        OH_AVFormat_SetIntValue(description, OH_MD_KEY_HEIGHT,
-            static_cast<std::int32_t>(format_.height));
+        if (format_.width > 0 && format_.height > 0) {
+            OH_AVFormat_SetIntValue(description, OH_MD_KEY_WIDTH,
+                static_cast<std::int32_t>(format_.width));
+            OH_AVFormat_SetIntValue(description, OH_MD_KEY_HEIGHT,
+                static_cast<std::int32_t>(format_.height));
+        }
         OH_AVFormat_SetIntValue(description, OH_MD_KEY_PIXEL_FORMAT, AV_PIXEL_FORMAT_NV12);
         OH_AVFormat_SetIntValue(description, OH_MD_KEY_FRAME_RATE,
             static_cast<std::int32_t>(fps_numerator_ / fps_denominator_));
@@ -1234,7 +1335,7 @@ private:
                     // 直接整块拷；更大时按行拷——不处理的话画面会斜着裂开。
                     std::uint32_t stride_bytes = width;
 #if IM_HAVE_OHOS_NATIVE_WINDOW
-                    if (stride_bytes == width) {
+                    {
                         OH_NativeBuffer* nativeBuffer = OH_AVBuffer_GetNativeBuffer(buffer);
                         if (nativeBuffer != nullptr) {
                             OH_NativeBuffer_Config config{};
@@ -1275,21 +1376,22 @@ private:
                     const std::size_t luma_bytes =
                         static_cast<std::size_t>(width) * height;
                     const std::uint8_t* src_y = address;
-                    const std::uint8_t* src_uv = address + stride_bytes * height;
+                    const std::uint8_t* src_uv = address + static_cast<std::size_t>(stride_bytes) * height;
 
                     if (stride_bytes == width) {
-                        // 紧致布局：整块搬。UV 是 width × height/2 的交织半平面。
                         pixels.assign(src_y, src_y + luma_bytes);
                         pixels.insert(pixels.end(), src_uv, src_uv + luma_bytes / 2);
                     } else {
-                        pixels.reserve(*needed);
+                        pixels.resize(*needed);
+                        std::uint8_t* dst = pixels.data();
                         for (std::uint32_t row = 0; row < height; ++row) {
-                            pixels.insert(pixels.end(), src_y + row * stride_bytes,
-                                src_y + row * stride_bytes + width);
+                            std::memcpy(dst + static_cast<std::size_t>(row) * width,
+                                src_y + static_cast<std::size_t>(row) * stride_bytes, width);
                         }
+                        std::uint8_t* dst_uv = dst + luma_bytes;
                         for (std::uint32_t row = 0; row < height / 2; ++row) {
-                            pixels.insert(pixels.end(), src_uv + row * stride_bytes,
-                                src_uv + row * stride_bytes + width);
+                            std::memcpy(dst_uv + static_cast<std::size_t>(row) * width,
+                                src_uv + static_cast<std::size_t>(row) * stride_bytes, width);
                         }
                     }
                     stride = static_cast<std::int32_t>(width);
@@ -1413,7 +1515,7 @@ private:
     //   撤回 v1.0.55 的低延迟开关；保留 v1.0.55 的非阻塞取帧（那是另一条独立
     //   改动）。代价：v1.0.55 测得的 ≈233ms 周期性滞后恢复，延迟回到 250-300ms 量级，
     //   与"颜色对"二选一。先要颜色对。
-    bool low_latency_{true};
+    bool low_latency_{false};
     bool low_latency_persistently_disabled_{false};
     // 硬解档"关低延迟同档重试"只做一次的闸门（防止无限重建），见
     // maybe_switch_strategy_locked；configure_annex_b 时随新流重置。
@@ -1423,6 +1525,9 @@ private:
     // 里销毁解码器自己**，那等于在人家函数栈还没返回时拆地基。
     bool strategy_restart_requested_{false};
     bool strategy_chain_active_{false};
+    bool codec_changed_{false};
+    bool waiting_for_random_access_{false};
+    std::int64_t wait_random_access_start_ms_{0};
     std::uint32_t frames_since_create_{0};
     std::uint32_t outputs_since_create_{0};
     // ★ 只有真正交出像素的输出数。策略链判据用它（而不是 outputs_since_create_）
@@ -1500,6 +1605,16 @@ extern "C" std::uint64_t im_video_decoder_take_needs_idr() {
     return Diag().needs_idr.exchange(0, std::memory_order_relaxed);
 }
 
+extern "C" void im_video_decoder_set_codec(uint32_t codec, uint32_t switches) {
+    Diag().current_codec.store(codec, std::memory_order_relaxed);
+    Diag().codec_switches.store(switches, std::memory_order_relaxed);
+}
+
+extern "C" void im_video_decoder_set_idr_stats(int64_t last_ms, int64_t interval_ms) {
+    Diag().last_idr_ms.store(last_ms, std::memory_order_relaxed);
+    Diag().idr_interval_ms.store(interval_ms, std::memory_order_relaxed);
+}
+
 extern "C" void im_video_decoder_diag(iPhoneMirror::media::DecoderDiagSnapshot* out) {
     if (out == nullptr) return;
     const DecoderDiag &d = Diag();
@@ -1542,6 +1657,14 @@ extern "C" void im_video_decoder_diag(iPhoneMirror::media::DecoderDiagSnapshot* 
     out->sw_decode_us         = d.sw_decode_us.load(std::memory_order_relaxed);
     out->chroma_empty_frames  = d.chroma_empty_frames.load(std::memory_order_relaxed);
     out->low_latency_disabled = d.low_latency_disabled.load(std::memory_order_relaxed);
+    out->current_codec        = d.current_codec.load(std::memory_order_relaxed);
+    out->codec_switches       = d.codec_switches.load(std::memory_order_relaxed);
+    out->nal_vps              = d.nal_vps.load(std::memory_order_relaxed);
+    out->nal_hevc_sps         = d.nal_hevc_sps.load(std::memory_order_relaxed);
+    out->nal_hevc_pps         = d.nal_hevc_pps.load(std::memory_order_relaxed);
+    out->last_reconfig_reason = d.last_reconfig_reason.load(std::memory_order_relaxed);
+    out->last_idr_ms          = d.last_idr_ms.load(std::memory_order_relaxed);
+    out->idr_interval_ms      = d.idr_interval_ms.load(std::memory_order_relaxed);
     {
         std::lock_guard<std::mutex> name_lock(g_decoder_name_mutex);
         std::snprintf(out->decoder_name, sizeof(out->decoder_name), "%s",

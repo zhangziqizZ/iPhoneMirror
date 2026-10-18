@@ -939,7 +939,7 @@ struct StandalonePreviewWindow {
     .width(size)
     .height(size)
     .justifyContent(FlexAlign.Center)
-    .borderRadius(6)
+    .borderRadius(6)   // Apple 圆角分级：动态尺寸(22-32)图标钮 → 6（RADIUS_MICRO）；固定 16 在小尺寸会变药丸、大尺寸变正圆
     .hoverEffect(HoverEffect.Highlight)
     .onClick((): void => {
       on_click();
@@ -957,7 +957,7 @@ struct StandalonePreviewWindow {
     .width(width)
     .height(26)
     .justifyContent(FlexAlign.Center)
-    .borderRadius(6)
+    .borderRadius(6)   // Apple 圆角分级：26 高文字开关 → 6（RADIUS_MICRO）
     .backgroundColor(active ? SELECTION : CONTROL_FILL)
     .margin({ left: 4 })
     .hoverEffect(HoverEffect.Highlight)

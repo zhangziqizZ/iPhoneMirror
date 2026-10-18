@@ -570,7 +570,7 @@ struct BluetoothClientBindingWindow {
         .fontSize(11)
         .fontColor(MUTED_TEXT)
         .width('100%')
-        .margin({ top: 5 });
+        .margin({ top: 4 });
     }
     .alignItems(HorizontalAlign.Start)
     .width('100%');
@@ -596,7 +596,7 @@ struct BluetoothClientBindingWindow {
             .fontSize(10)
             .fontColor(SUCCESS)
             .width('100%')
-            .margin({ top: 3 });
+            .margin({ top: 4 });
         }
         Text(this.clients[index].identifier_text())
           .fontSize(10)
@@ -617,7 +617,7 @@ struct BluetoothClientBindingWindow {
     }
     .width('100%')
     .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-    .borderRadius(8)
+    .borderRadius(12)   // Apple 圆角分级：绑定信息卡片 → 12（RADIUS_CARD）
     .backgroundColor(this.is_selected(index) ? COMBO_ITEM_SELECTED
       : (this.is_hovered(index) ? CONTROL_HOVER : CONTROL_FILL))
     .border({ width: 1, color: this.is_selected(index) ? ACCENT : BORDER })

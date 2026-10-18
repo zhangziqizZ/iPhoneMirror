@@ -255,7 +255,7 @@ struct VersionBadge {
       .fontWeight(FontWeight.Medium)
       .fontColor(ON_ACCENT)
       .padding({ left: 12, right: 12, top: 7, bottom: 7 })
-      .borderRadius(12)
+      .borderRadius(6)   // Apple 圆角分级：状态徽章 → 6（RADIUS_MICRO）
       .backgroundColor(ACCENT);
   }
 }
@@ -406,7 +406,8 @@ struct UpdateWindow {
             .margin({ left: 6 });
         }
         .padding({ left: 12, right: 12, top: 8, bottom: 8 })
-        .borderRadius(8)
+        .borderRadius(10)   // Apple 圆角分级：36 高按钮 → 10（RADIUS_CONTROL），16 会呈药丸感
+        .hoverEffect(HoverEffect.Highlight)
         .onClick((): void => { this.on_open_release(); })
         .margin({ left: 12 });
       }
@@ -426,7 +427,7 @@ struct UpdateWindow {
       .width('100%')
       .layoutWeight(1)
       .padding(10)
-      .borderRadius(10)
+      .borderRadius(12)   // Apple 圆角分级：日志区 → 12（RADIUS_CARD）
       .backgroundColor(PREVIEW_CHROME)
       .scrollBar(BarState.Auto)
       .align(Alignment.Top);

@@ -476,9 +476,10 @@ struct ShortcutCaptureBox {
       .textAlign(TextAlign.Center)
       .height(40)
       .width('100%')
-      .borderRadius(10)
+      .borderRadius(10)   // Apple 圆角分级：40 高快捷键框 → 10（RADIUS_CONTROL），16 会呈药丸感
       .backgroundColor(CONTROL_FILL)
       .border({ width: 1, color: this.capturing ? ACCENT : BORDER })
+      .hoverEffect(HoverEffect.Highlight)
       .onClick((): void => { this.on_tap(); })
       .onMouse((event: MouseEvent): void => { this.on_mouse_button(event.button); });
   }
@@ -500,8 +501,9 @@ struct ShortcutClearButton {
     .width(32)
     .height(32)
     .margin({ left: 8 })
-    .borderRadius(6)
+    .borderRadius(16)   // 32×32 正圆（半径 = 短边一半），保留
     .justifyContent(FlexAlign.Center)
+    .hoverEffect(HoverEffect.Highlight)
     .onClick((): void => { this.on_action(); });
   }
 }
@@ -514,7 +516,7 @@ function group_title(text: string) {
     .fontWeight(FontWeight.Bold)
     .fontColor(ACCENT)
     .width('100%')
-    .margin({ bottom: 7 });
+    .margin({ bottom: 4 });
 }
 
 /**

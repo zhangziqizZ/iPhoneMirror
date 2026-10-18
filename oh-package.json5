@@ -1,7 +1,7 @@
 {
   "modelVersion": "5.0.0",
   "name": "harmonyiphonemirror",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "iPhoneMirror 鸿蒙 PC 移植（可构建为 HAP）",
   "dependencies": {},
   "devDependencies": {

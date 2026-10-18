@@ -311,7 +311,7 @@ struct ToolButton {
       .width(this.buttonWidthPct.length > 0 ? this.buttonWidthPct : undefined)
       .padding({ left: 8, right: 8, top: 7, bottom: 7 })
       .constraintSize({ minWidth: this.minButtonWidth })
-      .borderRadius(11)
+      .borderRadius(10)   // Apple 圆角分级：36 高按钮 → 10（RADIUS_CONTROL），16 会呈药丸感
       .backgroundColor(this.hovered ? CONTROL_FILL : PANEL_ALT)
       .border({ width: 1, color: BORDER })
       .opacity(this.actionEnabled ? 1 : DISABLED_OPACITY)
@@ -670,7 +670,7 @@ struct ProjectionSettingsWindow {
     }
     .width('100%')
     .alignItems(VerticalAlign.Center)
-    .margin({ top: 5 });
+    .margin({ top: 4 });
   }
 
   /** ① 应用模式。 */
@@ -847,7 +847,7 @@ struct ProjectionSettingsWindow {
           .layoutWeight(1);
       }
       .width('100%')
-      .margin({ top: 11 });
+      .margin({ top: 10 });
 
       status_line(this.settingsStatus, 7);
       if (this.decoderStatusVisible) {
@@ -859,7 +859,7 @@ struct ProjectionSettingsWindow {
         .width('100%')
         .height(1)
         .backgroundColor(BORDER_SOFT)
-        .margin({ top: 14, bottom: 12 });
+        .margin({ top: 10, bottom: 12 });
 
       // CheckBox PlayAudio —— 平台替换 ④：原文写死 "Windows"，改成事实描述
       Row() {
@@ -908,7 +908,7 @@ struct ProjectionSettingsWindow {
         .blockColor(SLIDER_THUMB_FILL)
         .blockBorderColor(SLIDER_THUMB_BORDER)
         .blockBorderWidth(SLIDER_THUMB_STROKE)
-        .margin({ top: 5 })
+        .margin({ top: 4 })
         .onChange((value: number): void => {
           this.playbackVolume = value;
           AppStorage.setOrCreate<number>(ARG_KEY_PLAYBACK_VOLUME, value);
@@ -1003,7 +1003,7 @@ struct ProjectionSettingsWindow {
     .width('100%')
     .height('100%')
     .padding({ left: 18, right: 10, top: 4, bottom: 18 })
-    .borderRadius(16)
+    .borderRadius(16)   // 撑满窗口的内容根容器：窗口级，保留 SURFACE 档 16
     .backgroundColor(CARD)
     .border({ width: 1, color: BORDER });
   }

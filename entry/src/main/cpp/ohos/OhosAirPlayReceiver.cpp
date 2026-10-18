@@ -191,6 +191,7 @@ bool ContainsIdr(const std::vector<std::uint8_t> &bytes) {
 //     靠下面的"NAL 账本"看出来，不再闷在本地猜。
 std::vector<std::uint8_t> g_param_sps;   // 缓存的 SPS（不含起始码）
 std::vector<std::uint8_t> g_param_pps;   // 缓存的 PPS（不含起始码）
+
 // 参数集来源计数（判读：来自帧 = 配置包不可信但流本身是好的）
 std::atomic<uint64_t> g_param_from_config{0};
 std::atomic<uint64_t> g_param_from_frames{0};
@@ -262,7 +263,7 @@ void ForEachNal(const std::vector<std::uint8_t> &bytes, Fn &&fn) {
                 break;
             }
         }
-        fn(static_cast<std::uint8_t>(bytes[begin] & 0x1Fu), begin, end);
+        fn(bytes[begin], begin, end);
         i = end;
     }
 }
@@ -277,7 +278,10 @@ std::atomic<uint64_t> g_nal_slice{0};
 std::atomic<uint64_t> g_nal_idr{0};
 std::atomic<uint64_t> g_nal_sps{0};
 std::atomic<uint64_t> g_nal_pps{0};
+
 std::atomic<uint64_t> g_nal_none{0};   // 一个 NAL 都扫不出来的帧数
+std::atomic<int64_t> g_last_idr_ms{0};
+std::atomic<int64_t> g_idr_interval_ms{0};
 
 // 扫一帧：填 NAL 账本，顺手把碰到的 SPS/PPS 收进缓存。
 // 返回 true = 参数集内容发生了变化（调用方据此重建解码器）。
@@ -288,10 +292,11 @@ bool SweepPacketForNals(const std::vector<std::uint8_t> &bytes, bool from_config
     bool saw_sps = false;
     bool saw_pps = false;
     bool changed = false;
-    ForEachNal(bytes, [&](std::uint8_t type, std::size_t begin, std::size_t end) {
+    ForEachNal(bytes, [&](std::uint8_t nal_header_byte, std::size_t begin, std::size_t end) {
         saw_nal = true;
         const std::vector<std::uint8_t> nal(bytes.begin() + static_cast<std::ptrdiff_t>(begin),
             bytes.begin() + static_cast<std::ptrdiff_t>(end));
+        const std::uint8_t type = nal_header_byte & 0x1Fu;
         switch (type) {
             case 1u:
                 saw_slice = true;
@@ -326,6 +331,17 @@ bool SweepPacketForNals(const std::vector<std::uint8_t> &bytes, bool from_config
     if (saw_idr) g_nal_idr.fetch_add(1, std::memory_order_relaxed);
     if (saw_sps) g_nal_sps.fetch_add(1, std::memory_order_relaxed);
     if (saw_pps) g_nal_pps.fetch_add(1, std::memory_order_relaxed);
+
+    if (saw_idr) {
+        const int64_t now_ms = SteadyNowMs();
+        const int64_t prev = g_last_idr_ms.exchange(now_ms, std::memory_order_relaxed);
+        if (prev > 0) {
+            g_idr_interval_ms.store(now_ms - prev, std::memory_order_relaxed);
+        }
+        iPhoneMirror::media::im_video_decoder_set_idr_stats(
+            g_last_idr_ms.load(std::memory_order_relaxed),
+            g_idr_interval_ms.load(std::memory_order_relaxed));
+    }
     if (changed) {
         (from_config ? g_param_from_config : g_param_from_frames)
             .fetch_add(1, std::memory_order_relaxed);
@@ -343,6 +359,7 @@ std::vector<std::uint8_t> BuildParamSetBytes() {
         out.push_back(0x01);
         out.insert(out.end(), nal.begin(), nal.end());
     };
+
     append(g_param_sps);
     append(g_param_pps);
     return out;
@@ -390,6 +407,7 @@ std::atomic<bool> g_demand_idr_after_reconfig{false}; // 等 IDR 入队中
 std::atomic<uint64_t> g_no_idr_dropped{0};           // 该模式丢掉的非 IDR 数据帧
 std::atomic<uint64_t> g_no_idr_reconfigures{0};      // 已主动请求解码器重建的次数
 constexpr int kNoIdrFrameThreshold = 60;             // 入队 ≥ K 帧仍无 IDR 才触发
+
 
 std::mutex g_log_mutex;
 std::string g_last_log;
@@ -641,7 +659,8 @@ void ProcessMirrorPacket(const MirrorPacket &packet) {
     //    配置包来了就无条件放行数据帧 —— 配的是一份缺 SPS 的参数集时，整个会话
     //    都卡在"喂得进去、吐不出来"。现在以"手里是否有一份完整参数集"为准。
     if (param_changed || !g_video_configured) {
-        if (!g_param_sps.empty() && !g_param_pps.empty()) {
+        const bool params_ready = !g_param_sps.empty() && !g_param_pps.empty();
+        if (params_ready) {
             if (!g_video_decoder) {
                 g_video_decoder = make_ohos_video_decoder(DecoderPreference::Auto);
             }
@@ -649,9 +668,12 @@ void ProcessMirrorPacket(const MirrorPacket &packet) {
             try {
                 g_video_decoder->configure_annex_b(
                     std::span<const std::uint8_t>(param_bytes.data(), param_bytes.size()),
-                    1920, 1080, false);
+                    0, 0, false);
                 g_video_configured = true;
                 g_param_reconfigures.fetch_add(1, std::memory_order_relaxed);
+                if (param_changed) {
+                    g_demand_idr_after_reconfig.store(true, std::memory_order_relaxed);
+                }
             } catch (const std::exception &e) {
                 SetError(e.what());
                 g_video_configured = false;
@@ -1046,6 +1068,7 @@ void ShutdownLocked() {
     g_param_sps.clear();
     g_param_pps.clear();
 
+
     // 音频流也要收掉：OHAudio 的音轨是系统资源，留着会在下次启动时占着端点。
     // 注意此时已持 g_mutex，而音频回调只用 g_audio_mutex ⇒ 不会互等。
     {
@@ -1255,6 +1278,8 @@ int im_airplay_start(const char *name, const char *password) {
     g_demand_idr_after_reconfig.store(false, std::memory_order_relaxed);
     g_no_idr_dropped.store(0);
     g_no_idr_reconfigures.store(0);
+    g_last_idr_ms.store(0);
+    g_idr_interval_ms.store(0);
     g_video_latency_last_ms.store(0);
     g_video_latency_avg_ms.store(0);
     g_video_latency_unmatched.store(0);

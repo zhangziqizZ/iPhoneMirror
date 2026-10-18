@@ -496,7 +496,7 @@ struct BindingCard {
     .alignItems(HorizontalAlign.Start)
     .width('100%')
     .padding(14)
-    .borderRadius(8)
+    .borderRadius(12)   // Apple 圆角分级：绑定卡片 → 12（RADIUS_CARD），原版 8 的卡片级放大档
     .backgroundColor(CONTROL_FILL)
     .border({ width: 1, color: BORDER });
   }
@@ -518,10 +518,11 @@ struct BindingButton {
       .fontColor(TEXT)
       .textAlign(TextAlign.Center)
       .padding({ left: 12, right: 12, top: 7, bottom: 7 })
-      .borderRadius(8)
+      .borderRadius(10)   // Apple 圆角分级：31 高按钮 → 10（RADIUS_CONTROL），16 会呈药丸感
       .backgroundColor(CONTROL_FILL)
       .border({ width: 1, color: BORDER })
       .opacity(this.actionEnabled ? 1 : 0.34)
+      .hoverEffect(HoverEffect.Highlight)
       .onClick((): void => {
         if (this.actionEnabled) {
           this.on_action();
@@ -1150,6 +1151,7 @@ struct DeviceBindingWindow {
           iconColor: MUTED_TEXT,
         })
           .margin({ left: 6 })
+          .hoverEffect(HoverEffect.Highlight)
           .onClick((): void => { this.on_start_rename(); });
         FluentSymbol({
           iconName: 'Delete20',
@@ -1157,12 +1159,13 @@ struct DeviceBindingWindow {
           iconColor: this.confirmingDelete ? ERROR : MUTED_TEXT,
         })
           .margin({ left: 6 })
+          .hoverEffect(HoverEffect.Highlight)
           .onClick((): void => { this.on_delete_clicked(); });
       }
     }
     .width('100%')
     .padding(12)
-    .borderRadius(8)
+    .borderRadius(12)   // Apple 圆角分级：列表行卡片 → 12（RADIUS_CARD）
     .backgroundColor(this.selectedIndex === index ? COMBO_ITEM_SELECTED
       : (this.hoverIndex === index ? CONTROL_HOVER : CONTROL_FILL))
     .border({ width: 1, color: this.selectedIndex === index ? ACCENT : BORDER })
@@ -1190,8 +1193,9 @@ struct DeviceBindingWindow {
         }
         .width(32)
         .height(32)
-        .borderRadius(8)
+        .borderRadius(16)   // 32×32 正圆（半径 = 短边一半），保留
         .justifyContent(FlexAlign.Center)
+        .hoverEffect(HoverEffect.Highlight)
         .onClick((): void => { this.on_add_airplay_profile(); });
       }
       .width('100%')
@@ -1231,7 +1235,7 @@ struct DeviceBindingWindow {
     .width(270)
     .height('100%')
     .padding(12)
-    .borderRadius(10)
+    .borderRadius(16)   // modal 窗口内的全高侧面板：窗口级容器，保留 SURFACE 档 16
     .backgroundColor(CONTROL_FILL)
     .border({ width: 1, color: BORDER })
     .alignItems(HorizontalAlign.Start);
@@ -1280,7 +1284,7 @@ struct DeviceBindingWindow {
       .fontColor(MUTED_TEXT)
       .fontFamily('monospace')
       .width('100%')
-      .margin({ top: 3 });
+      .margin({ top: 4 });
   }
 
   @Builder
@@ -1294,7 +1298,7 @@ struct DeviceBindingWindow {
         .fontSize(12)
         .fontColor(TEXT)
         .width('100%')
-        .margin({ top: 7 });
+        .margin({ top: 8 });
       this.identity_line(this.has_wired_binding()
         ? (this.selected_profile() as BindingProfile).wiredUdid : '');
       Text(S_WIRED_DESC)
@@ -1361,7 +1365,7 @@ struct DeviceBindingWindow {
         .fontSize(12)
         .fontColor(TEXT)
         .width('100%')
-        .margin({ top: 7 });
+        .margin({ top: 8 });
       this.identity_line(this.has_airplay_binding()
         ? (this.selected_profile() as BindingProfile).airPlayId : '');
       Text(S_AIRPLAY_DESC)
@@ -1426,7 +1430,7 @@ struct DeviceBindingWindow {
         .fontSize(12)
         .fontColor(TEXT)
         .width('100%')
-        .margin({ top: 7 });
+        .margin({ top: 8 });
       this.identity_line(this.selected_profile() !== null
         ? (this.selected_profile() as BindingProfile).bluetoothId : '');
       Text(S_BLUETOOTH_DESC)
@@ -1465,7 +1469,7 @@ struct DeviceBindingWindow {
           .fontSize(11)
           .fontColor(MUTED_TEXT)
           .width('100%')
-          .margin({ top: 5 });
+          .margin({ top: 4 });
 
         Row() {
           BindingCard({ content: (): void => { this.wired_card(); } }).layoutWeight(1);
@@ -1502,7 +1506,7 @@ struct DeviceBindingWindow {
     .layoutWeight(1)
     .height('100%')
     .padding(22)
-    .borderRadius(10)
+    .borderRadius(16)   // modal 窗口内的全高主内容面板：窗口级容器，保留 SURFACE 档 16
     .backgroundColor(CONTROL_FILL)
     .border({ width: 1, color: BORDER })
     .scrollBar(BarState.Auto)

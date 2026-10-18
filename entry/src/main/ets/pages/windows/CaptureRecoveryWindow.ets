@@ -155,7 +155,7 @@ struct CaptureRecoveryWindow {
     }
     .width('100%')
     .padding({ left: 18, right: 18, top: 16, bottom: 16 })
-    .borderRadius(16)
+    .borderRadius(12)   // Apple 圆角分级：内容卡片 → 12（RADIUS_CARD）
     .backgroundColor(WARNING_SURFACE)
     .border({ width: 1, color: WARNING })
     .alignItems(VerticalAlign.Center);
@@ -171,7 +171,7 @@ struct CaptureRecoveryWindow {
       .textAlign(TextAlign.Center)
       .width('100%')
       .padding({ left: 14, right: 14, top: 11, bottom: 11 })
-      .borderRadius(12)
+      .borderRadius(10)   // Apple 圆角分级：40 高主按钮 → 10（RADIUS_CONTROL），16 会呈药丸感
       .backgroundColor(CONTROL_FILL)
       .border({ width: 1, color: BORDER });
   }

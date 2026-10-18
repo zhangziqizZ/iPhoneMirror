@@ -30,6 +30,11 @@ import {
   PERSIST_READ_RESULT_KEY,
   PERSIST_WRITE_RESULT_KEY,
   HIDE_POINTER_ON_TAKEOVER_KEY,
+  GLOW_ENABLED_KEY,
+  GLOW_STRENGTH_KEY,
+  GLOW_DEGRADED_KEY,
+  MINIMIZE_TO_TRAY_KEY,
+  TRAY_AVAILABLE_KEY,
 } from './WindowServices';
 import { LANG_INDEX_KEY } from './i18n';
 
@@ -43,6 +48,9 @@ const PREFS_KEY_ACRYLIC_ALPHA: string = 'acrylic_alpha';
 const PREFS_KEY_LANGUAGE: string = 'language_index';
 /** ★ preferences 里的键：反控接管时是否收起本地指针（默认 false = 保持可见）。 */
 const PREFS_KEY_HIDE_POINTER: string = 'hide_pointer_on_takeover';
+const PREFS_KEY_GLOW_ENABLED: string = 'glow_enabled';
+const PREFS_KEY_GLOW_STRENGTH: string = 'glow_strength';
+const PREFS_KEY_MINIMIZE_TO_TRAY: string = 'minimize_to_tray';
 
 /**
  * 偏好实例。为什么是模块级可变变量：写入发生在 UI 点击回调里，那里拿不到 Ability 的
@@ -197,6 +205,77 @@ export function save_hide_pointer_preference(hide: boolean): void {
   } catch (writeError) {
     const writeFailure = writeError as BusinessError;
     hilog.warn(0x0000, 'AppPreferences', '指针偏好写入失败 %d %{public}s',
+      writeFailure.code, writeFailure.message);
+  }
+}
+
+export function load_glow_preferences(): void {
+  if (store === null) {
+    AppStorage.setOrCreate(GLOW_ENABLED_KEY, true);
+    AppStorage.setOrCreate(GLOW_STRENGTH_KEY, 1);
+    AppStorage.setOrCreate(GLOW_DEGRADED_KEY, false);
+    return;
+  }
+  try {
+    const enabled: boolean = store.getSync(PREFS_KEY_GLOW_ENABLED, true) as boolean;
+    const strength: number = store.getSync(PREFS_KEY_GLOW_STRENGTH, 1) as number;
+    AppStorage.setOrCreate(GLOW_ENABLED_KEY, enabled);
+    AppStorage.setOrCreate(GLOW_STRENGTH_KEY, strength);
+    AppStorage.setOrCreate(GLOW_DEGRADED_KEY, false);
+  } catch (readError) {
+    const readFailure = readError as BusinessError;
+    AppStorage.setOrCreate(GLOW_ENABLED_KEY, true);
+    AppStorage.setOrCreate(GLOW_STRENGTH_KEY, 1);
+    AppStorage.setOrCreate(GLOW_DEGRADED_KEY, false);
+    hilog.warn(0x0000, 'AppPreferences', '光感偏好读取失败 %d %{public}s',
+      readFailure.code, readFailure.message);
+  }
+}
+
+export function save_glow_preferences(enabled: boolean, strength: number): void {
+  if (store === null) {
+    return;
+  }
+  try {
+    store.putSync(PREFS_KEY_GLOW_ENABLED, enabled);
+    store.putSync(PREFS_KEY_GLOW_STRENGTH, strength);
+    store.flushSync();
+  } catch (writeError) {
+    const writeFailure = writeError as BusinessError;
+    hilog.warn(0x0000, 'AppPreferences', '光感偏好写入失败 %d %{public}s',
+      writeFailure.code, writeFailure.message);
+  }
+}
+
+export function load_tray_preferences(): void {
+  if (store === null) {
+    AppStorage.setOrCreate(MINIMIZE_TO_TRAY_KEY, true);
+    AppStorage.setOrCreate(TRAY_AVAILABLE_KEY, false);
+    return;
+  }
+  try {
+    const minimizeToTray: boolean = store.getSync(PREFS_KEY_MINIMIZE_TO_TRAY, true) as boolean;
+    AppStorage.setOrCreate(MINIMIZE_TO_TRAY_KEY, minimizeToTray);
+    AppStorage.setOrCreate(TRAY_AVAILABLE_KEY, false);
+  } catch (readError) {
+    const readFailure = readError as BusinessError;
+    AppStorage.setOrCreate(MINIMIZE_TO_TRAY_KEY, true);
+    AppStorage.setOrCreate(TRAY_AVAILABLE_KEY, false);
+    hilog.warn(0x0000, 'AppPreferences', '托盘偏好读取失败 %d %{public}s',
+      readFailure.code, readFailure.message);
+  }
+}
+
+export function save_tray_preferences(minimizeToTray: boolean): void {
+  if (store === null) {
+    return;
+  }
+  try {
+    store.putSync(PREFS_KEY_MINIMIZE_TO_TRAY, minimizeToTray);
+    store.flushSync();
+  } catch (writeError) {
+    const writeFailure = writeError as BusinessError;
+    hilog.warn(0x0000, 'AppPreferences', '托盘偏好写入失败 %d %{public}s',
       writeFailure.code, writeFailure.message);
   }
 }

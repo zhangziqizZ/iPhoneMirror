@@ -61,8 +61,23 @@ export const PRIMARY_ACTION_TEXT: string = '#FF0F1419';
 // ───────────────────────── 控件填充 ─────────────────────────
 
 export const CONTROL_FILL: string = '#14FFFFFF';
-export const CONTROL_HOVER: string = '#20FFFFFF';
-export const CONTROL_PRESSED: string = '#2AFFFFFF';
+// ★ 2026-10-17 调整（用户反馈"鼠标放上去没有小方块"）：深色档 hover / pressed 的
+//   白度太低（12% / 16%），叠在深色底上几乎看出不变化 ⇒ 导航项等控件的悬停反馈
+//   形同没有。这里把深色档的 hover / pressed 一并提亮，并保持
+//   CONTROL_FILL(8%) < CONTROL_HOVER(20%) < CONTROL_PRESSED(27%) 的层次不变
+//   （pressed 必须强于 hover，否则点击时反而变淡）。
+export const CONTROL_HOVER: string = '#33FFFFFF';
+export const CONTROL_PRESSED: string = '#45FFFFFF';
+// ★ 2026-10-18 再调整（用户反馈"深色模式有、浅色模式就没有了"）：浅色档的
+//   CONTROL_HOVER 原为 #FFF0F0F2，而浅色侧边栏 SIDEBAR=#EBF2F2F4 渲染出来约
+//   #F3F3F5 —— 两者只差 5 个色阶（≈2%），hover 圆角糊成底色一片，导航项与
+//   汉堡按钮的悬停反馈同样"形同没有"（深色档同结构 Δ≈47，非常明显 ⇒ 两档
+//   观感严重不对等，这正是用户只敢在深色模式下找小方块的原因）。
+//   修法：hover 压深到 #FFE3E3E8（Δ≈17，与色板里已被验收可见的
+//   ICON_BUTTON_HOVER=#14000000 同量级），pressed 同步压深到 #FFD6D6DB
+//   （Δ≈30）以保持 FILL < HOVER < PRESSED 层次。
+//   ★ CONTROL_PRESSED 当前全工程**无消费者**（色板占位值），调深它没有任何
+//     视觉副作用；将来真用时层次关系已经是对的。
 export const ICON_BUTTON_HOVER: string = '#1FFFFFFF';
 export const SELECTION: string = '#24FFFFFF';
 export const COMBO_BACKGROUND: string = '#14FFFFFF';
@@ -135,10 +150,37 @@ export const NAV_RAIL_OPEN: number = 208;
 export const DEVICE_PANEL_WIDTH: number = 300;
 /** MainContentGrid 的 LeftGapColumn Width */
 export const COLUMN_GAP: number = 18;
+
+// ───────────────────────── 圆角阶梯（Apple HIG 口径） ─────────────────────────
+//
+// ★ 位置纪律：本块必须位于所有引用它的尺寸常量**之前**。ArkTS 的块级常量是
+//   「先声明后使用」，放后面会直接编译错（实测报错码 10505001
+//   Block-scoped variable used before its declaration）。
+//
+// ★ 2026-10-18 修正「一刀切 16」：上一版为了对齐系统窗口圆角，把所有圆角统一成 16，
+//   结果 40×44 的导航高亮被钳成近乎胶囊的圆团、小按钮变「药丸」，反而失去了
+//   「圆角方块」的观感（用户两次反馈）。
+//
+// ★ Apple 的圆角美学核心是**比例与分级**，不是一个数值：
+//   · 半径随元素尺寸增长 —— 小控件小圆角、大容器大圆角；
+//   · 同一尺寸档内完全一致（这才是「统一」的真正含义）；
+//   · 只有超大容器（窗口 / 下拉气泡 / tooltip）才用窗口圆角 16。
+//   视觉上接近 Apple 的「连续圆角」（squircle）：拐角柔和，但方块感清晰。
+//
+// 分级（按元素短边 / 用途）：
+//   RADIUS_MICRO     6   短边 ≤ 24：芯片 / 徽章 / 小图标钮
+//   RADIUS_CONTROL  10   36–44 高的控件：按钮 / 输入框 / 下拉触发器 / 导航高亮
+//   RADIUS_CARD     12   卡片 / 设备行 / 设置分区
+//   RADIUS_SURFACE  16   面板容器 / 下拉气泡 / tooltip / 窗口
+export const RADIUS_MICRO: number = 6;
+export const RADIUS_CONTROL: number = 10;
+export const RADIUS_CARD: number = 12;
+export const RADIUS_SURFACE: number = 16;
+
 /** CaptureActionButton：Width 132 / Height 40 / CornerRadius 12 / Padding 16,8 */
 export const CAPTURE_ACTION_WIDTH: number = 132;
 export const CAPTURE_ACTION_HEIGHT: number = 40;
-export const CAPTURE_ACTION_RADIUS: number = 12;
+export const CAPTURE_ACTION_RADIUS: number = RADIUS_CONTROL;
 /** 图标与文字的间距：卡片内 ToolButton 用 9，预览快捷条用 6 */
 export const ICON_TEXT_GAP_CARD: number = 9;
 export const ICON_TEXT_GAP_QUICK: number = 6;
@@ -178,8 +220,9 @@ export const SCROLL_THUMB_PRESSED: string = '#A6FFFFFF';
 
 // ───────────────────────── 共享控件的尺寸口径（ModernControls.xaml / App.xaml） ─────────────────────────
 
-/** App.xaml 隐式 Button 样式：CornerRadius 11 / Padding 18,10 / MinHeight 42 / FontSize 14 */
-export const BUTTON_CORNER: number = 11;
+// 原版 App.xaml 隐式 Button 是 CornerRadius 11；按 Apple 分级，42 高的按钮落在
+// CONTROL 档（10）—— 保持圆角方块观感，不再用窗口级 16。
+export const BUTTON_CORNER: number = RADIUS_CONTROL;
 export const BUTTON_PADDING_H: number = 18;
 export const BUTTON_PADDING_V: number = 10;
 export const BUTTON_MIN_HEIGHT: number = 42;
@@ -189,15 +232,15 @@ export const BUTTON_PRESSED_SCALE: number = 0.96;
 /** 禁用态不透明度 */
 export const DISABLED_OPACITY: number = 0.34;
 
-/** PrimaryButton：CornerRadius 12（Padding 继承隐式 Button 的 18,10） */
-export const PRIMARY_BUTTON_CORNER: number = 12;
+/** PrimaryButton：原版 CornerRadius 12，按分级取 CONTROL 档 10 */
+export const PRIMARY_BUTTON_CORNER: number = RADIUS_CONTROL;
 
-/** SettingsSection：CornerRadius 16 / Padding 18 / 1px BorderBrush / 底色 CardBrush */
-export const SETTINGS_SECTION_CORNER: number = 16;
+/** SettingsSection：原版 CornerRadius 16，按分级落在 CARD 档 12（大容器） */
+export const SETTINGS_SECTION_CORNER: number = RADIUS_CARD;
 export const SETTINGS_SECTION_PADDING: number = 18;
 
-/** RoundedTextBox：CornerRadius 10 / Padding 10,5 / MinHeight 40 / FontSize 12 */
-export const TEXTBOX_CORNER: number = 10;
+/** RoundedTextBox：原版 CornerRadius 10，40 高输入框 = CONTROL 档 */
+export const TEXTBOX_CORNER: number = RADIUS_CONTROL;
 export const TEXTBOX_PADDING_H: number = 10;
 export const TEXTBOX_PADDING_V: number = 5;
 export const TEXTBOX_MIN_HEIGHT: number = 40;
@@ -474,8 +517,8 @@ export const LIGHT: ThemeColors = {
   COMBO_POPUP: '#FFFFFFFF',
   CONTROL_DIVIDER: '#1F000000',
   CONTROL_FILL: '#BFFFFFFF',
-  CONTROL_HOVER: '#FFF0F0F2',
-  CONTROL_PRESSED: '#FFE5E5E8',
+  CONTROL_HOVER: '#FFE3E3E8',
+  CONTROL_PRESSED: '#FFD6D6DB',
   DANGER: '#FFD70015',
   DANGER_BORDER: '#FF7F000C',
   DANGER_BUTTON_TEXT: '#FFFFFFFF',

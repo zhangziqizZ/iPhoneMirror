@@ -220,7 +220,7 @@ struct ConflictWarningBanner {
     .width('100%')
     .alignItems(VerticalAlign.Top)
     .padding({ left: 18, right: 18, top: 16, bottom: 16 })
-    .borderRadius(14)
+    .borderRadius(12)   // Apple 圆角分级：内容卡片 → 12（RADIUS_CARD）
     .backgroundColor(WARNING_SURFACE)
     .border({ width: 1, color: WARNING });
   }

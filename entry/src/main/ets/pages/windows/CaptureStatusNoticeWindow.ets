@@ -397,7 +397,7 @@ struct CaptureStatusNoticeWindow {
       Stack() {
         FluentSymbol({
           iconName: this.disc_icon(),
-          iconSize: 17,
+          iconSize: 16,
           iconColor: ON_ACCENT,
         });
       }
@@ -418,7 +418,7 @@ struct CaptureStatusNoticeWindow {
           .fontSize(12)
           .fontColor(MUTED_TEXT)
           .width('100%')
-          .margin({ top: 5 });
+          .margin({ top: 4 });
       }
       .alignItems(HorizontalAlign.Start)
       .layoutWeight(1)
@@ -426,7 +426,7 @@ struct CaptureStatusNoticeWindow {
     }
     .width('100%')
     .padding(14)
-    .borderRadius(12)
+    .borderRadius(12)   // Apple 圆角分级：通知行卡片 → 12（RADIUS_CARD）
     .backgroundColor(this.is_warning() ? WARNING_SURFACE : ERROR_SURFACE)
     .border({ width: 1, color: this.is_warning() ? WARNING : ERROR })
     .alignItems(VerticalAlign.Top);

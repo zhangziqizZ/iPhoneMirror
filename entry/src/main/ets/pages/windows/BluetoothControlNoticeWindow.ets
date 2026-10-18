@@ -689,7 +689,7 @@ struct BluetoothControlNoticeWindow {
     }
     .width('100%')
     .padding(14)
-    .borderRadius(12)
+    .borderRadius(12)   // Apple 圆角分级：通知行卡片 → 12（RADIUS_CARD）
     .backgroundColor(WARNING_SURFACE)
     .border({ width: 1, color: WARNING })
     .alignItems(VerticalAlign.Top);

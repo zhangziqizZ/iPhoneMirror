@@ -123,6 +123,8 @@ import {
   DriverBindState, ensure_usb_driver_bound, reset_usb_driver_bind_retry, usb_driver_bind_state,
 } from '../common/UsbDriverBinder';
 import window from '@ohos.window';
+// 官方沉浸光感下拉（bindMenu 命令菜单 + systemMaterial 玻璃触发器，见 MaterialSelect.ets）。
+import { MaterialSelect } from '../common/MaterialSelect';
 // 反向控制期间要收起本地系统指针（见 apply_pointer_visibility）。
 // setPointerVisibleSync 是 @since 10，低于本工程 compileSdkVersion(23)，可用。
 import pointer from '@ohos.multimodalInput.pointer';
@@ -146,6 +148,8 @@ import {
   CAPTURE_ACTION_RADIUS,
   ICON_TEXT_GAP_CARD,
   ICON_TEXT_GAP_QUICK,
+  RADIUS_CONTROL,
+  RADIUS_CARD,
   DARK,
   LIGHT,
   ThemeColors,
@@ -166,13 +170,18 @@ import {
   ACRYLIC_WINDOW_KEY,
   ACRYLIC_ALPHA_KEY,
   ACRYLIC_ALPHA_DEFAULT,
+  APP_WINDOW_VISIBLE_KEY,
   WINDOW_ACRYLIC_RESULT_KEY,
   WINDOW_SHADOW_RESULT_KEY,
   PERSIST_READ_RESULT_KEY,
   PERSIST_WRITE_RESULT_KEY,
 } from '../common/WindowServices';
 import { SecondaryButton, SUBWINDOW_ERROR_KEY, SubWindowHost } from '../common/SubWindow';
-import { save_acrylic_preferences, save_hide_pointer_preference } from '../common/AppPreferences';
+import {
+  save_acrylic_preferences,
+  save_hide_pointer_preference,
+  save_tray_preferences,
+} from '../common/AppPreferences';
 import {
   open_image_settings,
   DEFAULT_BRIGHTNESS, DEFAULT_CONTRAST, DEFAULT_SATURATION, DEFAULT_GAMMA,
@@ -206,6 +215,11 @@ import {
 } from '../common/UsbProjectionMode';
 import { save_language_preference } from '../common/AppPreferences';
 import { t, set_language, active_lang, LANGUAGE_LABELS, LANG_INDEX_KEY } from '../common/i18n';
+import { GlowLayer } from '../common/GlowLayer';
+import { status_glow_color, status_glow_animation } from '../common/GlowConfig';
+import { MINIMIZE_TO_TRAY_KEY } from '../common/WindowServices';
+import { TrayManager } from '../common/TrayManager';
+import { confirm_prompt } from './windows/AppPromptWindow';
 
 // ───────────────────── 选项（对照原版 ItemsSource / ComboBox） ─────────────────────
 
@@ -278,7 +292,7 @@ const ACRYLIC_ALPHA_OPTIONS: AcrylicAlphaOption[] = [
   { hex: '66', label: '40%' },
 ];
 
-const USB_MODE_ITEM_CORNER: number = 10;
+const USB_MODE_ITEM_CORNER: number = 12;
 
 // Strings: ApplicationModeLightweight / ApplicationModeComplete
 const APPLICATION_MODE_LABELS: string[] = ['轻量模式', '完整模式'];
@@ -381,6 +395,11 @@ function nav_footer(): NavEntry {
 const NAV_ICON_COLUMN: number = 48;
 const NAV_ITEM_HEIGHT: number = 44;
 const NAV_ITEM_BG_INSET: number = 4;
+// 导航项 / 汉堡按钮 hover 高亮的圆角（CONTROL 档 = 10）。
+// ★ 2026-10-18 修正：曾被一刀切成 16，40×44 的高亮块被钳成近乎胶囊的圆团，
+//   「圆角方块」观感消失（用户反馈）。Apple 侧栏选中态就是**连续的圆角方块**：
+//   半径取项高的约 1/4（44/4≈11），拐角柔和但方块感清晰。
+const NAV_ITEM_BG_RADIUS: number = 10;
 const NAV_ACTIVE_BAR_WIDTH: number = 3;
 const NAV_ACTIVE_BAR_HEIGHT: number = 18;
 /**
@@ -414,7 +433,7 @@ const NAV_TOOLTIP_BETWEEN_DELAY_MS: number = 100;
  * 为什么自绘而不是用 PopupOptions 的 message：message 形式改不了内边距、行高与边框。
  */
 const NAV_TOOLTIP_MAX_WIDTH: number = 260;
-const NAV_TOOLTIP_RADIUS: number = 4;
+const NAV_TOOLTIP_RADIUS: number = 16;
 const NAV_TOOLTIP_PADDING: number = 12;   // Padding 8 + Margin 4
 const NAV_TOOLTIP_FONT_SIZE: number = 12;
 const NAV_TOOLTIP_LINE_HEIGHT: number = 16;
@@ -485,6 +504,27 @@ function reverse_label(state: string): string {
  * 鸿蒙 PC 三键每个约 46vp，三个 + 右边距按 144vp 预留。
  */
 const TITLE_BUTTON_RESERVED_WIDTH: number = 144;
+// 标题栏高度：**必须与 EntryAbility 的 setWindowDecorHeight(56) 保持一致**。
+// ★ 2026-10-17 对齐三键（用户要求"标题块中心和三键持平"）：系统三键在装饰带内
+//   垂直居中，装饰带 56 ⇒ 三键中心在 y=28；header 内容行只要也占满 56 并自身
+//   垂直居中，中心同为 28 ⇒ 标题块中心与三键严格持平。
+//   （此前 60 与装饰带 56 不等，且内容行被 TopStart 顶在 header 顶部，
+//   中心落在 ~22vp，比三键中心高了约 6vp。）
+// 必须显式给出——header 的 Stack 里有一层 height('100%') 的边缘辉光 GlowLayer，
+// 不给固定高度会形成"100% 引用未定高父级"的循环测量，实测辉光层会把 header
+// 撑到整列可用高度（布局塌陷）。
+const HEADER_HEIGHT: number = 56;
+// 系统标题栏/三键区高度（与 EntryAbility.setWindowDecorHeight 一致）。
+// ★ 2026-10-17 修正（用户反馈"顶上往下了，应该往上移"）：此前这里又加了 56 的顶部
+//   内边距，与 EntryAbility 里 setWindowDecorHeight(56) **已经**为系统三键预留的那
+//   一段重复叠加 ⇒ 自绘标题被整体推到 y≈112，窗口顶部空出一大片。
+//   三键区的纵向让位由 setWindowDecorHeight 负责，横向让位由 header 右侧的
+//   TITLE_BUTTON_RESERVED_WIDTH 负责 ⇒ 这里改回 0，标题回到窗口最顶端。
+const TITLE_BAR_TOP_PADDING_VP: number = 0;
+// 窗口恢复动画窗口期（ms）：从"不可见变为可见"起的这段时间内，临时关掉全窗磨砂
+// （backgroundEffect radius 32）。磨砂在窗口缩放动画里每帧都要重算，是"打开最小化
+// 的 App 时动画掉帧"的最大单一来源；动画跑完再恢复，稳态观感不变。
+const WINDOW_RESTORE_GRACE_MS: number = 600;
 
 /**
  * 设备枚举周期。原版是 MainWindow 里 2 秒一次的 DispatcherTimer → RefreshAsync
@@ -523,21 +563,26 @@ function device_signature(list: DeviceInfo[]): string {
 
 // @Extend 必须定义在文件顶层。这里只做「无参样式」，可变的显隐/使能状态在调用处叠加。
 
-/** 原版 WorkspaceCardBorder：设备面板 / 投屏面板 / 统计面板的外壳 */
+/** 原版 WorkspaceCardBorder：设备面板 / 投屏面板 / 统计面板的外壳。
+ *  圆角走 RADIUS_SURFACE(16)：这是撑满主界面分区的「面板容器」（Theme.ets 分级里
+ *  SURFACE 档的定义就是面板容器），与窗口同级，不是容器内的卡片。 */
 @Extend(Column)
 function workspace_card(colors: ThemeColors) {
   .backgroundColor(colors.CARD)
-  .borderRadius(12)
+  .borderRadius(16)
   .border({ width: 1, color: colors.BORDER_SOFT })
 }
 
-/** 原版 ControlSectionCard：设置面板里的卡片 */
+/** 原版 ControlSectionCard：设置面板里的卡片。
+ *  圆角走 RADIUS_CARD(12)：容器内的内容卡片档。本文件中 36±4 高的按钮 / 输入框 /
+ *  分段项统一走 RADIUS_CONTROL(10)，设备行 / 设置分区走 RADIUS_CARD(12)，
+ *  只有面板外壳 / 预览画布 / tooltip 等窗口级容器保留 16（见 Theme.ets 圆角阶梯）。 */
 @Extend(Column)
 function control_card(colors: ThemeColors) {
   .width('100%')
   .padding(12)
   .backgroundColor(colors.CARD)
-  .borderRadius(10)
+  .borderRadius(RADIUS_CARD)
   .border({ width: 1, color: colors.BORDER_SOFT })
   .margin({ bottom: 10 })
 }
@@ -571,8 +616,8 @@ const FALLBACK_COLORS: ThemeColors = {
   COMBO_POPUP: '#F2292929',
   CONTROL_DIVIDER: '#26FFFFFF',
   CONTROL_FILL: '#14FFFFFF',
-  CONTROL_HOVER: '#20FFFFFF',
-  CONTROL_PRESSED: '#2AFFFFFF',
+  CONTROL_HOVER: '#33FFFFFF',
+  CONTROL_PRESSED: '#45FFFFFF',
   DANGER: '#FFC9363E',
   DANGER_BORDER: '#FFFFAAA5',
   DANGER_BUTTON_TEXT: '#FFFFFFFF',
@@ -680,7 +725,7 @@ struct ToolPanelButton {
   @StorageLink(THEME_SCHEME_KEY) scheme: string = 'dark';
   @Prop btnLabel: string = '';
   @Prop iconName: string = '';
-  @Prop iconSize: number = 15;
+  @Prop iconSize: number = 16;
   @Prop usable: boolean = false;
   on_action: () => void = (): void => {};
   on_blocked: () => void = (): void => {};
@@ -706,7 +751,7 @@ struct ToolPanelButton {
     .width('100%')
     .height(36)
     .padding({ left: 8, right: 8 })
-    .borderRadius(11)
+    .borderRadius(RADIUS_CONTROL)
     .backgroundColor(this.palette().CONTROL_FILL)
     .opacity(this.usable ? 1.0 : 0.34)
     .margin({ bottom: 8 })
@@ -727,7 +772,7 @@ struct QuickBarButton {
   @StorageLink(THEME_SCHEME_KEY) scheme: string = 'dark';
   @Prop btnLabel: string = '';
   @Prop iconName: string = '';
-  @Prop iconSize: number = 15;
+  @Prop iconSize: number = 16;
   @Prop usable: boolean = false;
   on_action: () => void = (): void => {};
   on_blocked: () => void = (): void => {};
@@ -754,7 +799,7 @@ struct QuickBarButton {
     }
     .height(36)
     .padding({ left: 10, right: 10 })
-    .borderRadius(11)
+    .borderRadius(RADIUS_CONTROL)
     .backgroundColor(this.palette().CONTROL_FILL)
     .opacity(this.usable ? 1.0 : 0.34)
     .margin({ left: 6 })
@@ -792,7 +837,7 @@ struct StatCell {
         .fontSize(17)
         .fontWeight(FontWeight.Medium)
         .fontColor(this.palette().TEXT)
-        .margin({ top: 3 })
+        .margin({ top: 4 })
         .width('100%')
       Text(this.cellDetail)
         .fontSize(10)
@@ -838,7 +883,7 @@ struct DeviceRow {
       }
       .width(32)
       .height(48)
-      .borderRadius(6)
+      .borderRadius(16)   // 32×48 竖胶囊（半径 = 短边一半，手机轮廓暗示），正圆特例，保留
       .border({ width: 2, color: this.selected ? this.palette().ACCENT : this.palette().MUTED_TEXT })
       .alignItems(HorizontalAlign.Center)
 
@@ -853,7 +898,7 @@ struct DeviceRow {
         Text(this.devModel)                                       // ModelDisplay
           .fontSize(11)
           .fontColor(this.palette().MUTED_TEXT)
-          .margin({ top: 3 })
+          .margin({ top: 4 })
           .width('100%')
         Text(this.devOs)                                          // OsDisplay
           .fontSize(11)
@@ -862,7 +907,7 @@ struct DeviceRow {
         Text(this.devStatus)                                      // StatusDisplay
           .fontSize(10)
           .fontColor(this.palette().SUCCESS)
-          .margin({ top: 5 })
+          .margin({ top: 4 })
           .width('100%')
       }
       .alignItems(HorizontalAlign.Start)
@@ -871,7 +916,7 @@ struct DeviceRow {
     }
     .width('100%')
     .padding(8)
-    .borderRadius(8)
+    .borderRadius(RADIUS_CARD)
     .backgroundColor(this.selected ? this.palette().SELECTION : Color.Transparent)
     .hoverEffect(HoverEffect.Highlight)
     .onClick((): void => {
@@ -913,6 +958,14 @@ struct Index {
   private themePalette(): ThemeColors {
     const palette: ThemeColors | undefined = this.scheme === 'dark' ? DARK : LIGHT;
     return palette ?? FALLBACK_COLORS;
+  }
+
+  /**
+   * SelectOption.value 的类型是 ResourceStr（string | Resource），
+   * 这里把字面量字符串那一支取出来，Resource 那一支退化成空串。
+   */
+  private optionLabel(value: ResourceStr): string {
+    return typeof value === 'string' ? value : '';
   }
 
   /**
@@ -1009,6 +1062,8 @@ struct Index {
   @State navRailWidth: number = NAV_RAIL_COMPACT;
   /** 三横线按钮是否被按下（按下时图标横向压缩到 0.66，复刻 WPF-UI 按压反馈）。 */
   @State navTogglePressed: boolean = false;
+  /** 三横线按钮是否被悬停（自绘圆角高亮用，替代系统 hoverEffect 的灰色方框）。 */
+  @State navToggleHover: boolean = false;
   /**
    * 当前正在显示名称气泡的导航项 key（'' = 不显示）。
    *
@@ -1016,6 +1071,8 @@ struct Index {
    * 这里用一个 key 表示"哪一项的气泡开着"，配合 nav_item 上的 bindPopup 实现。
    */
   @State navTipKey: string = '';
+  /** 当前 hover 高亮的导航项 key（'' = 无）。用于自绘圆角 hover 背景，替代系统方框。 */
+  @State hoverNavKey: string = '';
   /** 气泡延迟显示的计时器 id（-1 = 无）。 */
   private navTipTimer: number = -1;
   /** 上一次气泡消失的时刻（Date.now），用于复刻 BetweenShowDelay；0 = 尚未显示过。 */
@@ -1048,12 +1105,34 @@ struct Index {
    * ★ 已实机确认生效（读数：窗口透明=是、容器配色探测成功）⇒ 属正式特性，不再标实验；
    *   磨砂能否模糊到桌面取决于系统合成器，但即使不模糊也只是"半透明无磨砂"，不影响功能。
    */
+  /**
+   * 主窗口当前是否可见（EntryAbility 订阅 windowStageEvent 写入）。
+   * ★ 不可见时**彻底停掉** 500ms 心跳 —— 见 APP_WINDOW_VISIBLE_KEY 的注释。
+   */
+  @Watch('on_window_visible_changed')
+  @StorageLink(APP_WINDOW_VISIBLE_KEY) windowVisible: boolean = true;
+  /**
+   * 恢复动画窗口期（重新可见后的 WINDOW_RESTORE_GRACE_MS 毫秒）。
+   * 这段时间把全窗磨砂临时关掉，让系统恢复动画跑满帧。
+   */
+  @State windowRestoring: boolean = false;
+  private restoreTimer: number = -1;
+
   @StorageLink(ACRYLIC_WINDOW_KEY) acrylicOn: boolean = true;
   /**
    * 半透明浓度档位（alpha 十六进制串）。默认取 ROOT_ACRYLIC_ALPHA_HEX，
    * 设置面板可现场切换 ⇒ 调浓淡不必再改代码重建。
    */
   @StorageLink(ACRYLIC_ALPHA_KEY) acrylicAlpha: string = ROOT_ACRYLIC_ALPHA_HEX;
+  // ★ 2026-10-18 删除「光感效果」总开关与「光感强度」弱/中/强档位（用户原话：
+  //   "删除光感效果的开关，这个本来就没有用"）。此前这里的 glowEnabled /
+  //   glowStrength 两个 @StorageLink 随之删除——辉光本身并不受影响：
+  //   GlowLayer 自己 @StorageLink 读 AppStorage（由 AppPreferences 初始化与落盘），
+  //   强度档位保持用户上次选中的值继续生效，只是设置页不再提供这两个控制入口。
+  //   背景：沉浸光感的强度在鸿蒙上是**系统设置**（设置 > 桌面和个性化 > 沉浸光感），
+  //   App 侧没有任何调节接口（已核对官方文档），UI 上放开关/档位只会误导用户。
+  /** 最小化到托盘开关（投屏中关窗→隐藏，未投屏→退出）。 */
+  @StorageLink(MINIMIZE_TO_TRAY_KEY) minimizeToTray: boolean = true;
   /**
    * 主窗属性回读（"系统到底给了什么"，不是"我们设了什么"）。
    * 磨砂半透明要能透视桌面，前提是系统真的给了透明窗口；SDK 里没有公开的
@@ -1364,6 +1443,25 @@ struct Index {
       this.driverState = `核心加载失败：${lastError()}`;   // Strings: CoreLoadFailedFormat
       this.show_startup_error(lastError());
     }
+    // ★ 心跳改为"只在窗口可见时跑"（见 start_stats_timer 的注释）。
+    this.start_stats_timer();
+  }
+
+  /**
+   * 启动 500ms 心跳（状态轮询 + 每 2 秒一轮设备枚举）。
+   *
+   * ★ 只在窗口**可见**时启动。最小化之后这条心跳原本照跑（每秒两次 mDNS pump、
+   *   接管态重算、蓝牙状态、指针可见性自愈……），纯属空转；更要命的是用户点开
+   *   恢复的那一刻，这批 JS 工作正好和系统的窗口恢复动画抢 CPU，
+   *   表现就是"打开动画明显比其他软件掉帧"。
+   */
+  private start_stats_timer(): void {
+    if (this.statsTimer >= 0) {
+      return;                                  // 已在跑，不重复建
+    }
+    if (!this.windowVisible) {
+      return;                                  // 不可见 → 不跑
+    }
     this.statsTimer = setInterval((): void => {
       this.poll_status();
       // 设备清单：原版 2 秒一次。插上数据线后界面必须在这个周期内认出设备 ——
@@ -1375,6 +1473,39 @@ struct Index {
         this.refresh(false);
       }
     }, 500);
+  }
+
+  private stop_stats_timer(): void {
+    if (this.statsTimer >= 0) {
+      clearInterval(this.statsTimer);
+      this.statsTimer = -1;
+    }
+  }
+
+  /**
+   * windowVisible 变化回调（@Watch）：
+   *   不可见 → 停心跳（最小化后不再空转，也不抢恢复动画的 CPU）；
+   *   重新可见 → 先进入"恢复动画窗口期"（临时关掉全窗磨砂），再重启心跳。
+   */
+  on_window_visible_changed(): void {
+    if (this.windowVisible) {
+      this.mark_restoring();
+      this.start_stats_timer();
+    } else {
+      this.stop_stats_timer();
+    }
+  }
+
+  /** 标记"恢复动画窗口期"：这段时间内关掉全窗磨砂，让系统恢复动画跑满帧。 */
+  private mark_restoring(): void {
+    this.windowRestoring = true;
+    if (this.restoreTimer >= 0) {
+      clearTimeout(this.restoreTimer);
+    }
+    this.restoreTimer = setTimeout((): void => {
+      this.windowRestoring = false;
+      this.restoreTimer = -1;
+    }, WINDOW_RESTORE_GRACE_MS);
   }
 
   aboutToDisappear(): void {
@@ -1392,6 +1523,11 @@ struct Index {
     if (this.statsTimer >= 0) {
       clearInterval(this.statsTimer);
       this.statsTimer = -1;
+    }
+    // 恢复动画窗口期的一次性定时器也要收掉：否则页面销毁后它仍会去改 @State。
+    if (this.restoreTimer >= 0) {
+      clearTimeout(this.restoreTimer);
+      this.restoreTimer = -1;
     }
     this.surfaceAttached = false;
     this.attachedSurfaceId = '';
@@ -1717,6 +1853,8 @@ struct Index {
     }
     const prevState: number = this.lastCaptureState;
     const state: number = status.state;
+    // 系统托盘：每轮把采集状态同步给托盘通知（TrayManager 内部按状态去重）。
+    TrayManager.shared().updateIconState(state);
     // 有线诊断：会话不在（Idle）时清空，避免把上一轮的记录当成本次结果；
     // 其余状态（含 Error / Stopped）都照实读，失败现场因此得以保留在屏幕上。
     this.usbDiagnostic = state === 0 ? '' : usbDiagnostics();
@@ -1943,6 +2081,76 @@ struct Index {
     } catch (error) {
       const failure = error as BusinessError;
       console.warn('iPhoneMirror start_window_drag failed:', failure.message);
+    }
+  }
+
+  /**
+   * 自绘标题栏的「最小化」：标准最小化到任务栏（不是隐藏到托盘）。
+   */
+  minimize_window(): void {
+    try {
+      const ctx: common.Context = this.getUIContext().getHostContext() as common.Context;
+      window.getLastWindow(ctx).then((win: window.Window): void => {
+        win.minimize().catch((error: BusinessError): void => {
+          console.warn('iPhoneMirror minimize failed:', error.message);
+        });
+      }).catch((error: BusinessError): void => {
+        console.warn('iPhoneMirror getLastWindow failed:', error.message);
+      });
+    } catch (error) {
+      const failure = error as BusinessError;
+      console.warn('iPhoneMirror minimize_window failed:', failure.message);
+    }
+  }
+
+  /**
+   * 自绘标题栏的「关闭」：按「最小化到托盘」偏好 + 投屏状态决定行为。
+   *   投屏中 + 偏好开启 → 隐藏窗口到托盘（投屏继续）；
+   *   未投屏（或偏好关闭）→ 走退出（投屏中先弹确认，见 exit_app）。
+   */
+  on_custom_close(): void {
+    const minimizeToTray: boolean = AppStorage.get<boolean>(MINIMIZE_TO_TRAY_KEY) ?? true;
+    if (this.has_capture_session() && minimizeToTray) {
+      TrayManager.shared().hideMainWindow();
+      return;
+    }
+    this.exit_app();
+  }
+
+  /**
+   * 退出应用：投屏中先弹确认对话框，用户确认后才真正退出；未投屏直接退出。
+   */
+  exit_app(): void {
+    if (this.has_capture_session()) {
+      const ctx: common.Context | null = this.appContext;
+      if (ctx === null) {
+        return;
+      }
+      confirm_prompt(ctx, t('确认退出'), t('投屏正在进行，确认退出？'),
+        (confirmed: boolean): void => {
+          if (confirmed) {
+            this.terminate_ability();
+          }
+        });
+      return;
+    }
+    this.terminate_ability();
+  }
+
+  /** 结束本 UIAbility（应用退出）。 */
+  private terminate_ability(): void {
+    try {
+      const ctx: common.Context | undefined = this.getUIContext().getHostContext();
+      if (ctx === undefined || ctx === null) {
+        return;
+      }
+      const abilityCtx: common.UIAbilityContext = ctx as common.UIAbilityContext;
+      abilityCtx.terminateSelf().catch((error: BusinessError): void => {
+        console.warn('iPhoneMirror terminateSelf failed:', error.message);
+      });
+    } catch (error) {
+      const failure = error as BusinessError;
+      console.warn('iPhoneMirror terminate_ability failed:', failure.message);
     }
   }
 
@@ -2681,18 +2889,29 @@ struct Index {
    * 激活态配色也照触发器来（原版 MultiTrigger）：
    *   IsActive 且 pane 展开 → InteractionBackground = ControlFillBrush
    *   IsActive 且 pane 收起 → InteractionBackground = Transparent（只剩强调条）
-   *   非激活               → Transparent（hover 时由 hoverEffect 接管）
+   *   非激活               → Transparent（hover 时见 nav_item_background：
+   *                           自绘 CONTROL_HOVER 圆角，**不用**系统 hoverEffect
+   *                           —— 它会画出贯穿整条侧栏的方框，用户明确反感过）
    * 原版此处另有「激活时文字 SemiBold + AccentBrush 前景」，一并还原。
    */
   @Builder
   nav_item(entry: NavEntry) {
     Stack({ alignContent: Alignment.Center }) {
-      // ① 背景层：原版 InteractionBackground，左右内缩 4、圆角 7。
+      // ① 背景层：原版 InteractionBackground，左右内缩 4。
+      //    圆角取 CONTROL 档 10（NAV_ITEM_BG_RADIUS）—— 圆角方块，非胶囊。
       Row()
         .width(this.navRailWidth - NAV_ITEM_BG_INSET * 2)
         .height('100%')
-        .borderRadius(7)
+        .borderRadius(NAV_ITEM_BG_RADIUS)
         .backgroundColor(this.nav_item_background(entry.key))
+
+      // 选中态辉光层
+      if (this.is_nav_active(entry.key)) {
+        GlowLayer({
+          glowType: 'radial',
+          glowColor: this.themePalette().ACCENT + '20',
+        })
+      }
 
       // ② 强调条：原版 ActiveIndicator（3×18 圆角 2、左 4、垂直居中）。
       Row()
@@ -2734,8 +2953,9 @@ struct Index {
     .width('100%')
     .height(NAV_ITEM_HEIGHT)
     .margin({ top: 2, bottom: 2 })              // 原版 ShellNavigationItem Margin="0,2"
-    .hoverEffect(HoverEffect.Highlight)
+    // 不用系统 hoverEffect（会画出方框），hover 背景由 InteractionBackground 自绘圆角。
     .onHover((isHover: boolean): void => {
+      this.hoverNavKey = isHover ? entry.key : '';
       // 原版每个 ui:NavigationViewItem 都设了 ToolTip（NavXxxDescription），
       // hover 由 WPF 内建弹出；这里按同样的时序驱动 nav_tooltip。
       if (isHover) {
@@ -2750,10 +2970,13 @@ struct Index {
     })
   }
 
-  /** 原版 InteractionBackground 的四种取值（见 nav_item 注释里的触发器表）。 */
+  /** 原版 InteractionBackground 的四种取值（见 nav_item 注释里的触发器表）。
+   *  额外加入 hover：非激活项 hover 时用 CONTROL_HOVER，圆角背景替代系统方框高亮。
+   */
   private nav_item_background(key: string): ResourceColor {
+    const isHover: boolean = this.hoverNavKey === key;
     if (!this.is_nav_active(key)) {
-      return Color.Transparent;
+      return isHover ? this.themePalette().CONTROL_HOVER : Color.Transparent;
     }
     return this.navExpanded ? this.themePalette().CONTROL_FILL : Color.Transparent;
   }
@@ -2920,13 +3143,30 @@ struct Index {
       // 给图标挂了 ScaleTransform：**按下时横向压到 0.66、松开弹回**（各 80ms），
       // 这就是"点三横线时图标会变化"的出处（NavigationViewBasePaneButtonStyle.xaml）。
       Row() {
-        FluentSymbol({ iconName: 'Navigation20', iconSize: 28, iconColor: this.themePalette().TEXT })
-          .scale({ x: this.navTogglePressed ? NAV_TOGGLE_PRESSED_SCALE : 1 })
+        // hover 背景层：与 nav_item 的 InteractionBackground **同几何**
+        // （左右内缩 NAV_ITEM_BG_INSET=4、圆角 NAV_ITEM_BG_RADIUS=10）。不用系统
+        // hoverEffect（会画出贯穿整条侧栏的方框），左上角按钮与导航项观感统一。
+        Row() {
+          FluentSymbol({ iconName: 'Navigation20', iconSize: 28, iconColor: this.themePalette().TEXT })
+            .scale({ x: this.navTogglePressed ? NAV_TOGGLE_PRESSED_SCALE : 1 })
+        }
+        .width('100%')
+        .height('100%')
+        // ★ 对齐 math（2026-10-18 修）：外层 Row 宽 48、padding 左右 4 ⇒ 本层占 4..44；
+        //   导航项图标是 20px 图标居中在 48 宽的图标列里 ⇒ 中心在 x=24。
+        //   本层 28px 图标要落在同一中心 24 ⇒ 图标须占 10..38 ⇒ 左内缩 10-4=6。
+        //   （此前写 10，图标中心落在 28，比导航项整体右偏 4px —— 用户反馈"没对齐"）
+        .padding({ left: 6 })
+        .borderRadius(NAV_ITEM_BG_RADIUS)
+        .backgroundColor(this.navToggleHover
+          ? this.themePalette().CONTROL_HOVER : Color.Transparent)
       }
       .width('100%')
       .height(44)
-      .padding({ left: 14 })
-      .hoverEffect(HoverEffect.Highlight)
+      .padding({ left: NAV_ITEM_BG_INSET, right: NAV_ITEM_BG_INSET })
+      .onHover((isHover: boolean): void => {
+        this.navToggleHover = isHover;
+      })
       .onTouch((event: TouchEvent): void => {
         // 复刻 WPF EventTrigger：PreviewMouseLeftButtonDown/Up 驱动 IconScaleTransform。
         if (event.type === TouchType.Down) {
@@ -2977,99 +3217,144 @@ struct Index {
 
   @Builder
   header() {
-    Row() {
-      Column() {
-        Text('iPhoneMirror')
-          .fontSize(24)                                  // 原版 FontSize=24 SemiBold
-          .fontWeight(FontWeight.Medium)
-          .fontColor(this.themePalette().TEXT)
-        // Strings: AppSubtitleConnectivity（Windows → HarmonyOS，见文件头替换清单）
-        Text('HarmonyOS USB 低延迟与 AirPlay 无线投屏')
-          .fontSize(12)                                  // 原版 FontSize=12
-          .fontColor(this.themePalette().MUTED_TEXT)
-          .margin({ top: 4 })
-      }
-      .alignItems(HorizontalAlign.Start)
-      // 原版可拖动区域（WindowChrome）；鸿蒙用 window.startMoving()
-      .onMouse((event: MouseEvent): void => {
-        if (event.action === MouseAction.Press) {
-          this.start_window_drag();
-        }
-      })
-
-      Blank()
-
-      // 原版：Ellipse 6×6 Fill=WarningBrush + 8px 间距 + DriverState（MaxWidth 360）
+    Stack() {
       Row() {
-        Circle({ width: 6, height: 6 })
-          .fill(this.devices.length > 0 ? this.themePalette().SUCCESS : this.themePalette().WARNING)
-        Text(this.driverState)
-          .fontSize(12)
-          .fontColor(this.themePalette().TEXT)
-          .margin({ left: 8 })
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-      }
-      .constraintSize({ maxWidth: 360 })
-      .margin({ right: 14 })
+        Column() {
+          Text('iPhoneMirror')
+            .fontSize(24)                                  // 原版 FontSize=24 SemiBold
+            .fontWeight(FontWeight.Medium)
+            .fontColor(this.themePalette().TEXT)
+          // Strings: AppSubtitleConnectivity（Windows → HarmonyOS，见文件头替换清单）
+          Text('HarmonyOS USB 低延迟与 AirPlay 无线投屏')
+            .fontSize(12)                                  // 原版 FontSize=12
+            .fontColor(this.themePalette().MUTED_TEXT)
+            .margin({ top: 4 })
+        }
+        .alignItems(HorizontalAlign.Start)
+        // 标题列占满剩余宽度，把状态行 / 开始投屏按钮挤到右侧（对齐 WPF Grid * | Auto | 18 | Auto）。
+        .layoutWeight(1)
+        // 原版可拖动区域（WindowChrome）；鸿蒙用 window.startMoving()
+        .onMouse((event: MouseEvent): void => {
+          if (event.action === MouseAction.Press) {
+            this.start_window_drag();
+          }
+        })
 
-      // 原版 CaptureActionButton（MainWindow.xaml:698-760）：
-      //   Width 132 / Height 40 / MinHeight 40 / Padding 16,8 / CornerRadius 12 /
-      //   BorderThickness 1；文字不单独设 FontSize，继承基础 Button 样式的
-      //   FontSize=14 / SemiBold（App.xaml:44-45）。
-      //   无会话 → CaptureStartBrush「开始投屏」+ StartCommand；
-      //   有会话 → CaptureStopBrush「停止投屏」+ StopCommand（DataTrigger HasCaptureSession）。
-      //   模板触发器：hover 0.88 / pressed 0.72 / **IsEnabled=False → Opacity 0.34**。
-      //   WPF 里 Command 绑定会按 CanExecute 自动置 IsEnabled，所以「不可用」的外观
-      //   就是整块（底色+描边+文字）按 0.34 淡化 —— 这里照此实现，并且禁用时不响应点击。
-      if (this.has_capture_session()) {
-        Text(t('停止投屏'))                                 // Strings: StopMirroring
-          .fontSize(14)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(this.themePalette().CAPTURE_ACTION_TEXT)
-          .textAlign(TextAlign.Center)
-          .padding({ left: 16, right: 16, top: 8, bottom: 8 })
+        // 原版：Ellipse 6×6 Fill=WarningBrush + 8px 间距 + DriverState（MaxWidth 360）
+        Row() {
+          Stack() {
+            GlowLayer({
+              glowType: 'radial',
+              glowColor: status_glow_color(this.capture?.state ?? 0, this.scheme),
+              glowAnimation: status_glow_animation(this.capture?.state ?? 0),
+            })
+            Circle({ width: 6, height: 6 })
+              .fill(this.devices.length > 0 ? this.themePalette().SUCCESS : this.themePalette().WARNING)
+          }
+          .width(24)
+          .height(24)
+
+          Text(this.driverState)
+            .fontSize(12)
+            .fontColor(this.themePalette().TEXT)
+            .margin({ left: 8 })
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
+        .constraintSize({ maxWidth: 360 })
+        .margin({ right: 14 })
+
+        // 原版 CaptureActionButton（MainWindow.xaml:698-760）：
+        //   Width 132 / Height 40 / MinHeight 40 / Padding 16,8 / CornerRadius 12 /
+        //   BorderThickness 1；文字不单独设 FontSize，继承基础 Button 样式的
+        //   FontSize=14 / SemiBold（App.xaml:44-45）。
+        //   无会话 → CaptureStartBrush「开始投屏」+ StartCommand；
+        //   有会话 → CaptureStopBrush「停止投屏」+ StopCommand（DataTrigger HasCaptureSession）。
+        //   模板触发器：hover 0.88 / pressed 0.72 / **IsEnabled=False → Opacity 0.34**。
+        //   WPF 里 Command 绑定会按 CanExecute 自动置 IsEnabled，所以「不可用」的外观
+        //   就是整块（底色+描边+文字）按 0.34 淡化 —— 这里照此实现，并且禁用时不响应点击。
+        if (this.has_capture_session()) {
+          Stack() {
+            GlowLayer({
+              glowType: 'radial',
+              glowColor: this.themePalette().CAPTURE_STOP + '40',
+              glowHoverTrigger: true,
+            })
+            Text(t('停止投屏'))                                 // Strings: StopMirroring
+              .fontSize(14)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(this.themePalette().CAPTURE_ACTION_TEXT)
+              .textAlign(TextAlign.Center)
+              .padding({ left: 16, right: 16, top: 8, bottom: 8 })
+              .width(CAPTURE_ACTION_WIDTH)
+              .height(CAPTURE_ACTION_HEIGHT)
+              .borderRadius(CAPTURE_ACTION_RADIUS)
+              .backgroundColor(this.themePalette().CAPTURE_STOP)
+              .border({ width: 1, color: this.themePalette().CAPTURE_STOP_BORDER })
+              .opacity(this.can_stop() ? 1.0 : 0.34)
+              .onClick((): void => {
+                if (this.can_stop()) {
+                  this.stop();
+                }
+              })
+          }
           .width(CAPTURE_ACTION_WIDTH)
           .height(CAPTURE_ACTION_HEIGHT)
-          .borderRadius(CAPTURE_ACTION_RADIUS)
-          .backgroundColor(this.themePalette().CAPTURE_STOP)
-          .border({ width: 1, color: this.themePalette().CAPTURE_STOP_BORDER })
-          .opacity(this.can_stop() ? 1.0 : 0.34)
-          .hoverEffect(this.can_stop() ? HoverEffect.Highlight : HoverEffect.None)
-          .onClick((): void => {
-            if (this.can_stop()) {
-              this.stop();
-            }
-          })
-      } else {
-        Text(t('开始投屏'))                                 // Strings: StartMirroring
-          .fontSize(14)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(this.themePalette().CAPTURE_ACTION_TEXT)
-          .textAlign(TextAlign.Center)
-          .padding({ left: 16, right: 16, top: 8, bottom: 8 })
+        } else {
+          Stack() {
+            GlowLayer({
+              glowType: 'radial',
+              glowColor: this.themePalette().CAPTURE_START + '40',
+              glowHoverTrigger: true,
+            })
+            Text(t('开始投屏'))                                 // Strings: StartMirroring
+              .fontSize(14)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(this.themePalette().CAPTURE_ACTION_TEXT)
+              .textAlign(TextAlign.Center)
+              .padding({ left: 16, right: 16, top: 8, bottom: 8 })
+              .width(CAPTURE_ACTION_WIDTH)
+              .height(CAPTURE_ACTION_HEIGHT)
+              .borderRadius(CAPTURE_ACTION_RADIUS)
+              .backgroundColor(this.themePalette().CAPTURE_START)
+              .border({ width: 1, color: this.themePalette().CAPTURE_START_BORDER })
+              .opacity(this.can_start() ? 1.0 : 0.34)
+              .onClick((): void => {
+                // 原版 Command 在 CanExecute=false 时根本不触发；这里显式挡一次，
+                // 不再往 hint 里写"请先选择设备"——按钮已经是灰的，原因由状态行说明。
+                if (this.can_start()) {
+                  this.start();
+                }
+              })
+          }
           .width(CAPTURE_ACTION_WIDTH)
           .height(CAPTURE_ACTION_HEIGHT)
-          .borderRadius(CAPTURE_ACTION_RADIUS)
-          .backgroundColor(this.themePalette().CAPTURE_START)
-          .border({ width: 1, color: this.themePalette().CAPTURE_START_BORDER })
-          .opacity(this.can_start() ? 1.0 : 0.34)
-          .hoverEffect(this.can_start() ? HoverEffect.Highlight : HoverEffect.None)
-          .onClick((): void => {
-            // 原版 Command 在 CanExecute=false 时根本不触发；这里显式挡一次，
-            // 不再往 hint 里写"请先选择设备"——按钮已经是灰的，原因由状态行说明。
-            if (this.can_start()) {
-              this.start();
-            }
-          })
-      }
+        }
 
-      // 给系统窗口三键让位。三键由系统画在窗口右上角并浮在内容之上，
-      // 这里在 header 右侧留出同宽空白，避免状态点 / 投屏按钮被压住。
-      Column().width(TITLE_BUTTON_RESERVED_WIDTH)
+        // 给系统窗口三键让位。三键由系统画在窗口右上角并浮在内容之上，
+        // 这里在 header 右侧留出同宽空白，避免状态点 / 投屏按钮被压住。
+        Column().width(TITLE_BUTTON_RESERVED_WIDTH)
+      }
+      .width('100%')
+      // ★ 占满 header 高度并自身垂直居中：标题块 / 状态行 / 投屏按钮的中心都落在
+      //   HEADER_HEIGHT/2 = 28，与系统三键在装饰带（56）内的中心 28 严格持平。
+      //   （此前行高是内容自适应且被 Stack 的 TopStart 顶在顶部，中心 ~22，偏高。）
+      .height(HEADER_HEIGHT)
+      .alignItems(VerticalAlign.Center)
+
+      // ★ 2026-10-18 删除「标题栏底部边缘辉光」（用户反馈"顶栏多了一层蓝色"）：
+      //   它本来是一层 linear GlowLayer（ACCENT + '20'）。GlowLayer 的 applyAlpha
+      //   修好之前它**根本画不出来**（11 位色串喂给 Canvas 解析失败），所以一直没人
+      //   见过它长什么样；修好之后它整条渲染出来，就是标题栏上那条多余的蓝色带。
+      //   原版 WPF FluentWindow 的标题栏没有这一层，属自行加的装饰 ⇒ 直接删掉，
+      //   不调色也不调方向（用户要的是"没有这一层"）。
     }
     .width('100%')
-    .alignItems(VerticalAlign.Center)
+    // 显式高度 + 顶部对齐，见 HEADER_HEIGHT 注释：否则底部辉光层(height '100%')
+    // 会把 Stack 撑满整列。
+    .height(HEADER_HEIGHT)
+    .alignContent(Alignment.TopStart)
+    // header 与下方内容区的间距（原先挂在内容行上，行高改为占满 header 后移到这里）。
     .margin({ bottom: 14 })
   }
 
@@ -3099,7 +3384,7 @@ struct Index {
         .width(32)
         .height(32)
         .justifyContent(FlexAlign.Center)
-        .borderRadius(6)
+        .borderRadius(16)   // 32×32 正圆（半径 = 短边一半），不属于分级表，保留
         .hoverEffect(HoverEffect.Highlight)
         .onClick((): void => {
           this.showDevicePanel = false;
@@ -3121,20 +3406,20 @@ struct Index {
           .fontSize(14)
           .fontWeight(FontWeight.Medium)
           .fontColor(this.themePalette().TEXT)
-          .margin({ top: 9 })
+          .margin({ top: 8 })
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .width('100%')
         Text(this.selectedModel.length > 0 ? this.selectedModel : '型号读取中') // Strings: ModelLoading
           .fontSize(11)
           .fontColor(this.themePalette().MUTED_TEXT)
-          .margin({ top: 3 })
+          .margin({ top: 4 })
           .width('100%')
         Text(this.selectedOs).fontSize(11).fontColor(this.themePalette().MUTED_TEXT).width('100%')
         Text(this.selectedUdid)
-          .fontSize(9)
+          .fontSize(10)
           .fontColor(this.themePalette().MUTED_TEXT)
-          .margin({ top: 7 })
+          .margin({ top: 4 })
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .width('100%')
@@ -3143,7 +3428,7 @@ struct Index {
       .width('100%')
       .padding(12)
       .backgroundColor(this.themePalette().PANEL_ALT)
-      .borderRadius(10)
+      .borderRadius(RADIUS_CARD)
       .border({ width: 1, color: this.themePalette().BORDER_SOFT })
 
       Divider().color(this.themePalette().CONTROL_DIVIDER).margin({ top: 12, bottom: 12 })
@@ -3180,8 +3465,9 @@ struct Index {
           .textAlign(TextAlign.Center)
           .width('100%')
           .height(34)
-          .borderRadius(6)
+          .borderRadius(RADIUS_CONTROL)
           .backgroundColor(this.themePalette().CONTROL_FILL)
+          .hoverEffect(HoverEffect.Highlight)
           .onClick((): void => {
             this.refresh();
           })
@@ -3190,7 +3476,7 @@ struct Index {
           .fontColor(this.themePalette().MUTED_TEXT)
           .textAlign(TextAlign.Center)
           .width('100%')
-          .margin({ top: 9 })
+          .margin({ top: 8 })
       }
       .width('100%')
       .margin({ top: 12 })
@@ -3441,7 +3727,7 @@ struct Index {
         .width(32)
         .height(32)
         .justifyContent(FlexAlign.Center)
-        .borderRadius(6)
+        .borderRadius(16)   // 32×32 正圆（半径 = 短边一半），不属于分级表，保留
         .hoverEffect(HoverEffect.Highlight)
         .onClick((): void => {
           this.showMirroringPanel = false;
@@ -3475,25 +3761,25 @@ struct Index {
         on_blocked: (): void => { this.block_action('image'); },
       })
       ToolPanelButton({
-        btnLabel: t('独立窗口'), iconName: 'WindowNew20', iconSize: 15,
+        btnLabel: t('独立窗口'), iconName: 'WindowNew20', iconSize: 16,
         usable: this.can_use_visual_tools(),
         on_action: (): void => { this.run_tool_action('window'); },
         on_blocked: (): void => { this.block_action('window'); },
       })
       ToolPanelButton({
-        btnLabel: '截图', iconName: 'Screenshot20', iconSize: 15,
+        btnLabel: '截图', iconName: 'Screenshot20', iconSize: 16,
         usable: this.can_use_visual_tools() && !this.standaloneOpen,
         on_action: (): void => { this.run_tool_action('screenshot'); },
         on_blocked: (): void => { this.block_action('screenshot'); },
       })
       ToolPanelButton({
-        btnLabel: t('刷新画面'), iconName: 'ArrowClockwise20', iconSize: 15,
+        btnLabel: t('刷新画面'), iconName: 'ArrowClockwise20', iconSize: 16,
         usable: this.can_use_visual_tools(),
         on_action: (): void => { this.run_tool_action('refresh'); },
         on_blocked: (): void => { this.block_action('refresh'); },
       })
       ToolPanelButton({
-        btnLabel: t('全屏预览'), iconName: 'FullScreenMaximize20', iconSize: 15,
+        btnLabel: t('全屏预览'), iconName: 'FullScreenMaximize20', iconSize: 16,
         usable: this.can_use_visual_tools() && !this.standaloneOpen,
         on_action: (): void => { this.run_tool_action('fullscreen'); },
         on_blocked: (): void => { this.block_action('fullscreen'); },
@@ -4437,7 +4723,7 @@ struct Index {
       // ★ 同理：蓝牙那条的文案（bluetoothControlText）与「独立窗口」的可用性都是
       //   状态驱动的，必须经 @Prop 下发 —— 否则蓝牙连上了这里还写着「未启用」。
       QuickBarButton({
-        btnLabel: this.bluetoothControlText, iconName: 'Cursor20', iconSize: 15, usable: true,
+        btnLabel: this.bluetoothControlText, iconName: 'Cursor20', iconSize: 16, usable: true,
         on_action: (): void => { this.run_quick_action('bluetooth'); },
         on_blocked: (): void => { this.block_action('bluetooth'); },
       })
@@ -4458,13 +4744,13 @@ struct Index {
         on_blocked: (): void => { this.block_action('window'); },
       })
       QuickBarButton({
-        btnLabel: '', iconName: 'Screenshot20', iconSize: 15,
+        btnLabel: '', iconName: 'Screenshot20', iconSize: 16,
         usable: this.can_use_visual_tools() && !this.standaloneOpen,
         on_action: (): void => { this.run_quick_action('screenshot'); },
         on_blocked: (): void => { this.block_action('screenshot'); },
       })
       QuickBarButton({
-        btnLabel: '', iconName: 'FullScreenMaximize20', iconSize: 15,
+        btnLabel: '', iconName: 'FullScreenMaximize20', iconSize: 16,
         usable: this.can_use_visual_tools() && !this.standaloneOpen,
         on_action: (): void => { this.run_quick_action('fullscreen'); },
         on_blocked: (): void => { this.block_action('fullscreen'); },
@@ -4473,7 +4759,7 @@ struct Index {
     .width('100%')
     .padding({ left: 10, right: 10, top: 9, bottom: 9 })
     .backgroundColor(this.themePalette().CARD)
-    .borderRadius(12)
+    .borderRadius(RADIUS_CARD)
     .border({ width: 1, color: this.themePalette().BORDER_SOFT })
     .margin({ bottom: 14 })
   }
@@ -4532,7 +4818,7 @@ struct Index {
           .fontSize(11)
           .fontColor(this.themePalette().PREVIEW_MUTED_TEXT)
           .textAlign(TextAlign.Center)
-          .margin({ top: 6 })
+          .margin({ top: 8 })
           .constraintSize({ maxWidth: 440 })
       }
       // 开发者模式（调试入口）：连点版本号 7 次开启后，下面这些有线链路诊断才会显示。
@@ -4671,11 +4957,11 @@ struct Index {
       }
       .width(84)
       .height(126)
-      .borderRadius(12)
+      .borderRadius(16)   // 84×126 设备剪影（拟物手机外框，短边 84）：与预览画布同级的窗口级大容器，保留 SURFACE 档
       .border({ width: 2, color: this.themePalette().PREVIEW_BORDER })
 
       Text(this.selectedName)                           // SelectedName
-        .fontSize(20)
+        .fontSize(21)
         .fontWeight(FontWeight.Medium)
         .fontColor(this.themePalette().PREVIEW_TEXT)
         .textAlign(TextAlign.Center)
@@ -4839,6 +5125,13 @@ struct Index {
   @Builder
   preview_area() {
     Stack() {
+      // 预览区边框内发光
+      GlowLayer({
+        glowType: 'radial',
+        glowDirection: 'all',
+        glowColor: status_glow_color(this.capture?.state ?? 0, this.scheme),
+      })
+
       // 预览画布：Core 经 NAPI 拿到 surface 后用 EGL + GLES 渲染 NV12
       XComponent({
         id: 'preview',
@@ -4941,7 +5234,7 @@ struct Index {
     .width('100%')
     .layoutWeight(1)
     .backgroundColor(this.themePalette().PREVIEW_CHROME)
-    .borderRadius(16)
+    .borderRadius(16)   // 投屏画面画布：主界面的窗口级大容器（SURFACE 档定义即面板/画布容器），保留
     .border({ width: 1, color: this.themePalette().BORDER })
     .clip(true)
     // ── 反向控制的**兜底**承接（与上面那层透明承接层双保险） ────────────────
@@ -5012,7 +5305,7 @@ struct Index {
     }
     .width('100%')
     .workspace_card(this.themePalette())
-    .margin({ top: 14 })
+    .margin({ top: 12 })
   }
 
   @Builder
@@ -5046,15 +5339,17 @@ struct Index {
       .fontSize(11)
       .fontColor(this.themePalette().MUTED_TEXT)
       .width('100%')
-      .margin({ top: 10, bottom: 5 })
+      .margin({ top: 12, bottom: 4 })
   }
 
   @Builder
   hint_text(text: string) {
+    // 字号取 10（本工程最小辅助档）：原 9 低于 Apple HIG 最小可读字号（caption≈11），
+    // 2in1 PC 上 9fp 的说明文字几乎不可读；与诊断/UDID 等技术小字统一到 10。
     Text(text)
-      .fontSize(9)
+      .fontSize(10)
       .fontColor(this.themePalette().MUTED_TEXT)
-      .margin({ top: 6 })
+      .margin({ top: 8 })
       .width('100%')
   }
 
@@ -5073,7 +5368,7 @@ struct Index {
         .width(32)
         .height(32)
         .justifyContent(FlexAlign.Center)
-        .borderRadius(6)
+        .borderRadius(16)   // 32×32 正圆（半径 = 短边一半），不属于分级表，保留
         .hoverEffect(HoverEffect.Highlight)
         .onClick((): void => {
           this.showControlPanel = false;
@@ -5088,16 +5383,13 @@ struct Index {
           Column() {
             this.section_title('无线 AirPlay', '常驻')    // Strings: WirelessReceiverTitle + WirelessServiceAlwaysOn
             this.field_label('连接分辨率')                // Strings: WirelessResolutionLabel
-            Select(WIRELESS_PROFILE_OPTIONS)
-              .optionFontColor(this.themePalette().TEXT)
-              .selectedOptionFontColor(this.themePalette().TEXT)
-              .selected(this.wirelessProfile)
-              .value(WIRELESS_PROFILE_LABELS[this.wirelessProfile])
-              .width('100%')
-              .fontColor(this.themePalette().TEXT)
-              .onSelect((index: number): void => {
+            MaterialSelect({
+              options: WIRELESS_PROFILE_OPTIONS,
+              selectedIndex: this.wirelessProfile,
+              onSelect: (index: number): void => {
                 this.wirelessProfile = index;
-              })
+              },
+            })
             // Strings: WirelessResolutionHelp
             this.hint_text('应用后将重新声明 AirPlay 接收能力；弱网请选择 720p 或 540p。')
 
@@ -5118,15 +5410,16 @@ struct Index {
                 .textAlign(TextAlign.Center)
                 .width(60)
                 .height(34)
-                .borderRadius(6)
+                .borderRadius(RADIUS_CONTROL)
                 .backgroundColor(this.themePalette().CONTROL_FILL)
                 .margin({ left: 8 })
+                .hoverEffect(HoverEffect.Highlight)
                 .onClick((): void => {
                   this.apply_wireless();
                 })
             }
             .width('100%')
-            .margin({ top: 10 })
+            .margin({ top: 12 })
 
             // ⚠️ 这里**必须内联 Text**，不能写成 this.hint_text(this.wireless_applied_text())：
             // @Builder 的参数是「按值传递」，状态变量变化不会刷新 builder 内部的 Text
@@ -5134,18 +5427,18 @@ struct Index {
             // 实测症状就是这个状态行永远停在首帧的「接收端状态：正在读取…」，
             // 而同一张卡片里内联的「应用/停止」按钮却能正常跟着状态变——即此坑。
             Text(this.wireless_applied_text())
-              .fontSize(9)
+              .fontSize(10)
               .fontColor(this.themePalette().MUTED_TEXT)
-              .margin({ top: 6 })
+              .margin({ top: 8 })
               .width('100%')
 
             // 原生层最后一条消息（协议库日志 / mDNS 失败原因）。接收端在跑、
             // 但 iPhone 搜不到时，这行能直接区分"卡在广播"还是"卡在协议栈"。
             if (this.airplay_verbose().length > 0) {
               Text(this.airplay_verbose())
-                .fontSize(9)
+                .fontSize(10)
                 .fontColor(this.themePalette().MUTED_TEXT)
-                .margin({ top: 3 })
+                .margin({ top: 4 })
                 .width('100%')
             }
 
@@ -5153,9 +5446,9 @@ struct Index {
             // 必须内联 Text 而不是 @Builder：状态驱动的文本过 @Builder 参数不刷新。
             if (this.airplay_diagnostics().length > 0) {
               Text(this.airplay_diagnostics())
-                .fontSize(9)
+                .fontSize(10)
                 .fontColor(this.themePalette().MUTED_TEXT)
-                .margin({ top: 3 })
+                .margin({ top: 4 })
                 .width('100%')
             }
           }
@@ -5171,7 +5464,7 @@ struct Index {
                 Stack({ alignContent: Alignment.Center }) {
                   // 原版 TextBlock：FontSize 9 SemiBold 居中换行，Margin="0,0,20,0"
                   Text(option.label)              // Label（UsbModeDemoLabel / AirPlay / Aisi）
-                    .fontSize(9)
+                    .fontSize(10)
                     .fontWeight(FontWeight.Medium)
                     .fontColor(this.usbMode === index
                       ? this.themePalette().ON_ACCENT : this.themePalette().MUTED_TEXT)
@@ -5246,9 +5539,9 @@ struct Index {
             }
             .width('100%')
             .padding(2)
-            .margin({ top: 9 })
+            .margin({ top: 8 })
             .backgroundColor(this.themePalette().CONTROL_FILL)
-            .borderRadius(10)
+            .borderRadius(RADIUS_CONTROL)
             .border({ width: 1, color: this.themePalette().BORDER })
 
             this.hint_text('仅应用于当前选中的有线设备。')  // Strings: UsbProjectionPerDeviceHint
@@ -5262,40 +5555,31 @@ struct Index {
             this.hint_text('只限制本地渲染；不会改变来源分辨率，也不会强制 iOS 固定输出帧率')
 
             this.field_label('渲染分辨率上限')            // Strings: RenderResolutionLimit
-            Select(RESOLUTION_PRESETS)
-              .optionFontColor(this.themePalette().TEXT)
-              .selectedOptionFontColor(this.themePalette().TEXT)
-              .selected(this.resolutionPreset)
-              .value(RESOLUTION_PRESETS[this.resolutionPreset].value)
-              .width('100%')
-              .fontColor(this.themePalette().TEXT)
-              .onSelect((index: number): void => {
+            MaterialSelect({
+              options: RESOLUTION_PRESETS,
+              selectedIndex: this.resolutionPreset,
+              onSelect: (index: number): void => {
                 this.resolutionPreset = index;
-              })
+              },
+            })
 
             this.field_label('本地渲染帧率上限')          // Strings: TargetFrameRate
-            Select(FRAME_RATE_OPTIONS)
-              .optionFontColor(this.themePalette().TEXT)
-              .selectedOptionFontColor(this.themePalette().TEXT)
-              .selected(this.frameRateIndex)
-              .value(FRAME_RATE_LABELS[this.frameRateIndex])
-              .width('100%')
-              .fontColor(this.themePalette().TEXT)
-              .onSelect((index: number): void => {
+            MaterialSelect({
+              options: FRAME_RATE_OPTIONS,
+              selectedIndex: this.frameRateIndex,
+              onSelect: (index: number): void => {
                 this.frameRateIndex = index;
-              })
+              },
+            })
 
             this.field_label('解码器')                    // Strings: DecoderPreferenceLabel
-            Select(DECODER_PREFERENCE_OPTIONS)
-              .optionFontColor(this.themePalette().TEXT)
-              .selectedOptionFontColor(this.themePalette().TEXT)
-              .selected(this.decoderPreference)
-              .value(DECODER_PREFERENCE_LABELS[this.decoderPreference])
-              .width('100%')
-              .fontColor(this.themePalette().TEXT)
-              .onSelect((index: number): void => {
+            MaterialSelect({
+              options: DECODER_PREFERENCE_OPTIONS,
+              selectedIndex: this.decoderPreference,
+              onSelect: (index: number): void => {
                 this.decoderPreference = index;
-              })
+              },
+            })
 
             // Strings: VideoPipelinePreferenceHelp（D3D → 鸿蒙，见文件头替换清单）
             this.hint_text('软件兼容会关闭视频解码硬件加速，但鸿蒙预览仍会使用 GPU。解码器切换通常在下一关键帧生效。')
@@ -5308,8 +5592,9 @@ struct Index {
                   .textAlign(TextAlign.Center)
                   .width('100%')
                   .height(34)
-                  .borderRadius(8)
+                  .borderRadius(RADIUS_CONTROL)
                   .backgroundColor(this.themePalette().CONTROL_FILL)
+                  .hoverEffect(HoverEffect.Highlight)
                   .onClick((): void => {
                     // 原版 ApplyVideoSettingsCommand：会话活着就立即应用，否则留给下次开始。
                     // im_set_video_preferences 正是这个语义（CoreApi.cpp:1303 会同时改
@@ -5341,8 +5626,9 @@ struct Index {
                   .textAlign(TextAlign.Center)
                   .width('100%')
                   .height(34)
-                  .borderRadius(8)
+                  .borderRadius(RADIUS_CONTROL)
                   .backgroundColor(this.themePalette().CONTROL_FILL)
+                  .hoverEffect(HoverEffect.Highlight)
                   .onClick((): void => {
                     // 原版 MoreImageSettingsButton → 画面调节子窗口。
                     // 这里此前写的是「待接入 GLES 色彩矩阵」，属过时文案：
@@ -5353,15 +5639,15 @@ struct Index {
               .layoutWeight(1)
             }
             .width('100%')
-            .margin({ top: 10 })
+            .margin({ top: 12 })
 
             // 同上：动态文本必须内联。走 this.hint_text(this.settingsStatus) 的话，
             // 「AirPlay 接收端已启动，正在向局域网广播…」这类提示永远不会显示出来。
             if (this.settingsStatus.length > 0) {
               Text(this.settingsStatus)
-                .fontSize(9)
+                .fontSize(10)
                 .fontColor(this.themePalette().MUTED_TEXT)
-                .margin({ top: 6 })
+                .margin({ top: 8 })
                 .width('100%')
             }
 
@@ -5389,7 +5675,7 @@ struct Index {
               Text(`${this.volume.toFixed(0)}%`).fontSize(10).fontColor(this.themePalette().ACCENT_HOVER)
             }
             .width('100%')
-            .margin({ top: 9 })
+            .margin({ top: 8 })
 
             Slider({ value: this.volume, min: 0, max: 100, step: 1 })
               .onChange((value: number, mode: SliderChangeMode): void => {
@@ -5432,7 +5718,7 @@ struct Index {
               .fontWeight(FontWeight.Medium)
               .fontColor(this.themePalette().WARNING)
               .width('100%')
-              .margin({ top: 6 })
+              .margin({ top: 8 })
 
             this.hint_text('把本机蓝牙作为 BLE HID 鼠标/键盘向 iPhone 广播。★ 手机上必须做两件事：①「设置 → 辅助功能 → 触控 → 辅助触控」开启（不开则 iOS 完全不显示指针）；② 在该页面「设备 → 蓝牙设备」里配对电脑广播出来的 HID 设备。蓝牙通道只支持单指指针与键盘，不能注入多指触控。')
 
@@ -5441,13 +5727,14 @@ struct Index {
                 .fontSize(13)
                 .fontColor(this.themePalette().TEXT)
                 .backgroundColor(this.themePalette().CONTROL_FILL)
-                .borderRadius(8)
+                .borderRadius(RADIUS_CONTROL)
+                .hoverEffect(HoverEffect.Highlight)
                 .onClick((): void => {
                   this.toggle_bluetooth_control();
                 })
             }
             .width('100%')
-            .margin({ top: 10 })
+            .margin({ top: 12 })
 
             Row() {
               Text('鼠标灵敏度').fontSize(10).fontColor(this.themePalette().MUTED_TEXT)
@@ -5484,8 +5771,9 @@ struct Index {
                 .fontSize(11)
                 .fontColor(this.themePalette().TEXT)
                 .backgroundColor(this.themePalette().CONTROL_FILL)
-                .borderRadius(8)
+                .borderRadius(RADIUS_CONTROL)
                 .enabled(!this.hidLayoutSwitching)
+                .hoverEffect(HoverEffect.Highlight)
                 .onClick((): void => {
                   this.switch_hid_layout();
                 })
@@ -5510,7 +5798,7 @@ struct Index {
               .fontColor(this.reverseShortDiag.indexOf('订阅1') !== -1
                 ? this.themePalette().SUCCESS
                 : this.themePalette().WARNING)
-              .margin({ top: 10 })
+              .margin({ top: 12 })
               .width('100%')
 
             // ── 取证与配对的三个动作 ──
@@ -5524,8 +5812,9 @@ struct Index {
                 .fontSize(11)
                 .fontColor(this.themePalette().TEXT)
                 .backgroundColor(this.themePalette().CONTROL_FILL)
-                .borderRadius(8)
+                .borderRadius(RADIUS_CONTROL)
                 .layoutWeight(1)
+                .hoverEffect(HoverEffect.Highlight)
                 .onClick((): void => {
                   this.copy_diagnosis();
                 })
@@ -5533,15 +5822,16 @@ struct Index {
                 .fontSize(11)
                 .fontColor(this.themePalette().TEXT)
                 .backgroundColor(this.themePalette().CONTROL_FILL)
-                .borderRadius(8)
+                .borderRadius(RADIUS_CONTROL)
                 .margin({ left: 8 })
                 .layoutWeight(1)
+                .hoverEffect(HoverEffect.Highlight)
                 .onClick((): void => {
                   this.pair_with_iphone();
                 })
             }
             .width('100%')
-            .margin({ top: 10 })
+            .margin({ top: 12 })
 
             this.hint_text('若 iPhone 上始终没有指针：先在手机端确认「辅助触控」已开启，再点「复制诊断」把一段文本发我 —— 里面「主机: 读N 写N 订阅S」三项能直接区分"手机没来枚举"与"来了但不订阅"。')
 
@@ -5553,9 +5843,9 @@ struct Index {
             //   显示，让"iPhone 端配置问题 vs 投递问题"能一眼区分。
             if (this.bluetoothStatus.length > 0) {
               Text(this.bluetoothStatus)
-                .fontSize(9)
+                .fontSize(10)
                 .fontColor(this.themePalette().MUTED_TEXT)
-                .margin({ top: 6 })
+                .margin({ top: 8 })
                 .width('100%')
                 .maxLines(10)
             }
@@ -5580,75 +5870,81 @@ struct Index {
             // （三者的 DetailLabel Margin 都是 0,10,0,5，本文件对应 field_label）。
             // 此前把「应用模式」做成了顶部独立卡片 1，顺序与原版不一致，现按原版收进本卡片。
             this.field_label(t('应用模式'))                  // Strings: ApplicationModeLabel
-            Select(APPLICATION_MODE_OPTIONS)
-              .optionFontColor(this.themePalette().TEXT)
-              .selectedOptionFontColor(this.themePalette().TEXT)
-              .selected(this.appMode)
-              .value(APPLICATION_MODE_LABELS[this.appMode])
-              .width('100%')
-              .fontColor(this.themePalette().TEXT)
-              .onSelect((index: number): void => {
+            MaterialSelect({
+              options: APPLICATION_MODE_OPTIONS,
+              selectedIndex: this.appMode,
+              onSelect: (index: number): void => {
                 this.appMode = index;
-              })
+              },
+            })
             this.field_label(t('界面语言'))                  // Strings: LanguageToolTip
-            Select(language_options())
-              .optionFontColor(this.themePalette().TEXT)
-              .selectedOptionFontColor(this.themePalette().TEXT)
-              .selected(this.languageIndex)
-              .value(language_labels()[this.languageIndex])
-              .width('100%')
-              .fontColor(this.themePalette().TEXT)
-              .onSelect((index: number): void => {
+            MaterialSelect({
+              options: language_options(),
+              selectedIndex: this.languageIndex,
+              onSelect: (index: number): void => {
                 this.languageIndex = index;
-                // ★ set_language() 现在**只写内存**（AppStorage + 解析缓存），
-                //   不再碰 i18n.System.setAppPreferredLanguage() —— 那个调用会触发
-                //   全局配置更新 + 整树 rebuild，是"切一次语言卡一下"的根因。
-                //   系统层对齐挪到下次启动（EntryAbility.onCreate），成本为零。
                 set_language(index);
-                // 落盘（putSync+flushSync）延后一拍：磁盘 I/O 别排在整树重渲染前面。
                 setTimeout((): void => {
                   save_language_preference(index);
                 }, 0);
-              })
+              },
+            })
             this.field_label(t('应用主题'))                  // Strings: ThemeTitle
-            Select(THEME_OPTIONS)
-              .optionFontColor(this.themePalette().TEXT)
-              .selectedOptionFontColor(this.themePalette().TEXT)
-              .selected(this.themeIndex)
-              .value(THEME_LABELS[this.themeIndex])
-              .width('100%')
-              .fontColor(this.themePalette().TEXT)
-              .onSelect((index: number): void => {
+            MaterialSelect({
+              options: THEME_OPTIONS,
+              selectedIndex: this.themeIndex,
+              onSelect: (index: number): void => {
                 this.themeIndex = index;
-
                 AppStorage.setOrCreate(THEME_PREF_KEY, index);
-
                 recomputeThemeScheme();
-                // 同步给系统，让系统三键跟着换色（不然深色下三键是深色的，看不见）。
                 this.sync_system_color_mode();
-              })
+              },
+            })
+
+            // ★ 2026-10-18 删除「光感效果」总开关 + 「光感强度」弱/中/强档位。
+            //   用户原话：「删除光感效果的开关，这个本来就没有用」。
+            //   根因：沉浸光感的**强度**在鸿蒙是系统设置（设置 > 桌面和个性化 >
+            //   沉浸光感），App 侧没有任何调节接口（官方文档已核对，用户此前的
+            //   论断被证实正确）⇒ UI 上放开关/档位只会让人以为调了其实没调。
+            //   辉光本身不受影响：GlowLayer 自行 @StorageLink 读 AppStorage，
+            //   强度保持用户上次选中的档位继续渲染，只是不再暴露控制入口。
+
+            // ── 最小化到托盘 ──
+            // ★ 2026-10-18 开关样式换成系统设置同款（用户截图指定）：Toggle +
+            //   ToggleType.Switch = 蓝色胶囊滑块。此前是「Text + 开启/关闭 Button」
+            //   自绘样式，与系统控件观感不一致。isOn 单向取自 @StorageLink，
+            //   变更时写回状态并落盘。
+            Row() {
+              Text(t('最小化到托盘'))
+                .fontSize(10)
+                .fontColor(this.themePalette().MUTED_TEXT)
+              Blank()
+              Toggle({ type: ToggleType.Switch, isOn: this.minimizeToTray })
+                .onChange((isOn: boolean): void => {
+                  this.minimizeToTray = isOn;
+                  save_tray_preferences(isOn);
+                })
+            }
+            .width('100%')
+            .margin({ top: 12 })
 
             // ── 反控接管时是否收起本地指针 ──
             // ★ 默认「保持可见」：反控这条链路还是实验性的，对端指针不一定动得
             //   起来，藏掉本地指针就等于把唯一的位置反馈也拿走（用户明确要求
             //   「反控时鼠标不要消失」）。想要上游那种观感的自己打开。
+            // ★ 2026-10-18 换成系统设置同款 Switch（Toggle + ToggleType.Switch）。
             Row() {
-              Text(`${t('反控接管时收起指针')}：${this.hidePointerOnTakeover ? '开' : '关'}`)
+              Text(t('反控接管时收起指针'))
                 .fontSize(10)
                 .fontColor(this.themePalette().MUTED_TEXT)
               Blank()
-              Button(this.hidePointerOnTakeover ? '关闭' : '开启')
-                .fontSize(11)
-                .fontColor(this.themePalette().TEXT)
-                .backgroundColor(this.themePalette().CONTROL_FILL)
-                .borderRadius(8)
-                .onClick((): void => {
-                  this.hidePointerOnTakeover = !this.hidePointerOnTakeover;
+              Toggle({ type: ToggleType.Switch, isOn: this.hidePointerOnTakeover })
+                .onChange((isOn: boolean): void => {
+                  this.hidePointerOnTakeover = isOn;
                   // 关掉的那一拍必须立刻恢复：只改状态不调用的话，要等下一次
                   // 500ms 轮询才自愈，中间那半秒鼠标是消失的。
-                  AppStorage.setOrCreate<boolean>(HIDE_POINTER_ON_TAKEOVER_KEY,
-                    this.hidePointerOnTakeover);
-                  save_hide_pointer_preference(this.hidePointerOnTakeover);
+                  AppStorage.setOrCreate<boolean>(HIDE_POINTER_ON_TAKEOVER_KEY, isOn);
+                  save_hide_pointer_preference(isOn);
                   this.apply_pointer_visibility();
                 })
             }
@@ -5656,23 +5952,22 @@ struct Index {
             .margin({ top: 12 })
 
             // ── 半透明窗口 ──
-            // 对齐 Windows 11 原生深色界面的 Acrylic 观感。文案是状态驱动的
-            // ⇒ 内联 Text/Button（@Builder 按值传递会冻在首帧）。
+            // 对齐 Windows 11 原生深色界面的 Acrylic 观感。
+            // ★ 2026-10-18 换成系统设置同款 Switch（Toggle + ToggleType.Switch）。
+            //   Toggle 的 isOn 由 @State 驱动、onChange 里写回，本身就是状态驱动的，
+            //   不再需要 @Builder 按值传递那条内联约束的注释（那个坑只作用于
+            //   @Builder 内的 Text，与 Toggle 无关）。
             Row() {
-              Text(`半透明窗口：${this.acrylicOn ? '开' : '关'}`)
+              Text('半透明窗口')
                 .fontSize(10)
                 .fontColor(this.themePalette().MUTED_TEXT)
               Blank()
-              Button(this.acrylicOn ? '关闭' : '开启')
-                .fontSize(11)
-                .fontColor(this.themePalette().TEXT)
-                .backgroundColor(this.themePalette().CONTROL_FILL)
-                .borderRadius(8)
-                .onClick((): void => {
-                  this.acrylicOn = !this.acrylicOn;
+              Toggle({ type: ToggleType.Switch, isOn: this.acrylicOn })
+                .onChange((isOn: boolean): void => {
+                  this.acrylicOn = isOn;
                   // ★ 立刻写盘（putSync + flushSync）：拖到 Ability 收尾才刷，
                   //   用户关掉/杀进程时就来不及了 ⇒ 选完重启又回默认。
-                  save_acrylic_preferences(this.acrylicOn, this.acrylic_alpha_hex());
+                  save_acrylic_preferences(isOn, this.acrylic_alpha_hex());
                   this.refresh_window_acrylic_readout();
                 })
             }
@@ -5696,8 +5991,9 @@ struct Index {
                     .backgroundColor(item.hex === this.acrylicAlpha
                       ? this.themePalette().ACCENT
                       : this.themePalette().CONTROL_FILL)
-                    .borderRadius(8)
+                    .borderRadius(RADIUS_CONTROL)
                     .margin({ left: 6 })
+                    .hoverEffect(HoverEffect.Highlight)
                     .onClick((): void => {
                       this.acrylicAlpha = item.hex;
                       save_acrylic_preferences(this.acrylicOn, item.hex);
@@ -5715,7 +6011,7 @@ struct Index {
             // 正常使用者看到只会困惑 ⇒ 只在开发者模式下显示。
             if (this.devMode && this.windowAcrylicReadout.length > 0) {
               Text(this.windowAcrylicReadout)
-                .fontSize(9)
+                .fontSize(10)
                 .fontColor(this.themePalette().MUTED_TEXT)
                 .width('100%')
                 .margin({ top: 4 })
@@ -5960,7 +6256,7 @@ struct Index {
         }
         .layoutWeight(1)
         .height('100%')
-        .padding({ left: 18, right: 18, top: 16, bottom: 12 })
+        .padding({ left: 18, right: 18, top: TITLE_BAR_TOP_PADDING_VP, bottom: 12 })
       }
       .width('100%')
       .height('100%')
@@ -5969,7 +6265,10 @@ struct Index {
       // 系统合成器 —— 窗口 surface 内没有内容可采时，这里大概率只是无操作；
       // 半透明的观感由 root_background_color() 的 alpha 底色承担，两者叠加。
       .backgroundEffect({
-        radius: this.acrylicOn ? 32 : 0,
+        // ★ 恢复动画期间临时关磨砂：全窗 radius 32 的模糊在窗口缩放动画里
+        //   **每帧都要重算**，是"打开最小化的 App 掉帧"的最大单一来源。
+        //   动画跑完（WINDOW_RESTORE_GRACE_MS）自动恢复，稳态观感不受影响。
+        radius: (this.acrylicOn && !this.windowRestoring) ? 32 : 0,
         color: this.root_background_color(),
         saturation: this.scheme === 'dark' ? 0.2 : 0.35,
         brightness: 1.0,
@@ -5996,7 +6295,7 @@ struct Index {
       .padding({ left: 18, right: 18, top: 11, bottom: 11 })
       .backgroundColor(this.themePalette().TOOLTIP_BACKGROUND)
       .border({ width: 1, color: this.themePalette().TOOLTIP_BORDER })
-      .borderRadius(8)
+      .borderRadius(16)   // tooltip 气泡：分级表里 SURFACE 档的明列项，保留
       .margin({ bottom: 34 })
   }
 }

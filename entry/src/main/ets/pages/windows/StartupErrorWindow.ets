@@ -249,6 +249,7 @@ struct DetailsExpander {
       }
       .width('100%')
       .height(30)
+      .hoverEffect(HoverEffect.Highlight)
       .onClick((): void => { this.expanded = !this.expanded; });
 
       if (this.expanded) {
@@ -258,7 +259,7 @@ struct DetailsExpander {
         .width('100%')
         .height(150)
         .margin({ top: 8 })
-        .borderRadius(12)
+        .borderRadius(12)   // Apple 圆角分级：150 高详情区 → 12（RADIUS_CARD）
         .clip(true);
       }
     }
@@ -325,7 +326,7 @@ struct StartupErrorWindow {
           readOnly: true,
           boxHeight: 38,
         })
-          .margin({ top: 7 });
+          .margin({ top: 4 });
       }
       .alignItems(HorizontalAlign.Start)
       .width('100%');

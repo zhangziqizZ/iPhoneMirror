@@ -61,6 +61,14 @@
       "value": "半透明窗口效果需要设置窗口容器配色与阴影开关，使界面呈现类似 Windows 原生深色的磨砂观感"
     },
     {
+      "name": "tray_notification_perm_reason",
+      "value": "关闭窗口后需要保留一条常驻通知作为托盘入口，点击通知即可重新唤回主窗口"
+    },
+    {
+      "name": "tray_prepare_terminate_perm_reason",
+      "value": "关闭窗口或退出应用时需要拦截默认的关闭流程，将应用收进系统托盘后台驻留，而不是直接退出"
+    },
+    {
       "name": "imagevideo_perm_reason",
       "value": "截图功能需要将预览画面保存到系统相册"
     }

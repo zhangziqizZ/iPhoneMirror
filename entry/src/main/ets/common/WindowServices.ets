@@ -431,6 +431,19 @@ export const HIDE_POINTER_ON_TAKEOVER_KEY: string = 'im.reverseControl.hidePoint
 export const DEVELOPER_MODE_KEY: string = 'im.developerMode';
 
 /**
+ * 主窗口当前是否对用户可见（由 EntryAbility 订阅 `windowStage.on('windowStageEvent')`
+ * 写入：SHOWN / ACTIVE / RESUMED = true，HIDDEN / INACTIVE / PAUSED = false）。
+ *
+ * ★ 存在的唯一理由 = **性能**（2026-10-17）：主窗有一条 500ms 心跳，每轮要跑
+ *   mDNS pump、接管态重算、蓝牙状态、指针可见性自愈……最小化之后它**照跑不误**；
+ *   等用户点开恢复的那一刻，这批 JS 工作正好和系统的窗口恢复动画抢 CPU，
+ *   表现就是"打开动画明显比其他软件掉帧"。
+ *   现在 Index 用 @Watch 监听这个键：不可见 → clearInterval 彻底停掉；
+ *   重新可见 → 重启心跳，并进入一段"恢复动画窗口期"临时关掉全窗磨砂。
+ */
+export const APP_WINDOW_VISIBLE_KEY: string = 'im.window.visible';
+
+/**
  * 半透明窗口（磨砂观感）开关 —— 对齐 Windows 11 原生深色界面的 Acrylic/Mica 观感。
  *
  * ★ 已实机确认生效（读数：窗口透明=是、容器配色探测成功）⇒ 正式特性，不再标「实验」。
@@ -478,6 +491,12 @@ export const WINDOW_SHADOW_RESULT_KEY: string = 'im.shadowResult';
  */
 export const PERSIST_READ_RESULT_KEY: string = 'im.persistReadResult';
 export const PERSIST_WRITE_RESULT_KEY: string = 'im.persistWriteResult';
+
+export const GLOW_ENABLED_KEY: string = 'im.glow.enabled';
+export const GLOW_STRENGTH_KEY: string = 'im.glow.strength';
+export const GLOW_DEGRADED_KEY: string = 'im.glow.degraded';
+export const MINIMIZE_TO_TRAY_KEY: string = 'im.tray.minimizeToTray';
+export const TRAY_AVAILABLE_KEY: string = 'im.tray.available';
 
 /**
  * 顶部条带高度 ÷ 窗口宽度 —— **单一口径**，Ability 与页面共用。
