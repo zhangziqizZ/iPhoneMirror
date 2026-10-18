@@ -13,22 +13,23 @@
 
 import i18n from '@ohos.i18n';
 
-/** 语言档位在 AppStorage 里的键（存的是 0..3 的索引，见 LANGUAGE_TAGS）。 */
+/** 语言档位在 AppStorage 里的键（存的是 0..4 的索引，见 LANGUAGE_TAGS）。 */
 export const LANG_INDEX_KEY: string = 'im.langIndex';
 
-/** 0=跟随系统 1=简体 2=繁中(香港) 3=英文。 */
-export const LANGUAGE_TAGS: string[] = ['system', 'zh-CN', 'zh-HK', 'en-US'];
+/** 0=跟随系统 1=简体 2=繁中(香港) 3=英文 4=繁體中文（台灣）。 */
+export const LANGUAGE_TAGS: string[] = ['system', 'zh-CN', 'zh-HK', 'en-US', 'zh-TW'];
 
 /** 选项标签按语言分三套（选择器自身也要本地化）。 */
 export const LANGUAGE_LABELS: Record<string, string[]> = {
-  'zh-CN': ['跟随系统', '简体中文', '繁體中文（香港）', 'English'],
-  'zh-HK': ['跟隨系統', '簡體中文', '繁體中文（香港）', 'English'],
-  'en-US': ['Follow System', 'Simplified Chinese', 'Traditional Chinese (HK)', 'English'],
+  'zh-CN': ['跟随系统', '简体中文', '繁體中文（香港）', 'English', '繁體中文（台灣）'],
+  'zh-HK': ['跟隨系統', '簡體中文', '繁體中文（香港）', 'English', '繁體中文（台灣）'],
+  'zh-TW': ['跟隨系統', '簡體中文', '繁體中文（香港）', 'English', '繁體中文（台灣）'],
+  'en-US': ['Follow System', 'Simplified Chinese', 'Traditional Chinese (HK)', 'English', 'Traditional Chinese (Taiwan)'],
 };
 
 /**
  * 解析当前生效语言。
- * 档位 0（跟随系统）时读系统语言：含 zh 且带 hk/tw → zh-HK，含 zh 其它 → zh-CN，否则 en-US。
+ * 档位 0（跟随系统）时读系统语言：含 zh 且带 hk → zh-HK，带 tw → zh-TW，含 zh 其它 → zh-CN，否则 en-US。
  *
  * ★ 系统语言解析结果必须缓存：t() 在每次整树重渲染里被调用成百上千次，
  *   i18n.System.getSystemLanguage() 是同步系统调用，不缓存的话「跟随系统」档
@@ -70,7 +71,7 @@ function resolve_system_lang(): string {
     const sys: string = i18n.System.getSystemLanguage();
     const lower: string = (sys ?? '').toLowerCase();
     if (lower.startsWith('zh')) {
-      cached_system_lang = (lower.includes('hk') || lower.includes('tw')) ? 'zh-HK' : 'zh-CN';
+      cached_system_lang = lower.includes('hk') ? 'zh-HK' : (lower.includes('tw') ? 'zh-TW' : 'en-US');
     } else {
       cached_system_lang = 'en-US';
     }
@@ -581,6 +582,34 @@ const ZH2HK: Record<string, string> = {
 };
 
 /**
+ * 繁體中文（台灣）：以繁中(香港) ZH2HK 為底，套用台灣用語差異生成。
+ * 不需要把 ~250 條串逐條重翻 —— HK 繁體已是正確的繁體，只需替換幾處兩岸用語：
+ *   網絡→網路 / 軟件→軟體 / 連接→連線 / 鼠標→滑鼠 / 視頻→視訊 / 硬件→硬體 / 字體→字型。
+ * t() 裡 ZH2TW[zh] 找不到時再回退簡體原文。
+ */
+function apply_taiwan_terms(s: string): string {
+  return s
+    .replace(/網絡/g, '網路')
+    .replace(/軟件/g, '軟體')
+    .replace(/連接/g, '連線')
+    .replace(/鼠標/g, '滑鼠')
+    .replace(/視頻/g, '視訊')
+    .replace(/硬件/g, '硬體')
+    .replace(/字體/g, '字型');
+}
+
+function build_zh2tw(): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const key of Object.keys(ZH2HK)) {
+    out[key] = apply_taiwan_terms(ZH2HK[key]);
+  }
+  return out;
+}
+
+/** 繁體中文（台灣）譯表（模組載入期由 ZH2HK 轉出一次，t() 內零成本）。 */
+const ZH2TW: Record<string, string> = build_zh2tw();
+
+/**
  * 主翻译函数。build() 期间调用即建立与语言档位的联动，切语言时所在组件自动重渲染。
  * @param zh 简体中文原文（同时作为 zh-CN 档与查表失败时的兜底）
  */
@@ -589,13 +618,17 @@ export function t(zh: string): string {
   if (lang === 'zh-CN') {
     return zh;
   }
+  if (lang === 'zh-TW') {
+    // 以繁中(香港)為底套用台灣用語；缺譯回退 HK，再回退簡體原文。
+    return ZH2TW[zh] ?? zh;
+  }
   const dict: Record<string, string> = (lang === 'zh-HK') ? ZH2HK : ZH2EN;
   return dict[zh] ?? zh;
 }
 
 /**
  * 切换语言档位（**这条路径必须保持"只写内存"**）。
- * @param index 0=跟随系统 1=简体 2=繁中(香港) 3=英文
+ * @param index 0=跟随系统 1=简体 2=繁中(香港) 3=英文 4=繁體中文（台灣）
  *
  * ★★ 卡顿真正的根因（1.0.47）—— 旧实现在这里（哪怕延后 50ms）调了
  *   `i18n.System.setAppPreferredLanguage()`。官方口径：该调用会让应用收到
