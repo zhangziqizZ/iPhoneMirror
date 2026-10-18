@@ -252,7 +252,6 @@ const ZH2EN: Record<string, string> = {
   '解除绑定': 'Unbind',
   '刷新蓝牙客户端': 'Refresh Bluetooth clients',
   '确认绑定': 'Confirm binding',
-  '取消': 'Cancel',
   '绑定蓝牙手机': 'Bind Bluetooth phone',
   '已刷新：{0} 个蓝牙客户端': 'Refreshed: {0} Bluetooth clients',
   '已清除「{0}」的绑定标记（本移植未做持久化，重启后回到原状）': 'Cleared binding marker for "{0}" (not persisted in this port; reverts after restart)',
@@ -261,7 +260,6 @@ const ZH2EN: Record<string, string> = {
   '等待 Bluetooth HID 连接': 'Waiting for Bluetooth HID connection',
   '本设备正在广播 Bluetooth HID 设备': 'This device is broadcasting a Bluetooth HID device',
   '等待设备订阅 HID 服务': 'Waiting for device to subscribe to HID service',
-  '下一步': 'Next',
   // ── BluetoothControlNotice ──
   '反向控制期间本机光标会隐藏。': 'The local cursor is hidden during reverse control.',
   // ── DeviceBinding ──
@@ -573,7 +571,6 @@ const ZH2HK: Record<string, string> = {
   '解除绑定': '解除綁定',
   '刷新蓝牙客户端': '重新整理藍牙用戶端',
   '确认绑定': '確認綁定',
-  '取消': '取消',
   '绑定蓝牙手机': '綁定藍牙手機',
   '已刷新：{0} 个蓝牙客户端': '已刷新：{0} 個藍牙客戶端',
   '已清除「{0}」的绑定标记（本移植未做持久化，重启后回到原状）': '已清除「{0}」的綁定標記（本移植未做持久化，重啟後回到原狀）',
@@ -582,7 +579,6 @@ const ZH2HK: Record<string, string> = {
   '等待 Bluetooth HID 连接': '等待 Bluetooth HID 連線',
   '本设备正在广播 Bluetooth HID 设备': '本設備正在廣播 Bluetooth HID 設備',
   '等待设备订阅 HID 服务': '等待裝置訂閱 HID 服務',
-  '下一步': '下一步',
   // ── BluetoothControlNotice ──
   '反向控制期间本机光标会隐藏。': '反向控制期間本機光標會隱藏。',
   // ── DeviceBinding ──
