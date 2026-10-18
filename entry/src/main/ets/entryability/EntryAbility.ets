@@ -7,7 +7,8 @@ import { WINDOW_ACRYLIC_RESULT_KEY, WINDOW_SHADOW_RESULT_KEY, APP_WINDOW_VISIBLE
 import { open_app_preferences, load_acrylic_preferences, load_language_preference,
   load_hide_pointer_preference, load_glow_preferences, load_tray_preferences,
   load_first_run_done, FIRST_RUN_DONE_KEY,
-  load_independent_window_style, INDEPENDENT_OPACITY_KEY } from '../common/AppPreferences';
+  load_independent_window_style, INDEPENDENT_OPACITY_KEY,
+  load_keyboard_mapping } from '../common/AppPreferences';
 import { vp_to_px_ratio } from '../common/SubWindow';
 import { BusinessError } from '@ohos.base';
 import { open_instance_conflict, InstanceConflictRequest } from '../pages/windows/InstanceConflictWindow';
@@ -45,6 +46,8 @@ export default class EntryAbility extends UIAbility {
     //   ★ 为什么之前用的 PersistentStorage 实测不行：它自己决定何时刷盘，用户直接关掉
     //     /杀进程时来不及 ⇒ 现在换成显式 putSync + flushSync（见 AppPreferences.ets）。
     open_app_preferences(this.context);
+    // ★ 把 UIAbilityContext 存进 AppStorage，供各子窗口取用（开子窗需要它）。
+    AppStorage.setOrCreate('im.appContext', this.context);
     load_acrylic_preferences();
     // ★ 界面语言：把磁盘存档读回 AppStorage —— 与半透明同理，必须在任何 UI 装载
     //   **之前**，否则 t() 首次读取会先建键，这里再写就变成普通更新、用户看到的还是默认值。
@@ -59,6 +62,8 @@ export default class EntryAbility extends UIAbility {
     // ★ 独立窗口风格偏好（透明度/悬停不透明）：同样必须在 UI 装载前读回 AppStorage，
     //   独立预览 Ability 跨 Ability 共享这份 AppStorage，这里建好键它就能读到。
     load_independent_window_style();
+    // ★ 键盘映射设置：同样必须在 UI 装载前读回 AppStorage（含损坏隔离）。
+    load_keyboard_mapping();
     // ★ 读回存档后立刻把档位灌进 i18n 的缓存（否则首帧 t() 会用默认值建缓存；
     //   且缓存必须在这里建立 —— 主窗每 500ms 整树重渲染，t() 每秒上千次，
     //   不能每次都去读 AppStorage）。

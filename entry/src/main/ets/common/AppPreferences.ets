@@ -37,6 +37,12 @@ import {
   TRAY_AVAILABLE_KEY,
 } from './WindowServices';
 import { LANG_INDEX_KEY } from './i18n';
+import {
+  KeyboardMappingSettings, KeyboardMappingEntry, MappedTouchAction,
+  ALL_MAPPED_ACTIONS, KEYBOARD_MAPPING_MAX_ENTRIES, KEYBOARD_MAPPING_SCHEMA_VERSION,
+  default_keyboard_mapping_settings, new_mapping_id,
+  keymap_same_key, keymap_validate_entry,
+} from './KeyboardMapping';
 
 /** 偏好文件名 —— 落在应用沙箱的 preferences 目录，卸载才清。 */
 const PREFS_NAME: string = 'iphone_mirror_prefs';
@@ -401,5 +407,174 @@ export function save_independent_window_opaque_on_hover(value: boolean): void {
     const writeFailure = writeError as BusinessError;
     hilog.warn(0x0000, 'AppPreferences', '悬停不透明开关写入失败 %d %{public}s',
       writeFailure.code, writeFailure.message);
+  }
+}
+
+// ── 键盘映射（KeyboardMappingWindow / KeyboardMappingEditorWindow）──
+//
+// 整份设置（总开关 + 阻止原键 + 映射列表）作为一个 JSON 字符串存进 preferences，
+// 解析时逐条校验（对照上游 KeyboardMappingSettingsConverter）：损坏/重复/非法版本
+// 的条目被隔离，且一旦有损坏就把 enabled 置 false，等用户检查，不连累其它设置。
+const PREFS_KEY_KEYBOARD_MAPPING: string = 'keyboard_mapping';
+
+/** AppStorage 键：键盘映射设置（KeyboardMappingSettings 对象，全量）。 */
+export const KEYBOARD_MAPPING_KEY: string = 'im.keyboardMapping';
+/** AppStorage 键：编辑器当前要编辑的条目 id（'__new__' 表示新增）。 */
+export const KEYBOARD_EDIT_TARGET_KEY: string = 'im.keyboardMapping.editTarget';
+
+/**
+ * 把任意未知结构安全地解析成键盘映射设置。
+ *
+ * @returns [settings, hadInvalid] —— hadInvalid 表示原数据里有被拒绝的条目/版本。
+ */
+function parse_keyboard_mapping_json(text: string): [KeyboardMappingSettings, boolean] {
+  const def = default_keyboard_mapping_settings();
+  if (text.length === 0) {
+    return [def, false];
+  }
+  let root: Object | null = null;
+  try {
+    root = JSON.parse(text) as Object;
+  } catch (e) {
+    hilog.warn(0x0000, 'AppPreferences', '键盘映射 JSON 解析失败，回退默认');
+    return [def, true];
+  }
+  if (root === null || typeof root !== 'object' || Array.isArray(root)) {
+    return [def, true];
+  }
+  const obj = root as Record<string, Object>;
+  let version: number = KEYBOARD_MAPPING_SCHEMA_VERSION;
+  let enabled: boolean = false;
+  let suppress: boolean = false;
+  let hadInvalid: boolean = false;
+  const mappings: KeyboardMappingEntry[] = [];
+
+  if (typeof obj['schemaVersion'] === 'number') {
+    version = obj['schemaVersion'] as number;
+  }
+  if (typeof obj['enabled'] === 'boolean') {
+    enabled = obj['enabled'] as boolean;
+  }
+  if (typeof obj['suppressOriginalKey'] === 'boolean') {
+    suppress = obj['suppressOriginalKey'] as boolean;
+  }
+  if (version !== KEYBOARD_MAPPING_SCHEMA_VERSION) {
+    hadInvalid = true;
+    version = KEYBOARD_MAPPING_SCHEMA_VERSION;
+  }
+
+  const rawList = obj['mappings'];
+  if (Array.isArray(rawList)) {
+    const seenIds: Set<string> = new Set<string>();
+    for (let i = 0; i < rawList.length; i++) {
+      const item = rawList[i] as Record<string, Object> | null;
+      if (item === null || typeof item !== 'object') {
+        hadInvalid = true;
+        continue;
+      }
+      const parsed = parse_one_mapping_entry(item);
+      if (parsed === null) {
+        hadInvalid = true;
+        continue;
+      }
+      if (seenIds.has(parsed.id) || mappings.length >= KEYBOARD_MAPPING_MAX_ENTRIES) {
+        hadInvalid = true;
+        continue;
+      }
+      // 与已有条目物理键冲突也视为无效（与上游 SamePhysicalKey 去重同律）
+      const conflict: boolean = mappings.some((m: KeyboardMappingEntry): boolean =>
+        keymap_same_key(m.key, parsed.key));
+      if (conflict) {
+        hadInvalid = true;
+        continue;
+      }
+      seenIds.add(parsed.id);
+      mappings.push(parsed);
+    }
+  }
+
+  if (hadInvalid) {
+    enabled = false;   // 有损坏 ⇒ 关闭映射，等用户检查（对照上游 HadInvalidEntries）
+  }
+  return [{ schemaVersion: version, enabled: enabled, suppressOriginalKey: suppress, mappings: mappings }, hadInvalid];
+}
+
+/** 解析单条映射条目；任何字段缺失/越界返回 null（被隔离）。 */
+function parse_one_mapping_entry(item: Record<string, Object>): KeyboardMappingEntry | null {
+  const key = item['key'] as Record<string, Object> | null;
+  if (key === null || typeof key !== 'object') {
+    return null;
+  }
+  const code = key['code'];
+  const label = key['label'];
+  if (typeof code !== 'number' || typeof label !== 'string') {
+    return null;
+  }
+  const action = item['action'];
+  if (typeof action !== 'string' || !ALL_MAPPED_ACTIONS.includes(action as MappedTouchAction)) {
+    return null;
+  }
+  const num = (v: Object | undefined, fallback: number): number =>
+    typeof v === 'number' && Number.isFinite(v) ? v : fallback;
+  const bool = (v: Object | undefined, fallback: boolean): boolean =>
+    typeof v === 'boolean' ? v : fallback;
+  const entry: KeyboardMappingEntry = {
+    id: typeof item['id'] === 'string' ? (item['id'] as string) : new_mapping_id(),
+    key: { code: code as number, label: label as string },
+    action: action as MappedTouchAction,
+    enabled: bool(item['enabled'], true),
+    x: num(item['x'], 0.5),
+    y: num(item['y'], 0.5),
+    endX: num(item['endX'], 0.5),
+    endY: num(item['endY'], 0.75),
+    distance: num(item['distance'], 0.25),
+    durationMs: num(item['durationMs'], 400),
+    intervalMs: num(item['intervalMs'], 100),
+    deviceCoordinates: bool(item['deviceCoordinates'], false),
+  };
+  // 最终再用统一校验把关一次（坐标/时长/距离/滑动终点）
+  if (keymap_validate_entry(entry) !== null) {
+    return null;
+  }
+  return entry;
+}
+
+/**
+ * 读回键盘映射设置，写进 AppStorage。
+ * ★ 必须在 UI 装载之前调用（EntryAbility.onCreate）。
+ */
+export function load_keyboard_mapping(): void {
+  let settings = default_keyboard_mapping_settings();
+  if (store !== null) {
+    try {
+      const text: string = store.getSync(PREFS_KEY_KEYBOARD_MAPPING, '') as string;
+      const [parsed, _hadInvalid] = parse_keyboard_mapping_json(text);
+      settings = parsed;
+    } catch (readError) {
+      const readFailure = readError as BusinessError;
+      hilog.warn(0x0000, 'AppPreferences', '键盘映射读取失败 %d %{public}s',
+        readFailure.code, readFailure.message);
+    }
+  }
+  AppStorage.setOrCreate(KEYBOARD_MAPPING_KEY, settings);
+  AppStorage.setOrCreate(KEYBOARD_EDIT_TARGET_KEY, '__new__');
+}
+
+/** 持久化整份键盘映射设置（写 AppStorage + 落盘）。返回是否落盘成功。 */
+export function save_keyboard_mapping(settings: KeyboardMappingSettings): boolean {
+  AppStorage.setOrCreate(KEYBOARD_MAPPING_KEY, settings);
+  if (store === null) {
+    return false;
+  }
+  try {
+    const text: string = JSON.stringify(settings);
+    store.putSync(PREFS_KEY_KEYBOARD_MAPPING, text);
+    store.flushSync();
+    return true;
+  } catch (writeError) {
+    const writeFailure = writeError as BusinessError;
+    hilog.warn(0x0000, 'AppPreferences', '键盘映射写入失败 %d %{public}s',
+      writeFailure.code, writeFailure.message);
+    return false;
   }
 }

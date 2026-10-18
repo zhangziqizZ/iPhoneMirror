@@ -194,6 +194,7 @@ import { open_projection_settings, OUT_KEY_SEPARATE_WINDOW_REQUESTED } from './w
 import { open_standalone_preview } from './windows/StandalonePreviewWindow';
 import { open_shortcut_settings } from './windows/ShortcutSettingsWindow';
 import { open_window_style } from './windows/WindowStyleSettingsWindow';
+import { open_keyboard_mapping } from './windows/KeyboardMappingWindow';
 import {
   open_bluetooth_control_waiting,
   open_bluetooth_control_connected,
@@ -5744,6 +5745,23 @@ struct Index {
                 .hoverEffect(HoverEffect.Highlight)
                 .onClick((): void => {
                   this.toggle_bluetooth_control();
+                })
+            }
+            .width('100%')
+            .margin({ top: 12 })
+
+            // ★ 键盘映射入口：对照上游「投屏设置 → 反向控制设置 → 键盘映射 → 管理键盘映射」。
+            //   它把电脑按键映射成 iPhone 屏幕触摸动作；本版本反控是蓝牙相对鼠标，动作的真实
+            //   下发待绝对触控后端，故这里只接管理/编辑器入口，并在窗口内诚实标注执行缺口。
+            Row() {
+              Button('管理键盘映射')
+                .fontSize(13)
+                .fontColor(this.themePalette().TEXT)
+                .backgroundColor(this.themePalette().CONTROL_FILL)
+                .borderRadius(RADIUS_CONTROL)
+                .hoverEffect(HoverEffect.Highlight)
+                .onClick((): void => {
+                  open_keyboard_mapping(this.appContext as common.UIAbilityContext);
                 })
             }
             .width('100%')
