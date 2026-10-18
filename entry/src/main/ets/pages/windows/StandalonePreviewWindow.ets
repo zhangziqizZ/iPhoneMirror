@@ -63,20 +63,18 @@
 // 一条栏。第一版把它做成**浮层**（压在画面上），实测两个问题（用户 2026-09-21
 // 截图反馈）：① 它把手机画面顶部压住了；② 系统标题栏还在，屏幕上同时有两套控件。
 //
-// 现在这条栏是**预留条带**，不再压画面：
+// 2026-10-19 改为「画面铺满 + 上下毛玻璃浮层」—— 对齐华为多屏协同观感（用户要求）：
 //
-//   · 布局 = Column{ 条带 ; 画面 }，条带**永远占位**，只有里面的按钮会淡入淡出。
-//     这样 hover 显隐不会引起 XComponent 尺寸变化（否则每次鼠标划过都要重建
-//     surface，画面会闪）。
-//   · 条带高度 = 窗口宽度 × STANDALONE_STRIP_FRACTION —— **必须按宽度取比例**，
-//     否则「窗口内容区比例是常数」与「画面比例不被破坏」两条无法同时成立，
-//     推导见 WindowServices.standalone_content_aspect 的注释。
-//     副产品：整窗（含条带）一起等比缩放，正好就是用户要的「只能等比例放大缩小」。
-//   · 三键 = 关闭（Dismiss20）/ 最小化（Subtract20），**不做放大** —— 用户明确
-//     要求去掉（2in1 上放大/还原对这个画面窗口没意义）；顺序对齐 macOS 左上角
-//     三键（macOS 是 关闭/最小化/放大 三个，这里只剩前两个）。图标是单色 Fluent
-//     符号，顺序是唯一能表达"哪个是哪个"的手段。
-//   · 鼠标移到窗口顶部热区时浮出，移开后延时自动隐藏；「常驻」可钉住。
+//   · 布局 = Stack{ 画面(铺满整窗) ; 顶栏(贴顶浮层) ; 底栏(贴底浮层) }。画面层永远
+//     铺满整窗（XComponent 100%×100%），顶/底两条栏是叠在画面之上的浮层，带
+//     backgroundBlurStyle 毛玻璃（半透明底色再压一层），叠在视频上即磨砂质感。
+//   · 视频按源比例铺满窗口、不变形；栏只压住画面最上/最下的一小条（即华为多屏协同
+//     那种上下磨砂栏的效果）。窗口比例直接取源比例（resolve_aspect），不再为条带让位。
+//   · 栏高度 = 窗口宽度 × STANDALONE_STRIP_FRACTION（只用于定高，不参与比例锁）。
+//     悬浮显隐只切换栏内容（visibility），画面层尺寸恒定 ⇒ XComponent 不重建 surface。
+//   · 顶栏：设备名/短徽标 + 常驻 + 圆角 + 关闭/最小化；拖动挂在整条上。
+//   · 底栏：反控开/关（复用主窗口同一个跨窗口标志）+ 键盘映射入口（P2-2 管理器）。
+//   · 鼠标移到窗口顶部或底部热区时浮出上下两条栏，移开后延时自动隐藏；「常驻」可钉住。
 //
 // ★ 与项目既有铁律的关系：「窗口三键由系统绘制，绝不自绘」那条针对的是**主窗口
 //   沉浸式标题栏**。这里不同：Ability 已经把系统装饰与系统三键区**都**关掉了
@@ -120,6 +118,7 @@ import { ReverseControlInput } from '../../common/ReverseControlInput';
 import { BluetoothHidPeripheral } from '../../common/BluetoothHidPeripheral';
 import { t } from '../../common/i18n';
 import { INDEPENDENT_OPACITY_KEY, INDEPENDENT_OPAQUE_ON_HOVER_KEY } from '../../common/AppPreferences';
+import { open_keyboard_mapping } from './KeyboardMappingWindow';
 
 const TAG: string = 'im_standalone_preview';
 const DOMAIN: number = 0x0100;
@@ -321,6 +320,8 @@ struct StandalonePreviewWindow {
   @StorageLink(INDEPENDENT_OPAQUE_ON_HOVER_KEY) independentOpaqueOnHover: boolean = false;
   /** 当前指针是否在窗口内（用于悬停变不透明）。 */
   @State hovering: boolean = false;
+  /** 反控是否被显式停用（底栏开关用；跨窗口共享 REVERSE_CONTROL_DISABLED_KEY）。 */
+  @State reverseDisabled: boolean = false;
 
   @State cornersEnabled: boolean = true;
 
@@ -350,6 +351,8 @@ struct StandalonePreviewWindow {
 
   /** 窗口内容区的短边（vp）—— 窗口轮廓圆角的换算基准。 */
   private lastShortEdgeVp: number = 0;
+  /** 窗口内容区的高度（vp）—— 底部热区判定要用。 */
+  private lastWindowHeightVp: number = 0;
 
   /** 反控通道是否正在本窗口侧启动（防重复触发，见 ensure_reverse_channel）。 */
   private channelStarting: boolean = false;
@@ -383,6 +386,14 @@ struct StandalonePreviewWindow {
     // 那两个设置是**粘性**的 —— CoreApi.h:365 原文 "The setting is retained across
     // preview-window reattachment"，draw 时读，与 attach 的先后无关。
     this.apply_preview_corners();
+
+    // 反控停用标志跨窗口共享（主窗口那个开关写同一个键）：底栏的开关要反映它当前值。
+    try {
+      const disabled: boolean | undefined = AppStorage.get<boolean>(REVERSE_CONTROL_DISABLED_KEY);
+      this.reverseDisabled = disabled === true;
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, '读反控停用标志失败: %{public}s', (error as BusinessError).message);
+    }
 
     // 锁比例若失败了，Ability 把原因写进了这个键。栏上只给短徽标，完整原因走
     // STANDALONE_NOTICE_KEY（主窗口占位区显示）—— 失败必须能被看见，但不能把栏吃掉。
@@ -643,6 +654,7 @@ struct StandalonePreviewWindow {
         return;
       }
       this.lastShortEdgeVp = Math.min(width, height);
+      this.lastWindowHeightVp = height;
       this.apply_window_corners(this.lastShortEdgeVp);
       const strip: number = standalone_strip_height(width);
       if (strip !== this.stripHeight) {
@@ -744,7 +756,9 @@ struct StandalonePreviewWindow {
       if (Number.isNaN(y)) {
         return;
       }
-      if (y <= STRIP_HIT_HEIGHT) {
+      // 顶部或底部热区都浮出上下两条栏（贴合「上下毛玻璃栏」的整体感）。
+      const bottomEdge: number = this.lastWindowHeightVp - STRIP_HIT_HEIGHT;
+      if (y <= STRIP_HIT_HEIGHT || (this.lastWindowHeightVp > 0 && y >= bottomEdge)) {
         this.cancel_hide_timer();
         this.set_strip_visible(true);
         return;
@@ -768,6 +782,58 @@ struct StandalonePreviewWindow {
       hilog.warn(DOMAIN, TAG, '处理鼠标移动失败: %{public}s',
         (error as BusinessError).message);
     }
+  }
+
+  /**
+   * 底部毛玻璃栏（对齐华为多屏协同的下栏）：反控开/关 + 键盘映射入口。
+   * 与顶栏共用 stripVisible：靠近底部热区时一同浮出，移开延时隐藏。
+   */
+  @Builder
+  bottom_bar() {
+    Row() {
+      Row() {
+        // 反控开/关：状态来自 REVERSE_CONTROL_DISABLED_KEY（跨窗口共享，主窗口那个开关写同一键）。
+        this.text_toggle(this.reverseDisabled ? t('反控 关') : t('反控 开'), !this.reverseDisabled, 80,
+          (): void => {
+            this.toggle_reverse_control();
+          });
+        // 键盘映射：复用 P2-2 的键盘映射管理器（把电脑键映射成 iPhone 屏幕触摸动作）。
+        this.text_button(t('键盘映射'), 104, (): void => {
+          try {
+            const ctx: common.Context | undefined = this.getUIContext().getHostContext();
+            if (ctx !== undefined && ctx !== null) {
+              open_keyboard_mapping(ctx);
+            }
+          } catch (error) {
+            hilog.warn(DOMAIN, TAG, '打开键盘映射失败: %{public}s', (error as BusinessError).message);
+          }
+        });
+      }
+      .width('100%')
+      .height('100%')
+      .padding({ left: 8, right: 8 })
+      .alignItems(VerticalAlign.Center)
+      .justifyContent(FlexAlign.Center)
+      // ★ 毛玻璃（同顶栏）。
+      .backgroundBlurStyle(BlurStyle.BACKGROUND_THIN)
+      .backgroundColor('#7A20202A')
+      .visibility(this.stripVisible ? Visibility.Visible : Visibility.Hidden)
+      .opacity(this.stripVisible ? 1 : 0);
+    }
+    .width('100%')
+    .height(this.stripHeight)
+    .backgroundColor(Color.Transparent)
+    // 鼠标落在底栏上时不许隐藏：否则「点按钮」会变成追着栏跑。
+    .onHover((isHover: boolean): void => {
+      try {
+        if (isHover) {
+          this.cancel_hide_timer();
+          this.set_strip_visible(true);
+        }
+      } catch (error) {
+        hilog.warn(DOMAIN, TAG, '处理悬停失败: %{public}s', (error as BusinessError).message);
+      }
+    });
   }
 
   // ═══════════ 反向控制：画面区输入 → BLE HID ═══════════
@@ -902,6 +968,30 @@ struct StandalonePreviewWindow {
   }
 
   /**
+   * 底栏的反控开/关：与主窗口同一个跨窗口标志（REVERSE_CONTROL_DISABLED_KEY）。
+   * 关 → 停广播 + 置禁用标志（否则鼠标回到画面会自动重连，开关像坏了）；
+   * 开 → 清标志 + 惰性拉起通道。整段包 try（项目铁律）。
+   */
+  private toggle_reverse_control(): void {
+    const hid = BluetoothHidPeripheral.shared();
+    try {
+      if (!this.reverseDisabled) {
+        hid.stop();
+        ReverseControlInput.shared().setEnabled(false);
+        AppStorage.setOrCreate<boolean>(REVERSE_CONTROL_DISABLED_KEY, true);
+        this.reverseDisabled = true;
+        return;
+      }
+      AppStorage.setOrCreate<boolean>(REVERSE_CONTROL_DISABLED_KEY, false);
+      this.reverseDisabled = false;
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, '切换反控标志失败: %{public}s', (error as BusinessError).message);
+    }
+    // 开启分支：清掉禁用标志后惰性拉起（ensure_reverse_channel 内部会先读这个标志）。
+    this.ensure_reverse_channel();
+  }
+
+  /**
    * XComponent onLoad → surfaceId → 挂到渲染器。
    *
    * ★ 这一步就是「独立窗口拿到画面」的全部：渲染器只有**一个** EGLSurface，
@@ -995,13 +1085,34 @@ struct StandalonePreviewWindow {
     });
   }
 
+  /** 底栏用的纯文字按钮（与 text_toggle 同观感，但不带选中态）。 */
+  @Builder
+  text_button(label: string, width: number, on_click: () => void) {
+    Row() {
+      Text(label)
+        .fontSize(12)
+        .fontColor(TEXT);
+    }
+    .width(width)
+    .height(26)
+    .justifyContent(FlexAlign.Center)
+    .borderRadius(6)   // Apple 圆角分级：26 高文字按钮 → 6（RADIUS_MICRO）
+    .backgroundColor(CONTROL_FILL)
+    .margin({ left: 4 })
+    .hoverEffect(HoverEffect.Highlight)
+    .onClick((): void => {
+      on_click();
+    });
+  }
+
   /**
-   * 顶部条带：设备名/短徽标 + 常驻 + 圆角 + 关闭/最小化；拖动挂在整条上。
+   * 顶部毛玻璃栏：设备名/短徽标 + 常驻 + 圆角 + 关闭/最小化；拖动挂在整条上。
    *
-   * ★ 两层结构：外层**永远占位**（高度 = stripHeight，底色是窗口 chrome），内层
-   *   才是可以隐藏的内容。这样隐藏时条带不会塌掉 → 画面区尺寸不变 →
-   *   XComponent 不重建 surface。若把整条设成 Hidden，虽然布局空间还在，但
-   *   拖动/悬停这些交互也会一起失效，所以要分开。
+   * ★ 两层结构：外层只负责占位与拖拽/悬停事件（透明、高 = stripHeight，
+   *   贴在画面之上不挤占视频），内层才是真正显示的内容 + 毛玻璃
+   *   （backgroundBlurStyle + 半透明底色）。内层用 visibility 隐藏时，毛玻璃与
+   *   内容一并消失、让出整块画面 —— 因为现在是浮层叠在画面上，隐藏即让出画面，
+   *   不需要再为 XComponent 保尺寸（悬浮显隐也不会重建 surface）。
    */
   @Builder
   strip() {
@@ -1079,14 +1190,18 @@ struct StandalonePreviewWindow {
       .height('100%')
       .padding({ left: 8, right: 8 })
       .alignItems(VerticalAlign.Center)
+      // ★ 毛玻璃：背景模糊 + 半透明底色，叠在画面上即华为多屏协同那种上下栏质感
+      //   （blur 把栏背后的视频虚化，半透明底色再压一层，得到磨砂玻璃观感）。
+      .backgroundBlurStyle(BlurStyle.BACKGROUND_THIN)
+      .backgroundColor('#7A20202A')
       // ★ 用 visibility 而不只是 opacity：opacity 0 的组件**仍然会响应点击**，
-      //   那样内容隐藏后在条带上点一下就会误触按钮。
+      //   那样内容隐藏后在条带上点一下就会误触按钮。隐藏时毛玻璃也一并消失。
       .visibility(this.stripVisible ? Visibility.Visible : Visibility.Hidden)
       .opacity(this.stripVisible ? 1 : 0);
     }
     .width('100%')
     .height(this.stripHeight)
-    .backgroundColor(CONTROL_FILL)
+    .backgroundColor(Color.Transparent)
     // ★ 鼠标停在条带上时不许隐藏：否则"点按钮"会变成追着栏跑。
     .onHover((isHover: boolean): void => {
       try {
@@ -1133,15 +1248,13 @@ struct StandalonePreviewWindow {
   }
 
   build() {
-    // ★ 布局是**上下两块**，不是浮层：条带永远占位，画面只拿剩下那块。
-    //   条带高度 = 窗口宽度 × STANDALONE_STRIP_FRACTION，而 Ability 锁的内容区
-    //   比例 K = 1/(1/R + f) 正是按这个前提算的 —— 所以画面区恰好是 W × W/R，
-    //   手机画面既不被压住也不变形（推导见 WindowServices 里的注释）。
-    Column() {
-      // ① 顶部条带
-      this.strip()
-
-      // ② 画面
+    // ★ 布局改为「画面铺满窗口 + 上下毛玻璃栏浮层」—— 对齐华为多屏协同：
+    //   画面层（XComponent + 输入承接层）永远铺满整窗；顶/底两条栏是叠在画面之上的
+    //   浮层（带 backgroundBlurStyle 毛玻璃），不再预留条带挤占画面。视频按源比例铺满
+    //   窗口不变形，栏只压住画面最上/最下的一小条，得到多屏协同那种上下磨砂质感。
+    //   窗口比例直接取源画面比例（resolve_aspect），与华为一致：手机画面铺满，栏做装饰。
+    Stack({ alignContent: Alignment.TopStart }) {
+      // ① 底层：画面（铺满窗口）
       Stack({ alignContent: Alignment.TopStart }) {
         XComponent({
           id: 'standalone_preview',
@@ -1160,22 +1273,14 @@ struct StandalonePreviewWindow {
 
         // ── 反向控制的输入承接层（与主窗口同一套规矩） ──────────────────
         // 常驻的透明层，铺满整个画面区：鼠标落到手机上就接管，移开就释放。
-        //
-        // ★ 常驻是必须的 —— onHover 只有组件**已经存在**时才触发，挂成条件
-        //   渲染就永远等不到第一次悬停（只能先点一下把它创建出来，那又回到
-        //   要手动操作的老路）。是否真的转发由 ReverseControlInput 的接管态
-        //   决定，与这一层在不在无关。
-        // ★ 不挂在 XComponent 上：它的 surface 由原生渲染器直接消费，通用
-        //   指针事件的投递不保证稳定（主窗口那边已实测过，同一套做法）。
+        // ★ 常驻是必须的 —— onHover 只有组件**已经存在**时才触发；是否真的转发
+        //   由 ReverseControlInput 的接管态决定，与这一层在不在无关。
         Column()
           .id('standalone_input')
           .focusable(true)
           .width('100%')
           .height('100%')
           .backgroundColor(Color.Transparent)
-          // 焦点真值由组件自己报（requestFocus 返回 void，没有成功/失败可读）：
-          // 主窗口若还开着，"接管了但键盘哑掉"和"通道没通"现象一模一样，
-          // 必须让焦点也进账本。requestFocus 找的正是这里的 `.id()`。
           .onFocus((): void => {
             ReverseControlInput.shared().noteKeyboardFocus(true);
           })
@@ -1198,29 +1303,33 @@ struct StandalonePreviewWindow {
             ReverseControlInput.shared().handle_key(event);
           })
           .onClick((): void => {
-            // 点一下把焦点交给这一层：不拿焦点就收不到键盘事件。
             this.focus_input();
           })
       }
       .width('100%')
-      .layoutWeight(1)
-      // ── 反向控制的**兜底**承接（与里面那层透明承接层双保险） ────────────
-      // 画面区容器与承接层几何完全重合（承接层是 100%×100% 的子节点）⇒ 两者的
-      // 局部坐标一致，转发语义一字不差；但容器是"有子节点的容器"，属于命中测试
-      // 里最不会漏的一类节点。万一某版本把"透明的空容器"不当鼠标命中目标，
-      // 事件仍会在容器这一层被接住（鼠标事件沿命中路径冒泡 —— MouseEvent 上
-      // 存在 stopPropagation 即证明它冒泡）。同一事件被两处各收一次时由
-      // handle_mouse 按事件指纹去重，不会发两遍，去重次数进诊断。
+      .height('100%')
+      // 反向控制的兜底承接（与里面那层透明承接层双保险）。
       .onMouse((event: MouseEvent): void => {
         ReverseControlInput.shared().handle_mouse(event);
       })
       .onAxisEvent((event: AxisEvent): void => {
         ReverseControlInput.shared().handle_axis(event);
       })
+      .border({ width: 1, color: BORDER_SOFT })
+
+      // ② 顶层：顶部毛玻璃栏（浮在画面之上、贴顶）
+      this.strip()
+        .width('100%')
+        .align(Alignment.TopStart);
+
+      // ③ 顶层：底部毛玻璃栏（浮在画面之上、贴底）
+      this.bottom_bar()
+        .width('100%')
+        .align(Alignment.BottomStart);
     }
     .width('100%')
     .height('100%')
-    // 鼠标移到顶部热区 → 浮出条带内容；移开 → 延时隐藏（macOS「iPhone 镜像」的行为）。
+    // 鼠标移到顶部或底部热区 → 浮出上下两条栏；移开 → 延时隐藏。
     .onMouse((event: MouseEvent): void => {
       this.on_pointer_move(event);
     })
@@ -1230,7 +1339,6 @@ struct StandalonePreviewWindow {
     })
     // 上游设备模式 HWND 没有设背景刷 ⇒ 客户区底色是黑的；这里照做。
     .backgroundColor(Color.Black)
-    .border({ width: 1, color: BORDER_SOFT })
     // 悬停变不透明：透明度 < 100% 时，指针进入窗口临时全不透明，移开恢复基准值。
     .onHover((isHover: boolean): void => {
       this.hovering = isHover;
