@@ -5,10 +5,12 @@ import { setSystemDark, SYSTEM_DARK_KEY } from '../common/theme_manager';
 import { WINDOW_ACRYLIC_RESULT_KEY, WINDOW_SHADOW_RESULT_KEY, APP_WINDOW_VISIBLE_KEY,
   MINIMIZE_TO_TRAY_KEY } from '../common/WindowServices';
 import { open_app_preferences, load_acrylic_preferences, load_language_preference,
-  load_hide_pointer_preference, load_glow_preferences, load_tray_preferences } from '../common/AppPreferences';
+  load_hide_pointer_preference, load_glow_preferences, load_tray_preferences,
+  load_first_run_done, FIRST_RUN_DONE_KEY } from '../common/AppPreferences';
 import { vp_to_px_ratio } from '../common/SubWindow';
 import { BusinessError } from '@ohos.base';
 import { open_instance_conflict, InstanceConflictRequest } from '../pages/windows/InstanceConflictWindow';
+import { open_first_run } from '../pages/windows/FirstRunSetupWindow';
 import { TrayManager } from '../common/TrayManager';
 import { StatusBarTray } from '../common/StatusBarTray';
 import { setLogFile, getCaptureStatus, CaptureStatus } from 'libim_core.so';
@@ -50,6 +52,9 @@ export default class EntryAbility extends UIAbility {
     load_hide_pointer_preference();
     load_glow_preferences();
     load_tray_preferences();
+    // ★ 首启向导标记：必须在 UI 装载之前读回 AppStorage，否则首帧会用默认值
+    //   （false）建立键，这里再写也只是普通更新、首次启动不会弹出向导。
+    load_first_run_done();
     // ★ 读回存档后立刻把档位灌进 i18n 的缓存（否则首帧 t() 会用默认值建缓存；
     //   且缓存必须在这里建立 —— 主窗每 500ms 整树重渲染，t() 每秒上千次，
     //   不能每次都去读 AppStorage）。
@@ -352,6 +357,21 @@ export default class EntryAbility extends UIAbility {
       // ★ 托盘初始化已在本块开头的「托盘接入」处按「状态栏图标优先、通知降级」
       //   一次性完成 —— 这里**不能**再调 TrayManager.shared().initialize()：
       //   状态栏托盘接入成功时它会再发一条常驻通知，出现"状态栏图标 + 通知"双入口。
+
+      // ★ 首启向导：首次启动（first_run_done 未置位）自动弹出，引导用户完成
+      //   连接方式选择 / 连接指引 / 权限提示。窗口任意方式关闭都会经关窗钩子
+      //   写标记（见 FirstRunSetupWindow.ets），之后不再自动弹。
+      //   放在 loadContent 成功之后：主窗口 stage 已就绪，SubWindowHost.open
+      //   才能拿到 getLastWindow 作 owner 居中。整段 try 包住，避免把启动带崩。
+      try {
+        const firstRunDone: boolean = AppStorage.get<boolean>(FIRST_RUN_DONE_KEY) ?? false;
+        if (!firstRunDone) {
+          open_first_run(this.context);
+        }
+      } catch (firstRunError) {
+        const frFailure = firstRunError as BusinessError;
+        hilog.warn(0x0000, TAG, '首启向导弹出失败（非致命）：%{public}s', frFailure.message);
+      }
     });
   }
 

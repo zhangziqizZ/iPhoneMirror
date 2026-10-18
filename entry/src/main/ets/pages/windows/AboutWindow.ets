@@ -173,6 +173,7 @@ import {
 import { FluentSymbol } from '../../common/FluentIcon';
 import { DEVELOPER_MODE_KEY, GLOW_ENABLED_KEY, GLOW_DEGRADED_KEY } from '../../common/WindowServices';
 import { t } from '../../common/i18n';
+import { open_first_run } from './FirstRunSetupWindow';
 import {
   UPDATE_OUTCOME_FAILED, UPDATE_OUTCOME_HAS_UPDATE, UPDATE_OUTCOME_NO_RELEASE,
   UPDATE_OUTCOME_UP_TO_DATE, UpdateCheckResult, check_latest_release,
@@ -1284,6 +1285,20 @@ struct AboutWindow {
             label: S_LICENSE(),
             minButtonWidth: 118,
             on_action: (): void => { this.on_license(); },
+          })
+            .margin({ right: 8, bottom: 8 });
+          // 首启向导：随时可重看（不依赖首启标记，见 FirstRunSetupWindow.ets）。
+          SecondaryButton({
+            label: t('首启向导'),
+            minButtonWidth: 108,
+            on_action: (): void => {
+              try {
+                open_first_run(this.ability_context() as common.Context);
+              } catch (error) {
+                hilog.warn(0x0000, 'im_about', '首启向导重开失败: %{public}s',
+                  (error as BusinessError).message);
+              }
+            },
           })
             .margin({ right: 8, bottom: 8 });
         }

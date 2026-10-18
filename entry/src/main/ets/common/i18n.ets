@@ -312,6 +312,27 @@ const ZH2EN: Record<string, string> = {
   '延迟': 'Latency',
   '端到端': 'End to end',
   '音频': 'Audio',
+
+  // ── 首启向导（FirstRunSetupWindow）──
+  '首启向导': 'Setup',
+  '欢迎使用 iPhone Mirror': 'Welcome to iPhone Mirror',
+  '本向导帮你完成第一次投屏所需的基本设置。': 'This wizard helps you complete the basic setup needed for your first mirroring session.',
+  '选择连接方式': 'Choose a connection method',
+  'AirPlay 无线投屏': 'AirPlay (wireless)',
+  '通过本机与 iPhone 的屏幕镜像连接，无需数据线。': 'Connects via your PC and iPhone screen mirroring — no cable needed.',
+  'USB 有线投屏': 'USB (wired)',
+  '需要额外签名权限，当前以 AirPlay 更稳定。': 'Requires extra signed permissions; AirPlay is more stable for now.',
+  '连接指引': 'Connection guide',
+  '在 iPhone 上，从右上角向下滑动打开控制中心，点「屏幕镜像」，选择本机名称。': 'On your iPhone, swipe down from the top-right to open Control Center, tap "Screen Mirroring", and choose this PC.',
+  'USB 模式当前需要额外权限，建议先用 AirPlay 完成首次投屏。': 'USB mode needs extra permissions right now; we recommend AirPlay for your first session.',
+  '权限与提示': 'Permissions & tips',
+  '本应用需要本地网络与屏幕镜像系统能力；无需麦克风或相机权限。': 'This app needs local network and the screen-mirroring system capability; no microphone or camera permission required.',
+  '已知限制：录制与推流尚未实现。': 'Known limit: recording and streaming are not yet implemented.',
+  '开始使用': 'Get started',
+  '上一步': 'Previous',
+  '下一步': 'Next',
+  '跳过': 'Skip',
+  '完成': 'Done',
 };
 
 /** 简体中文 → 繁體中文（香港）。 */
@@ -536,6 +557,27 @@ const ZH2HK: Record<string, string> = {
   '延迟': '延遲',
   '端到端': '端對端',
   '音频': '音訊',
+
+  // ── 首启向导（FirstRunSetupWindow）──
+  '首启向导': '首啟精靈',
+  '欢迎使用 iPhone Mirror': '歡迎使用 iPhone Mirror',
+  '本向导帮你完成第一次投屏所需的基本设置。': '本精靈協助你完成首次螢幕鏡像所需的基本設定。',
+  '选择连接方式': '選擇連線方式',
+  'AirPlay 无线投屏': 'AirPlay 無線螢幕鏡像',
+  '通过本机与 iPhone 的屏幕镜像连接，无需数据线。': '透過本機與 iPhone 的螢幕鏡像連線，無須數據線。',
+  'USB 有线投屏': 'USB 有線螢幕鏡像',
+  '需要额外签名权限，当前以 AirPlay 更稳定。': '需要額外簽名權限，目前以 AirPlay 較穩定。',
+  '连接指引': '連線指引',
+  '在 iPhone 上，从右上角向下滑动打开控制中心，点「屏幕镜像」，选择本机名称。': '在 iPhone 上，從右上角向下滑動開啟控制中心，點「螢幕鏡像」，選擇本機名稱。',
+  'USB 模式当前需要额外权限，建议先用 AirPlay 完成首次投屏。': 'USB 模式目前需要額外權限，建議先以 AirPlay 完成首次螢幕鏡像。',
+  '权限与提示': '權限與提示',
+  '本应用需要本地网络与屏幕镜像系统能力；无需麦克风或相机权限。': '本應用程式需要本機網絡與螢幕鏡像系統能力；無須麥克風或相機權限。',
+  '已知限制：录制与推流尚未实现。': '已知限制：錄製與串流尚未實現。',
+  '开始使用': '開始使用',
+  '上一步': '上一步',
+  '下一步': '下一步',
+  '跳过': '跳過',
+  '完成': '完成',
 };
 
 /**

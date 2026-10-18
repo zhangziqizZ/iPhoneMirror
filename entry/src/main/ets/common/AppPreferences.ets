@@ -51,6 +51,11 @@ const PREFS_KEY_HIDE_POINTER: string = 'hide_pointer_on_takeover';
 const PREFS_KEY_GLOW_ENABLED: string = 'glow_enabled';
 const PREFS_KEY_GLOW_STRENGTH: string = 'glow_strength';
 const PREFS_KEY_MINIMIZE_TO_TRAY: string = 'minimize_to_tray';
+/** ★ preferences 里的键：首启向导是否已看过（默认 false = 没看过，首次启动弹）。 */
+const PREFS_KEY_FIRST_RUN_DONE: string = 'first_run_done';
+
+/** ★ AppStorage 键：首启向导是否已看过（false = 首次启动应弹出向导）。 */
+export const FIRST_RUN_DONE_KEY: string = 'im.firstRun.done';
 
 /**
  * 偏好实例。为什么是模块级可变变量：写入发生在 UI 点击回调里，那里拿不到 Ability 的
@@ -276,6 +281,44 @@ export function save_tray_preferences(minimizeToTray: boolean): void {
   } catch (writeError) {
     const writeFailure = writeError as BusinessError;
     hilog.warn(0x0000, 'AppPreferences', '托盘偏好写入失败 %d %{public}s',
+      writeFailure.code, writeFailure.message);
+  }
+}
+
+/**
+ * 从磁盘读回「首启向导是否已看过」，写进 AppStorage。
+ *
+ * ★ 与 load_acrylic_preferences 同理：必须在 UI 装载**之前**调用，否则 Index 里的
+ *   @StorageLink / AppStorage 读取会先建键（默认值 false），这里再写也只是普通更新。
+ * ★ 默认值 false = 没看过：首次启动应弹出首启向导（见 EntryAbility.onWindowStageCreate）。
+ */
+export function load_first_run_done(): void {
+  if (store === null) {
+    AppStorage.setOrCreate(FIRST_RUN_DONE_KEY, false);
+    return;
+  }
+  try {
+    const done: boolean = store.getSync(PREFS_KEY_FIRST_RUN_DONE, false) as boolean;
+    AppStorage.setOrCreate(FIRST_RUN_DONE_KEY, done);
+  } catch (readError) {
+    const readFailure = readError as BusinessError;
+    AppStorage.setOrCreate(FIRST_RUN_DONE_KEY, false);
+    hilog.warn(0x0000, 'AppPreferences', '首启向导标记读取失败 %d %{public}s',
+      readFailure.code, readFailure.message);
+  }
+}
+
+/** 标记首启向导已看过，并立即落盘（下次启动不再弹出）。 */
+export function save_first_run_done(): void {
+  if (store === null) {
+    return;
+  }
+  try {
+    store.putSync(PREFS_KEY_FIRST_RUN_DONE, true);
+    store.flushSync();
+  } catch (writeError) {
+    const writeFailure = writeError as BusinessError;
+    hilog.warn(0x0000, 'AppPreferences', '首启向导标记写入失败 %d %{public}s',
       writeFailure.code, writeFailure.message);
   }
 }
