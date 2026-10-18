@@ -333,6 +333,13 @@ const ZH2EN: Record<string, string> = {
   '上一步': 'Previous',
   '下一步': 'Next',
   '跳过': 'Skip',
+  '独立窗口风格': 'Independent Window Style',
+  '窗口风格': 'Window Style',
+  '调整独立预览窗口的透明度与悬停行为。': 'Adjust the opacity and hover behavior of the independent preview window.',
+  '窗口透明度': 'Window opacity',
+  '降低透明度可让桌面透出，便于边看投屏边处理其它窗口。': 'Lowering opacity lets the desktop show through, so you can watch the cast while working in other windows.',
+  '鼠标移到窗口上时暂时恢复全不透明，移开后再回到设定值。': 'Temporarily restores full opacity while the pointer is over the window, then returns to the set value when it leaves.',
+  '重置': 'Reset',
   '完成': 'Done',
 };
 
@@ -578,6 +585,13 @@ const ZH2HK: Record<string, string> = {
   '上一步': '上一步',
   '下一步': '下一步',
   '跳过': '跳過',
+  '独立窗口风格': '獨立視窗風格',
+  '窗口风格': '視窗風格',
+  '调整独立预览窗口的透明度与悬停行为。': '調整獨立預覽視窗的透明度與懸停行為。',
+  '窗口透明度': '視窗透明度',
+  '降低透明度可让桌面透出，便于边看投屏边处理其它窗口。': '降低透明度可讓桌面透出，便於邊看投屏邊處理其它視窗。',
+  '鼠标移到窗口上时暂时恢复全不透明，移开后再回到设定值。': '滑鼠移到視窗上時暫時恢復全不透明，移開後再回到設定值。',
+  '重置': '重設',
   '完成': '完成',
 };
 

@@ -322,3 +322,84 @@ export function save_first_run_done(): void {
       writeFailure.code, writeFailure.message);
   }
 }
+
+// ── 独立窗口风格（WindowStyleSettingsWindow）──
+const PREFS_KEY_INDEPENDENT_OPACITY: string = 'independent_window_opacity';                // 10..100，默认 100
+const PREFS_KEY_INDEPENDENT_OPAQUE_ON_HOVER: string = 'independent_window_opaque_on_hover'; // 默认 false
+
+/** AppStorage 键：独立窗口透明度（百分比 10..100，100 = 全不透明）。 */
+export const INDEPENDENT_OPACITY_KEY: string = 'im.independentWindow.opacity';
+/** AppStorage 键：独立窗口悬停时是否临时变全不透明。 */
+export const INDEPENDENT_OPAQUE_ON_HOVER_KEY: string = 'im.independentWindow.opaqueOnHover';
+
+/** 透明度合法区间（与上游 Slider Minimum=10 Maximum=100 一致）。 */
+export const INDEPENDENT_OPACITY_MIN: number = 10;
+export const INDEPENDENT_OPACITY_MAX: number = 100;
+
+/** 把任意数值夹到 [MIN, MAX] 并取整；非有限值回退默认 100。 */
+function clamp_independent_opacity(value: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return INDEPENDENT_OPACITY_MAX;
+  }
+  return Math.max(INDEPENDENT_OPACITY_MIN, Math.min(INDEPENDENT_OPACITY_MAX, Math.round(value)));
+}
+
+/**
+ * 读回独立窗口风格偏好，写进 AppStorage。
+ * ★ 必须在 UI 装载之前调用（EntryAbility.onCreate）；独立预览 Ability 也走同一份
+ *   AppStorage（应用级、跨 Ability 共享），这里建键即可被它读到。
+ */
+export function load_independent_window_style(): void {
+  const defOpacity: number = INDEPENDENT_OPACITY_MAX;
+  const defHover: boolean = false;
+  if (store === null) {
+    AppStorage.setOrCreate(INDEPENDENT_OPACITY_KEY, defOpacity);
+    AppStorage.setOrCreate(INDEPENDENT_OPAQUE_ON_HOVER_KEY, defHover);
+    return;
+  }
+  try {
+    const opacity: number = store.getSync(PREFS_KEY_INDEPENDENT_OPACITY, defOpacity) as number;
+    AppStorage.setOrCreate(INDEPENDENT_OPACITY_KEY, clamp_independent_opacity(opacity));
+    const hover: boolean = store.getSync(PREFS_KEY_INDEPENDENT_OPAQUE_ON_HOVER, defHover) as boolean;
+    AppStorage.setOrCreate(INDEPENDENT_OPAQUE_ON_HOVER_KEY, hover);
+  } catch (readError) {
+    const readFailure = readError as BusinessError;
+    AppStorage.setOrCreate(INDEPENDENT_OPACITY_KEY, defOpacity);
+    AppStorage.setOrCreate(INDEPENDENT_OPAQUE_ON_HOVER_KEY, defHover);
+    hilog.warn(0x0000, 'AppPreferences', '独立窗口风格读取失败 %d %{public}s',
+      readFailure.code, readFailure.message);
+  }
+}
+
+/** 保存独立窗口透明度（百分比）。立即落盘，并同步 AppStorage（供独立窗口 @Watch 实时生效）。 */
+export function save_independent_window_opacity(value: number): void {
+  const v: number = clamp_independent_opacity(value);
+  AppStorage.setOrCreate(INDEPENDENT_OPACITY_KEY, v);
+  if (store === null) {
+    return;
+  }
+  try {
+    store.putSync(PREFS_KEY_INDEPENDENT_OPACITY, v);
+    store.flushSync();
+  } catch (writeError) {
+    const writeFailure = writeError as BusinessError;
+    hilog.warn(0x0000, 'AppPreferences', '独立窗口透明度写入失败 %d %{public}s',
+      writeFailure.code, writeFailure.message);
+  }
+}
+
+/** 保存「悬停变不透明」开关。立即落盘并同步 AppStorage。 */
+export function save_independent_window_opaque_on_hover(value: boolean): void {
+  AppStorage.setOrCreate(INDEPENDENT_OPAQUE_ON_HOVER_KEY, value);
+  if (store === null) {
+    return;
+  }
+  try {
+    store.putSync(PREFS_KEY_INDEPENDENT_OPAQUE_ON_HOVER, value);
+    store.flushSync();
+  } catch (writeError) {
+    const writeFailure = writeError as BusinessError;
+    hilog.warn(0x0000, 'AppPreferences', '悬停不透明开关写入失败 %d %{public}s',
+      writeFailure.code, writeFailure.message);
+  }
+}

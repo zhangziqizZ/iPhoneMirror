@@ -119,6 +119,7 @@ import { CORNER_RECTANGULAR, DeviceCornerProfile } from '../../common/DeviceCorn
 import { ReverseControlInput } from '../../common/ReverseControlInput';
 import { BluetoothHidPeripheral } from '../../common/BluetoothHidPeripheral';
 import { t } from '../../common/i18n';
+import { INDEPENDENT_OPACITY_KEY, INDEPENDENT_OPAQUE_ON_HOVER_KEY } from '../../common/AppPreferences';
 
 const TAG: string = 'im_standalone_preview';
 const DOMAIN: number = 0x0100;
@@ -314,6 +315,13 @@ struct StandalonePreviewWindow {
   @State reverseDiag: string = '';
 
   /** 轮廓是否套用机型圆角 —— 上游 `NativePreviewWindow._cornersEnabled`。 */
+  /** 独立窗口透明度（百分比 10..100），由 WindowStyleSettingsWindow 写入 AppStorage。 */
+  @StorageLink(INDEPENDENT_OPACITY_KEY) @Watch('on_independent_opacity_changed') independentOpacity: number = 100;
+  /** 悬停时临时全不透明开关。 */
+  @StorageLink(INDEPENDENT_OPAQUE_ON_HOVER_KEY) independentOpaqueOnHover: boolean = false;
+  /** 当前指针是否在窗口内（用于悬停变不透明）。 */
+  @State hovering: boolean = false;
+
   @State cornersEnabled: boolean = true;
 
   /**
@@ -452,6 +460,27 @@ struct StandalonePreviewWindow {
       }
     } catch (error) {
       hilog.warn(DOMAIN, TAG, '反控状态轮询失败: %{public}s',
+        (error as BusinessError).message);
+    }
+  }
+
+  /** 独立窗口透明度变化：立即重设窗口不透明度（悬停临时覆盖期间不动基准）。 */
+  private on_independent_opacity_changed(): void {
+    if (this.independentOpaqueOnHover && this.hovering) {
+      return;   // 悬停覆盖中，移开后再恢复基准值
+    }
+    this.set_window_opacity(this.independentOpacity / 100);
+  }
+
+  /** 对独立窗口设置不透明度（0.1..1.0）。 */
+  private set_window_opacity(alpha: number): void {
+    try {
+      const win: window.Window | undefined = AppStorage.get<window.Window>(STANDALONE_WINDOW_KEY);
+      if (win !== undefined && win !== null) {
+        win.setWindowOpacity(alpha);
+      }
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'setWindowOpacity 失败: %{public}s',
         (error as BusinessError).message);
     }
   }
@@ -1201,6 +1230,13 @@ struct StandalonePreviewWindow {
     })
     // 上游设备模式 HWND 没有设背景刷 ⇒ 客户区底色是黑的；这里照做。
     .backgroundColor(Color.Black)
-    .border({ width: 1, color: BORDER_SOFT });
+    .border({ width: 1, color: BORDER_SOFT })
+    // 悬停变不透明：透明度 < 100% 时，指针进入窗口临时全不透明，移开恢复基准值。
+    .onHover((isHover: boolean): void => {
+      this.hovering = isHover;
+      if (this.independentOpaqueOnHover && this.independentOpacity < 100) {
+        this.set_window_opacity(isHover ? 1.0 : this.independentOpacity / 100);
+      }
+    });
   }
 }

@@ -193,6 +193,7 @@ import { open_media_output_settings } from './windows/MediaOutputSettingsWindow'
 import { open_projection_settings, OUT_KEY_SEPARATE_WINDOW_REQUESTED } from './windows/ProjectionSettingsWindow';
 import { open_standalone_preview } from './windows/StandalonePreviewWindow';
 import { open_shortcut_settings } from './windows/ShortcutSettingsWindow';
+import { open_window_style } from './windows/WindowStyleSettingsWindow';
 import {
   open_bluetooth_control_waiting,
   open_bluetooth_control_connected,
@@ -3701,6 +3702,12 @@ struct Index {
       } else {
         this.open_standalone_window();
       }
+    } else if (action === 'window_style') {
+      // 独立窗口风格（透明度 + 悬停变不透明）。仅在独立窗口已开时才有意义——
+      // 它只改那个窗口的观感，没窗口可改时按钮置灰（见 mirroring_panel 的 usable）。
+      // 子窗口挂在主窗口上（open_window_style 走 SubWindowHost，与本站其它子窗口同律），
+      // 写进 AppStorage 的偏好由独立 Ability 的窗口 @Watch 实时套用。
+      open_window_style(this.appContext as common.UIAbilityContext);
     } else if (action === 'screenshot') {
       // 截图（原版 ScreenshotCommand）。可用性由按钮的 usable 决定（需真有画面）。
       this.capture_screenshot();
@@ -3765,6 +3772,12 @@ struct Index {
         usable: this.can_use_visual_tools(),
         on_action: (): void => { this.run_tool_action('window'); },
         on_blocked: (): void => { this.block_action('window'); },
+      })
+      ToolPanelButton({
+        btnLabel: t('窗口风格'), iconName: 'Settings24', iconSize: 16,
+        usable: this.standaloneOpen,
+        on_action: (): void => { this.run_tool_action('window_style'); },
+        on_blocked: (): void => { this.block_action('window_style'); },
       })
       ToolPanelButton({
         btnLabel: '截图', iconName: 'Screenshot20', iconSize: 16,

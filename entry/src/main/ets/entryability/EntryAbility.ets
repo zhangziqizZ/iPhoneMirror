@@ -6,7 +6,8 @@ import { WINDOW_ACRYLIC_RESULT_KEY, WINDOW_SHADOW_RESULT_KEY, APP_WINDOW_VISIBLE
   MINIMIZE_TO_TRAY_KEY } from '../common/WindowServices';
 import { open_app_preferences, load_acrylic_preferences, load_language_preference,
   load_hide_pointer_preference, load_glow_preferences, load_tray_preferences,
-  load_first_run_done, FIRST_RUN_DONE_KEY } from '../common/AppPreferences';
+  load_first_run_done, FIRST_RUN_DONE_KEY,
+  load_independent_window_style, INDEPENDENT_OPACITY_KEY } from '../common/AppPreferences';
 import { vp_to_px_ratio } from '../common/SubWindow';
 import { BusinessError } from '@ohos.base';
 import { open_instance_conflict, InstanceConflictRequest } from '../pages/windows/InstanceConflictWindow';
@@ -55,6 +56,9 @@ export default class EntryAbility extends UIAbility {
     // ★ 首启向导标记：必须在 UI 装载之前读回 AppStorage，否则首帧会用默认值
     //   （false）建立键，这里再写也只是普通更新、首次启动不会弹出向导。
     load_first_run_done();
+    // ★ 独立窗口风格偏好（透明度/悬停不透明）：同样必须在 UI 装载前读回 AppStorage，
+    //   独立预览 Ability 跨 Ability 共享这份 AppStorage，这里建好键它就能读到。
+    load_independent_window_style();
     // ★ 读回存档后立刻把档位灌进 i18n 的缓存（否则首帧 t() 会用默认值建缓存；
     //   且缓存必须在这里建立 —— 主窗每 500ms 整树重渲染，t() 每秒上千次，
     //   不能每次都去读 AppStorage）。
