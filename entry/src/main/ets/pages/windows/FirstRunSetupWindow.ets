@@ -261,11 +261,15 @@ struct FirstRunSetupWindow {
           }
         }
         .layoutWeight(1)
-        .alignItems(HorizontalAlign.Center);
+        // ★ 这一层是 Row ⇒ alignItems 收 VerticalAlign（不是 HorizontalAlign）。
+        .alignItems(VerticalAlign.Center);
       }, (title: string, idx: number): string => `${idx}`);
     }
     .width('100%')
-    .alignItems(VerticalAlign.Start);
+    // ★ VerticalAlign 没有 Start（Start 是 HorizontalAlign 的成员）⇒ 用 Center。
+    .alignItems(VerticalAlign.Center)
+    // 与下方步骤主体的间距（原先挂在调用处，但 @Builder 调用不能链属性）。
+    .margin({ bottom: 20 });
   }
 
   // ── Step 0：欢迎 ──
@@ -439,8 +443,8 @@ struct FirstRunSetupWindow {
   @Builder
   content() {
     Column() {
-      this.step_indicator()
-        .margin({ bottom: 20 });
+      // ★ @Builder 调用返回 void，不能在后面链 .margin()；间距写进 step_indicator 自己的根节点。
+      this.step_indicator();
 
       Scroll() {
         Column() {
@@ -473,12 +477,15 @@ struct FirstRunSetupWindow {
   actions() {
     Row() {
       // 左：上一步（首步禁用）。
+      // ★ actionEnabled 是 **PrimaryButton** 的 @Prop，SecondaryButton 没有这个属性
+      //   （传进去会报"未知属性"）。这里的禁用态改用通用属性 .enabled() 表达，
+      //   语义一致：禁用后既不响应点击、PrimaryButton 那套灰化观感也照样生效。
       SecondaryButton({
         label: t('上一步'),
         minButtonWidth: 96,
-        actionEnabled: this.step > 0,
         on_action: (): void => { this.go_prev(); },
-      });
+      })
+        .enabled(this.step > 0);
 
       // 右：跳过（最后一步不显示）+ 下一步 / 开始使用。
       Row() {

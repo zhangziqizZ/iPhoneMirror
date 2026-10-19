@@ -76,7 +76,9 @@ export function open_window_style(ctx: common.Context): void {
 @Component
 struct WindowStyleSettingsWindow {
   /** 独立窗口透明度（百分比 10..100），直连 AppStorage（独立窗口侧 @Watch 生效）。 */
-  @StorageLink(INDEPENDENT_OPACITY_KEY) opacity: number = INDEPENDENT_OPACITY_MAX;
+  // ★ 成员不能命名成 opacity：CustomComponent 基类自带 opacity 属性方法，同名字段会被判为
+  //   覆盖且类型不兼容（number 不能赋给属性方法）⇒ 编译报错。故加 Pct 后缀。
+  @StorageLink(INDEPENDENT_OPACITY_KEY) opacityPct: number = INDEPENDENT_OPACITY_MAX;
   /** 悬停变全不透明开关。 */
   @StorageLink(INDEPENDENT_OPAQUE_ON_HOVER_KEY) opaqueOnHover: boolean = false;
 
@@ -103,7 +105,7 @@ struct WindowStyleSettingsWindow {
 
   /** 重置：透明度 100%、悬停关闭。 */
   private reset_all(): void {
-    this.opacity = INDEPENDENT_OPACITY_MAX;
+    this.opacityPct = INDEPENDENT_OPACITY_MAX;
     this.opaqueOnHover = false;
     this.on_opacity_change(INDEPENDENT_OPACITY_MAX);
     this.on_hover_change(false);
@@ -119,7 +121,7 @@ struct WindowStyleSettingsWindow {
           .fontWeight(FontWeight.Bold)
           .fontColor(DARK.TEXT)
           .layoutWeight(1);
-        Text(`${this.opacity}%`)
+        Text(`${this.opacityPct}%`)
           .fontSize(14)
           .fontWeight(FontWeight.Bold)
           .fontColor(ACCENT);
@@ -128,14 +130,14 @@ struct WindowStyleSettingsWindow {
       .margin({ bottom: 12 });
 
       Slider({
-        value: this.opacity,
+        value: this.opacityPct,
         min: INDEPENDENT_OPACITY_MIN,
         max: INDEPENDENT_OPACITY_MAX,
         step: 1,
       })
         .width('100%')
         .onChange((value: number): void => {
-          this.opacity = value;
+          this.opacityPct = value;
           this.on_opacity_change(value);
         });
 

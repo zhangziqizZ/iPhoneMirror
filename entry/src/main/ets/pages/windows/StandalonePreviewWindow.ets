@@ -315,7 +315,7 @@ struct StandalonePreviewWindow {
 
   /** 轮廓是否套用机型圆角 —— 上游 `NativePreviewWindow._cornersEnabled`。 */
   /** 独立窗口透明度（百分比 10..100），由 WindowStyleSettingsWindow 写入 AppStorage。 */
-  @StorageLink(INDEPENDENT_OPACITY_KEY) @Watch('on_independent_opacity_changed') independentOpacity: number = 100;
+  @StorageLink(INDEPENDENT_OPACITY_KEY) independentOpacity: number = 100;
   /** 悬停时临时全不透明开关。 */
   @StorageLink(INDEPENDENT_OPAQUE_ON_HOVER_KEY) independentOpaqueOnHover: boolean = false;
   /** 当前指针是否在窗口内（用于悬停变不透明）。 */
@@ -475,25 +475,20 @@ struct StandalonePreviewWindow {
     }
   }
 
-  /** 独立窗口透明度变化：立即重设窗口不透明度（悬停临时覆盖期间不动基准）。 */
-  private on_independent_opacity_changed(): void {
+  /**
+   * 独立窗口的整体不透明度（0.1..1.0）。
+   *
+   * ★ 为什么是声明式：本 SDK 的 `window.Window` **没有 setWindowOpacity**
+   *   （整份 SDK 里都搜不到这个 API），原先那句命令式调用是硬编译错误。
+   *   改成在 build() 里给根节点挂 `.opacity()` —— @StorageLink / @State 变化
+   *   本身就会触发重绘，悬停覆盖与基准值切换都由这一个表达式统一决定，
+   *   反而不会出现"基准值和悬停值打架"的时序问题。
+   */
+  private root_opacity(): number {
     if (this.independentOpaqueOnHover && this.hovering) {
-      return;   // 悬停覆盖中，移开后再恢复基准值
+      return 1.0;
     }
-    this.set_window_opacity(this.independentOpacity / 100);
-  }
-
-  /** 对独立窗口设置不透明度（0.1..1.0）。 */
-  private set_window_opacity(alpha: number): void {
-    try {
-      const win: window.Window | undefined = AppStorage.get<window.Window>(STANDALONE_WINDOW_KEY);
-      if (win !== undefined && win !== null) {
-        win.setWindowOpacity(alpha);
-      }
-    } catch (error) {
-      hilog.warn(DOMAIN, TAG, 'setWindowOpacity 失败: %{public}s',
-        (error as BusinessError).message);
-    }
+    return this.independentOpacity / 100;
   }
 
   /** 主窗口要求关闭（@Watch 回调）。 */
@@ -823,6 +818,8 @@ struct StandalonePreviewWindow {
     .width('100%')
     .height(this.stripHeight)
     .backgroundColor(Color.Transparent)
+    // ★ 贴底（同理写在根组件上，见 strip() 的注释）。
+    .align(Alignment.BottomStart)
     // 鼠标落在底栏上时不许隐藏：否则「点按钮」会变成追着栏跑。
     .onHover((isHover: boolean): void => {
       try {
@@ -1202,6 +1199,9 @@ struct StandalonePreviewWindow {
     .width('100%')
     .height(this.stripHeight)
     .backgroundColor(Color.Transparent)
+    // ★ 贴顶：Stack 子项的对齐写在自己的根组件上（外层 Stack 的 alignContent
+    //   只给默认值，顶/底两栏要各自定位）。
+    .align(Alignment.TopStart)
     // ★ 鼠标停在条带上时不许隐藏：否则"点按钮"会变成追着栏跑。
     .onHover((isHover: boolean): void => {
       try {
@@ -1318,14 +1318,13 @@ struct StandalonePreviewWindow {
       .border({ width: 1, color: BORDER_SOFT })
 
       // ② 顶层：顶部毛玻璃栏（浮在画面之上、贴顶）
-      this.strip()
-        .width('100%')
-        .align(Alignment.TopStart);
+      // ★ @Builder 调用返回 void —— 不能在调用后面链 .width()/.align()
+      //   （会报 "Property 'width' does not exist on type 'void'"）。尺寸与对齐
+      //   一律写在各 builder 自己的根组件上，这里只负责把内容塞进 Stack。
+      this.strip();
 
       // ③ 顶层：底部毛玻璃栏（浮在画面之上、贴底）
-      this.bottom_bar()
-        .width('100%')
-        .align(Alignment.BottomStart);
+      this.bottom_bar();
     }
     .width('100%')
     .height('100%')
@@ -1339,12 +1338,12 @@ struct StandalonePreviewWindow {
     })
     // 上游设备模式 HWND 没有设背景刷 ⇒ 客户区底色是黑的；这里照做。
     .backgroundColor(Color.Black)
-    // 悬停变不透明：透明度 < 100% 时，指针进入窗口临时全不透明，移开恢复基准值。
+    // ★ 整体不透明度（声明式，见 root_opacity() 的注释）：
+    //   透明度 < 100% 时窗口整体半透；开了"悬停不透明"则指针进入临时回到全不透明。
+    .opacity(this.root_opacity())
+    // 悬停：只记状态，实际透明度由 root_opacity() 读这个状态算出来。
     .onHover((isHover: boolean): void => {
       this.hovering = isHover;
-      if (this.independentOpaqueOnHover && this.independentOpacity < 100) {
-        this.set_window_opacity(isHover ? 1.0 : this.independentOpacity / 100);
-      }
     });
   }
 }

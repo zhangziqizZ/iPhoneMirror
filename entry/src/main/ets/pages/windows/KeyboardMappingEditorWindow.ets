@@ -19,7 +19,12 @@
 import { BusinessError } from '@ohos.base';
 import common from '@ohos.app.ability.common';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { KeyEvent, KeyType } from '@ohos.multimodalInput.keyEvent';
+// ★ 不要从 '@ohos.multimodalInput.keyEvent' 导入 KeyEvent / KeyType（本文件曾经导过，编译直接报
+//   「no exported member 'KeyType'」+ 回调签名不匹配）：
+//   那个 KeyEvent 是**输入服务**的事件类型（action / key / unicodeChar / keys），与组件
+//   onKeyEvent 回调给的根本不是同一个类型。组件侧用的是 ArkUI 全局的
+//   KeyEvent（type: KeyType / keyCode: number / keyText: string）与全局枚举
+//   KeyType（Down / Up），都无需 import。名字一样、成员完全不同，混用必然对不上。
 import {
   SubWindowShell, SubWindowHost, SecondaryButton, PrimaryButton,
   SUBWINDOW_ROW_GAP, SubWindowSpec,
@@ -29,7 +34,8 @@ import {
 } from '../../common/Theme';
 import { t } from '../../common/i18n';
 import {
-  KeyboardMappingSettings, KeyboardMappingEntry, MappedTouchAction, ALL_MAPPED_ACTIONS,
+  KeyboardMappingSettings, KeyboardMappingEntry, MappingKey, KeymapPoint, MappedTouchAction,
+  ALL_MAPPED_ACTIONS,
   keymap_key_display, keymap_action_label_key, keymap_entry_summary,
   keymap_is_swipe, keymap_is_directional, keymap_has_parameters,
   keymap_validate_entry, keymap_validate_key, keymap_same_key,
@@ -328,24 +334,53 @@ struct KeyboardMappingEditorWindow {
       return;   // 只在按下时录入
     }
     const code: number = event.keyCode;
-    const label: string = (event.key !== undefined && event.key.length > 0)
-      ? event.key : keymap_key_display(code);
-    this.draft = { ...this.draft, key: { code: code, label: label } };
+    // ★ 组件 KeyEvent 的可读名是 keyText（string），不是 key（那是输入服务 KeyEvent 的成员，
+    //   且类型是 Key 而非 string）。名字拿错 ⇒ 永远走兜底显示。
+    const label: string = event.keyText.length > 0 ? event.keyText : keymap_key_display(code);
+    // ★ ArkTS 不支持对象展开（arkts-no-spread）：一律「克隆 + 改字段」。
+    const captured: KeyboardMappingEntry = keymap_clone_entry(this.draft);
+    captured.key = { code: code, label: label };
+    this.draft = captured;
     this.capturing = false;
     this.errorText = '';
   }
 
   // ── 动作选择 ──
   private select_action(action: MappedTouchAction): void {
-    this.draft = { ...this.draft, action: action };
+    const next: KeyboardMappingEntry = keymap_clone_entry(this.draft);
+    next.action = action;
+    this.draft = next;
     this.hasAction = true;
     this.hasPosition = false;   // 动作变了 ⇒ 位置重设（避免旧坐标错配）
     this.errorText = '';
   }
 
+  /**
+   * 改草稿的物理键。
+   *
+   * ★ 收成方法而不是在 @Builder 里就地展开：ArkTS 既不支持对象展开
+   *   （arkts-no-spread），也不允许在 build/@Builder 里写局部 const。
+   */
+  private set_draft_key(key: MappingKey | null): void {
+    const next: KeyboardMappingEntry = keymap_clone_entry(this.draft);
+    next.key = key;
+    this.draft = next;
+  }
+
+  /**
+   * 方向滑动推导出的终点读数。
+   *
+   * ★ 收成方法的两个原因：① @Builder 内不允许局部 const（10905209）；
+   *   ② ArkTS 不允许对象字面量类型，返回类型必须走 KeymapPoint。
+   */
+  private end_point_text(): string {
+    const end: KeymapPoint = keymap_end_point(this.draft);
+    return `→ (${Math.round(end.x * 100)}%, ${Math.round(end.y * 100)}%)`;
+  }
+
   // ── 完成 ──
   private build_entry(): KeyboardMappingEntry {
-    const entry: KeyboardMappingEntry = { ...this.draft };
+    const entry: KeyboardMappingEntry = keymap_clone_entry(this.draft);
     if (this.draft.action === MappedTouchAction.LongPress || keymap_is_swipe(this.draft.action)) {
       entry.durationMs = this.parse_int(this.durationText, 50, 10000, this.draft.durationMs);
     }
@@ -496,7 +531,7 @@ struct KeyboardMappingEditorWindow {
           label: t('重新录入'),
           minButtonWidth: 96,
           on_action: (): void => {
-            this.draft = { ...this.draft, key: null };
+            this.set_draft_key(null);
             this.start_capture();
           },
         });
@@ -521,9 +556,11 @@ struct KeyboardMappingEditorWindow {
         .lineHeight(16)
         .margin({ top: 6, bottom: 14 });
 
-      Select(this.action_index())
+      // ★ Select 的选项只能从**构造函数**传（Array<SelectOption>）—— SelectAttribute 上
+      //   没有 .options()；当前选中项用 .selected(下标) + .value(显示文本) 表达。
+      Select(this.action_options())
         .value(this.action_label())
-        .options(this.action_options())
+        .selected(this.action_index())
         .onSelect((index: number, value: Object): void => {
           // 选项与 ALL_MAPPED_ACTIONS 同序 ⇒ 直接按下标取动作，避免 Object→枚举的强转。
           if (index >= 0 && index < ALL_MAPPED_ACTIONS.length) {
@@ -547,9 +584,11 @@ struct KeyboardMappingEditorWindow {
   }
 
   private action_options(): Array<SelectOption> {
+    // ★ SelectOption 只有 value / icon / symbolIcon —— **没有 label 字段**，
+    //   显示文本就是 value。选中了哪个动作靠 onSelect 的下标（与 ALL_MAPPED_ACTIONS 同序），
+    //   不靠 value 反查，所以 value 用不用作标识都无所谓。
     return ALL_MAPPED_ACTIONS.map((action: MappedTouchAction): SelectOption => ({
-      value: action,
-      label: t(keymap_action_label_key(action)),
+      value: t(keymap_action_label_key(action)),
     }));
   }
 
@@ -663,8 +702,9 @@ struct KeyboardMappingEditorWindow {
         .width('100%')
         .alignItems(HorizontalAlign.Start)
         .margin({ bottom: 12 });
-        const end: { x: number; y: number } = keymap_end_point(this.draft);
-        Text(`→ (${Math.round(end.x * 100)}%, ${Math.round(end.y * 100)}%)`)
+        // ★ 不能在这里写局部 const：@Builder 内只允许 UI 组件语法
+        //   （10905209），且 ArkTS 也不认对象字面量类型。读数收成方法。
+        Text(this.end_point_text())
           .fontSize(11)
           .fontColor(DARK.MUTED_TEXT)
           .margin({ top: 4 });

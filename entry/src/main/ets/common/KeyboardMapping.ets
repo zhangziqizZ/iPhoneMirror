@@ -78,6 +78,18 @@ export interface KeyboardMappingSettings {
   mappings: KeyboardMappingEntry[];
 }
 
+/**
+ * 归一化坐标点（0..1）。
+ *
+ * ★ 必须显式声明成 interface：ArkTS 禁止把「对象字面量类型」直接当类型标注写
+ *   （arkts-no-obj-literals-as-types），也不允许没有对应声明的字面量
+ *   （arkts-no-untyped-obj-literals）。所以 { x, y } 这种返回/局部类型一律走这里。
+ */
+export interface KeymapPoint {
+  x: number;
+  y: number;
+}
+
 export const KEYBOARD_MAPPING_SCHEMA_VERSION: number = 1;
 export const KEYBOARD_MAPPING_MAX_ENTRIES: number = 256;
 
@@ -170,7 +182,7 @@ export function keymap_validate_entry(entry: KeyboardMappingEntry): string | nul
     }
   }
   if (keymap_is_swipe(entry.action)) {
-    const end: { x: number; y: number } = keymap_end_point(entry);
+    const end: KeymapPoint = keymap_end_point(entry);
     if (!keymap_coordinate(end.x) || !keymap_coordinate(end.y) || (end.x === entry.x && end.y === entry.y)) {
       return 'MappingInvalidSwipe';
     }
@@ -179,7 +191,7 @@ export function keymap_validate_entry(entry: KeyboardMappingEntry): string | nul
 }
 
 /** 滑动终点（方向滑动按 distance 推导；自定义滑动用 endX/endY）。 */
-export function keymap_end_point(entry: KeyboardMappingEntry): { x: number; y: number } {
+export function keymap_end_point(entry: KeyboardMappingEntry): KeymapPoint {
   if (entry.deviceCoordinates) {
     return { x: entry.endX, y: entry.endY };
   }
@@ -300,7 +312,7 @@ export function keymap_entry_summary(entry: KeyboardMappingEntry): string {
   const px: number = Math.round(entry.x * 100);
   const py: number = Math.round(entry.y * 100);
   if (keymap_is_swipe(entry.action)) {
-    const end: { x: number; y: number } = keymap_end_point(entry);
+    const end: KeymapPoint = keymap_end_point(entry);
     return `(${px}%, ${py}%) → (${Math.round(end.x * 100)}%, ${Math.round(end.y * 100)}%) · ${entry.durationMs}ms`;
   }
   if (entry.action === MappedTouchAction.LongPress) {

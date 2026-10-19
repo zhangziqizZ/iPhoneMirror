@@ -423,24 +423,36 @@ export const KEYBOARD_MAPPING_KEY: string = 'im.keyboardMapping';
 export const KEYBOARD_EDIT_TARGET_KEY: string = 'im.keyboardMapping.editTarget';
 
 /**
+ * 键盘映射 JSON 的解析结果。
+ *
+ * ★ 必须显式声明成 interface：ArkTS 不支持元组解构声明
+ *   （arkts-no-destruct-decls），所以 `const [a, b] = f()` 这种写法不可用，
+ *   多返回值一律走这里这种具名结果对象。
+ */
+export interface KeymapParseResult {
+  settings: KeyboardMappingSettings;
+  hadInvalid: boolean;   // 原数据里有被拒绝的条目/版本
+}
+
+/**
  * 把任意未知结构安全地解析成键盘映射设置。
  *
- * @returns [settings, hadInvalid] —— hadInvalid 表示原数据里有被拒绝的条目/版本。
+ * @returns 解析结果（settings + hadInvalid，hadInvalid 表示有被拒绝的条目/版本）。
  */
-function parse_keyboard_mapping_json(text: string): [KeyboardMappingSettings, boolean] {
+function parse_keyboard_mapping_json(text: string): KeymapParseResult {
   const def = default_keyboard_mapping_settings();
   if (text.length === 0) {
-    return [def, false];
+    return { settings: def, hadInvalid: false };
   }
   let root: Object | null = null;
   try {
     root = JSON.parse(text) as Object;
   } catch (e) {
     hilog.warn(0x0000, 'AppPreferences', '键盘映射 JSON 解析失败，回退默认');
-    return [def, true];
+    return { settings: def, hadInvalid: true };
   }
   if (root === null || typeof root !== 'object' || Array.isArray(root)) {
-    return [def, true];
+    return { settings: def, hadInvalid: true };
   }
   const obj = root as Record<string, Object>;
   let version: number = KEYBOARD_MAPPING_SCHEMA_VERSION;
@@ -496,7 +508,10 @@ function parse_keyboard_mapping_json(text: string): [KeyboardMappingSettings, bo
   if (hadInvalid) {
     enabled = false;   // 有损坏 ⇒ 关闭映射，等用户检查（对照上游 HadInvalidEntries）
   }
-  return [{ schemaVersion: version, enabled: enabled, suppressOriginalKey: suppress, mappings: mappings }, hadInvalid];
+  return {
+    settings: { schemaVersion: version, enabled: enabled, suppressOriginalKey: suppress, mappings: mappings },
+    hadInvalid: hadInvalid,
+  };
 }
 
 /** 解析单条映射条目；任何字段缺失/越界返回 null（被隔离）。 */
@@ -548,8 +563,8 @@ export function load_keyboard_mapping(): void {
   if (store !== null) {
     try {
       const text: string = store.getSync(PREFS_KEY_KEYBOARD_MAPPING, '') as string;
-      const [parsed, _hadInvalid] = parse_keyboard_mapping_json(text);
-      settings = parsed;
+      const parsedResult: KeymapParseResult = parse_keyboard_mapping_json(text);
+      settings = parsedResult.settings;
     } catch (readError) {
       const readFailure = readError as BusinessError;
       hilog.warn(0x0000, 'AppPreferences', '键盘映射读取失败 %d %{public}s',

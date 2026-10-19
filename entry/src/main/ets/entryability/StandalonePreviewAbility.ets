@@ -63,7 +63,6 @@ import {
   standalone_content_aspect,
 } from '../common/WindowServices';
 import { t } from '../common/i18n';
-import { INDEPENDENT_OPACITY_KEY, INDEPENDENT_OPACITY_MIN, INDEPENDENT_OPACITY_MAX } from '../common/AppPreferences';
 
 const TAG: string = 'im_standalone_ability';
 const DOMAIN: number = 0x0101;
@@ -204,8 +203,10 @@ export default class StandalonePreviewAbility extends UIAbility {
     // ① 系统装饰与系统三键区全部关掉（两件事，缺一不可 —— 见 apply_system_chrome）。
     this.apply_system_chrome(win);
 
-    // ⑤ 独立窗口透明度（WindowStyleSettingsWindow 设置）。
-    this.apply_window_opacity(win);
+    // ⑤ 独立窗口透明度：★ 不再在这里命令式设置 —— 本 SDK 的 window.Window
+    //   **没有 setWindowOpacity**（整份 SDK 里都搜不到），原先这行是编译错误。
+    //   透明度改由 ArkUI 声明式实现：StandalonePreviewWindow 的根节点
+    //   .opacity(root_opacity())，@StorageLink 变化即自动重绘，效果等价且能编译。
 
     // ② 锁内容区宽高比。注意语义：ratio = 宽/高，且是**内容区**（不含装饰）。
     //    因为顶部要留一条自绘栏的条带，窗口比例不等于画面比例 —— 换算见
@@ -304,28 +305,8 @@ export default class StandalonePreviewAbility extends UIAbility {
       problem.length > 0 ? problem : '已全部隐藏');
   }
 
-  /**
-   * 应用独立窗口透明度（WindowStyleSettingsWindow 设置）。
-   * 读 AppStorage 里的百分比（10..100），换算成 0.1..1.0 调 setWindowOpacity。
-   */
-  private apply_window_opacity(win: window.Window): void {
-    let pct: number = INDEPENDENT_OPACITY_MAX;
-    try {
-      const stored: number | undefined = AppStorage.get<number>(INDEPENDENT_OPACITY_KEY);
-      if (stored !== undefined && stored !== null && Number.isFinite(stored)) {
-        pct = Math.max(INDEPENDENT_OPACITY_MIN, Math.min(INDEPENDENT_OPACITY_MAX, Math.round(stored)));
-      }
-    } catch (error) {
-      hilog.warn(DOMAIN, TAG, '读独立窗口透明度失败，按 100 处理: %{public}s',
-        (error as BusinessError).message);
-    }
-    try {
-      win.setWindowOpacity(pct / 100);
-    } catch (error) {
-      hilog.warn(DOMAIN, TAG, 'setWindowOpacity 失败: %{public}s',
-        (error as BusinessError).message);
-    }
-  }
+// （原 apply_window_opacity 已删除：本 SDK 的 Window 没有 setWindowOpacity。
+//   透明度改由 StandalonePreviewWindow 根节点 .opacity() 声明式实现。）
 
   /** 600ms 后再下发一次系统装饰隐藏（时序兜底）。 */
   private schedule_chrome_retry(win: window.Window): void {

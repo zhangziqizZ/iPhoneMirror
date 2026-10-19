@@ -29,7 +29,7 @@ import { t } from '../../common/i18n';
 import {
   KeyboardMappingSettings, KeyboardMappingEntry, MappedTouchAction,
   keymap_key_display, keymap_action_label_key, keymap_entry_summary,
-  keymap_clone_settings, default_keyboard_mapping_settings,
+  keymap_clone_settings, keymap_clone_entry, default_keyboard_mapping_settings,
   KEYBOARD_MAPPING_MAX_ENTRIES,
 } from '../../common/KeyboardMapping';
 import {
@@ -92,8 +92,15 @@ struct KeyboardMappingWindow {
   /** 单条启用/停用。 */
   private set_entry_enabled(id: string, checked: boolean): void {
     const next: KeyboardMappingSettings = keymap_clone_settings(this.settings);
-    next.mappings = next.mappings.map((m: KeyboardMappingEntry): KeyboardMappingEntry =>
-      m.id === id ? { ...m, enabled: checked } : m);
+    // ★ ArkTS 不支持对象展开（arkts-no-spread）：走「克隆 + 改字段」。
+    next.mappings = next.mappings.map((m: KeyboardMappingEntry): KeyboardMappingEntry => {
+      if (m.id !== id) {
+        return m;
+      }
+      const copy: KeyboardMappingEntry = keymap_clone_entry(m);
+      copy.enabled = checked;
+      return copy;
+    });
     this.commit(next);
   }
 
@@ -134,52 +141,74 @@ struct KeyboardMappingWindow {
   }
 
   // ── 顶部两个总开关 ──
+  //
+  // ★ SettingsSection 的内容必须走**显式 content 属性**，不能写尾随 lambda
+  //   `SettingsSection({...}) { ... }`：本工程里尾随 lambda 会让后面的
+  //   `.width()` 链失去依托（编译报 "Declaration or statement expected" +
+  //   "Cannot find name 'width'"）。全工程无报错的用法都是
+  //   `SettingsSection({ ..., content: (): void => { this.xxx(); } })`。
   @Builder
   toggles() {
     Column() {
-      SettingsSection({ padH: 16, padV: 14 }) {
-        Row() {
-          Column() {
-            Text(t('启用键盘映射'))
-              .fontSize(14)
-              .fontWeight(FontWeight.Bold)
-              .fontColor(DARK.TEXT);
-            Text(t('映射已开启') + ' / ' + t('映射已关闭'))
-              .fontSize(11)
-              .fontColor(DARK.MUTED_TEXT)
-              .margin({ top: 4 });
-          }
-          .layoutWeight(1)
-          .alignItems(HorizontalAlign.Start);
-          Toggle({ type: ToggleType.Switch, isOn: this.settings.enabled })
-            .onChange((checked: boolean): void => { this.set_enabled(checked); });
-        }
-        .width('100%');
-      }
-      .width('100%')
-      .margin({ bottom: 12 });
+      SettingsSection({
+        padH: 16,
+        padV: 14,
+        content: (): void => { this.enabled_row(); },
+      })
+        .width('100%')
+        .margin({ bottom: 12 });
 
-      SettingsSection({ padH: 16, padV: 14 }) {
-        Row() {
-          Column() {
-            Text(t('阻止已映射按键的原始行为'))
-              .fontSize(14)
-              .fontWeight(FontWeight.Bold)
-              .fontColor(DARK.TEXT);
-            Text(t('默认不阻止；没有可用映射目标时也不拦截。'))
-              .fontSize(11)
-              .fontColor(DARK.MUTED_TEXT)
-              .margin({ top: 4 });
-          }
-          .layoutWeight(1)
-          .alignItems(HorizontalAlign.Start);
-          Toggle({ type: ToggleType.Switch, isOn: this.settings.suppressOriginalKey })
-            .onChange((checked: boolean): void => { this.set_suppress(checked); });
-        }
-        .width('100%');
+      SettingsSection({
+        padH: 16,
+        padV: 14,
+        content: (): void => { this.suppress_row(); },
+      })
+        .width('100%')
+        .margin({ bottom: 12 });
+    }
+    .width('100%');
+  }
+
+  /** 「启用键盘映射」开关行。 */
+  @Builder
+  enabled_row() {
+    Row() {
+      Column() {
+        Text(t('启用键盘映射'))
+          .fontSize(14)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(DARK.TEXT);
+        Text(t('映射已开启') + ' / ' + t('映射已关闭'))
+          .fontSize(11)
+          .fontColor(DARK.MUTED_TEXT)
+          .margin({ top: 4 });
       }
-      .width('100%')
-      .margin({ bottom: 12 });
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+      Toggle({ type: ToggleType.Switch, isOn: this.settings.enabled })
+        .onChange((checked: boolean): void => { this.set_enabled(checked); });
+    }
+    .width('100%');
+  }
+
+  /** 「阻止原始按键行为」开关行。 */
+  @Builder
+  suppress_row() {
+    Row() {
+      Column() {
+        Text(t('阻止已映射按键的原始行为'))
+          .fontSize(14)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(DARK.TEXT);
+        Text(t('默认不阻止；没有可用映射目标时也不拦截。'))
+          .fontSize(11)
+          .fontColor(DARK.MUTED_TEXT)
+          .margin({ top: 4 });
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+      Toggle({ type: ToggleType.Switch, isOn: this.settings.suppressOriginalKey })
+        .onChange((checked: boolean): void => { this.set_suppress(checked); });
     }
     .width('100%');
   }
@@ -202,10 +231,22 @@ struct KeyboardMappingWindow {
   // ── 单条映射行 ──
   @Builder
   mapping_row(entry: KeyboardMappingEntry) {
-    SettingsSection({ padH: 14, padV: 12 }) {
-      Row() {
-        Column() {
-          Text(entry.key !== null ? keymap_key_display(entry.key.code) : t('WizardKeyStart'))
+    // ★ 同 toggles()：内容走显式 content 属性，不用尾随 lambda。
+    SettingsSection({
+      padH: 14,
+      padV: 12,
+      content: (): void => { this.mapping_row_body(entry); },
+    })
+      .width('100%')
+      .margin({ bottom: 10 });
+  }
+
+  /** 单条映射行的内容（含删除二次确认）。 */
+  @Builder
+  mapping_row_body(entry: KeyboardMappingEntry) {
+    Row() {
+      Column() {
+        Text(entry.key !== null ? keymap_key_display(entry.key.code) : t('WizardKeyStart'))
             .fontSize(15)
             .fontWeight(FontWeight.Bold)
             .fontColor(ACCENT);
@@ -215,7 +256,7 @@ struct KeyboardMappingWindow {
             .margin({ top: 4 });
         }
         .layoutWeight(1)
-        .alignItems(HorizontalAlign.Start);
+        .alignItems(HorizontalAlign.Start)
 
         if (this.pendingDeleteId !== entry.id) {
           Toggle({ type: ToggleType.Switch, isOn: entry.enabled })
@@ -253,9 +294,6 @@ struct KeyboardMappingWindow {
       }
       .width('100%')
       .alignItems(VerticalAlign.Center);
-    }
-    .width('100%')
-    .margin({ bottom: 10 });
   }
 
   // ── 列表（空态 / 多行）──
