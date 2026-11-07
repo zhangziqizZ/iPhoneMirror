@@ -130,9 +130,19 @@
     // bindDevice 就不会起来（onConnect 的时间戳已证实这一点）。
     //
     // metadata 各字段（bus/desc/vendor 必填；vid/pid 填 16 进制、逗号分隔）：
-    //   pid 列表与 Core 的 AppleUsbDiscovery.h 里 is_apple_mobile_capture_product_id
-    //   的 24 项白名单逐条一致 —— 不写全，插上某些型号就会被过滤掉。
-    //   刻意不含 0x110A（Apple USB-C 转 3.5mm 耳机转接头）：它不是采集目标。
+    //   pid 列表按**上游 usbmuxd 的区间口径**给全 —— src/usb.h 的
+    //   PID_RANGE_LOW=0x1290 / PID_RANGE_MAX=0x12af（udev 规则
+    //   39-usbmuxd.rules 写的是 5ac/12[9a][0-9a-f]/*）。
+    //   ★ 2026-10-30 修正：此前这里抄的是 Core 的 24 项**采集**白名单，
+    //     漏掉 0x1295/1296/1298/129B/12A7/12AD/12AE/12AF 这 8 个 PID。
+    //     这份 metadata 是 **DDK 侧真正的过滤闸门** —— pid 不在表里，
+    //     设备就不会出现在 OH_Usb_GetDevices() 的结果中，于是：
+    //       枚举为空 → 不触发配对 → 界面毫无动静（「插线没反应」）。
+    //     区间写法天然覆盖新机型，不必每出一代 iPhone 就补一次表。
+    //   采集链路由 QuickTime(0xFF/0x2A) 接口的存在性把关（见
+    //   cpp/ohos/OhosAppleProductId.h），Apple TV/Watch/HomePod 不暴露那个接口，
+    //   天然进不了采集，不需要在这里排除。
+    //   刻意不含 0x110A（Apple USB-C 转 3.5mm 耳机转接头）：它不是 iOS 设备。
     "extensionAbilities": [
       {
         "name": "DriverExtAbility",
@@ -153,7 +163,7 @@
           { "name": "desc", "value": "Apple iPhone/iPad USB capture (iPhoneMirror)" },
           { "name": "vendor", "value": "iPhoneMirror" },
           { "name": "vid", "value": "0x05AC" },
-          { "name": "pid", "value": "0x1290,0x1291,0x1292,0x1293,0x1294,0x1297,0x1299,0x129A,0x129C,0x129D,0x129E,0x129F,0x12A0,0x12A1,0x12A2,0x12A3,0x12A4,0x12A5,0x12A6,0x12A8,0x12A9,0x12AA,0x12AB,0x12AC" },
+          { "name": "pid", "value": "0x1290,0x1291,0x1292,0x1293,0x1294,0x1295,0x1296,0x1297,0x1298,0x1299,0x129A,0x129B,0x129C,0x129D,0x129E,0x129F,0x12A0,0x12A1,0x12A2,0x12A3,0x12A4,0x12A5,0x12A6,0x12A7,0x12A8,0x12A9,0x12AA,0x12AB,0x12AC,0x12AD,0x12AE,0x12AF" },
           // ★ 官方《开发无UI界面基础驱动》给出的 metadata 清单里还有这一项，而它的
           //   **默认值是 false**（文档原文：The default value is **false** if the
           //   specified value is incorrect or the value is left unspecified），
@@ -190,13 +200,27 @@
     // USB 相关两条权限级别、对 ACL 的要求完全不同（最容易搞错的地方）：
     //   ACCESS_DDK_USB                    system_basic + provisionEnable=true
     //                                     → **必须**进签名 profile 的 allowed-acls。
-    //                                     自签/调试 profile（本工程 .p7b 由 AGC 签发、
-    //                                     本地改不了）拿不到这条 ACL ⇒ 装包直接 9568289。
-    //                                     故 2026-10-01 起**临时移出** requestPermissions：
-    //                                     让应用能装、AirPlay 镜像可用；待拿到带该 ACL
-    //                                     的 profile 再放回（届时 USB 有线采集恢复，
-    //                                     原生 OH_Usb_* 不再回权限错）。移出期间 USB 不可用，
-    //                                     但原生会如实把权限错写进已修好的日志。
+    //
+    // ★ 2026-10-23 更正（此前这里的结论把一条路堵死了两个月）：
+    //   原结论是"本工程 .p7b 由 AGC 签发、本地改不了 ⇒ 拿不到这条 ACL ⇒ 只能移出声明"。
+    //   错在**漏了调试阶段的第二条路**。官方《申请受限权限》原文：
+    //     "在调试阶段，除下述方式外，还可以通过 **DevEco Studio 自动签名**完成申请。
+    //      在自动签名的过程中，**将由 DevEco Studio 完成向 AGC 申请受限权限的步骤**，
+    //      开发者可直接使用。"
+    //   本工程正是 DevEco 自动签名（build-profile.json5:19-32，材料全在 .ohos/config/），
+    //   所以 2026-10-01 那次 9568289 的真实链条是：
+    //     **声明了权限，但用的还是旧 p7b（没有 ACL）** ⇒ 装包被拒
+    //   而不是"申请被驳回"。把声明移出只是回避了症状，顺带把 DevEco 代申请这条路
+    //   一起关掉了 —— 声明不在，DevEco 就不知道要替我们申请什么。
+    //
+    //   故本日把声明**放回**（见数组末尾），正确动作是：
+    //   ① 声明放回 → ② DevEco 里取消勾选自动签名、Apply、再重新勾选、Apply
+    //      （不重新生成 p7b 就不会触发代申请）→ ③ 等 AGC 的互动中心消息/邮件。
+    //
+    // ⚠ 放回的代价：审核通过之前，带这条声明的 HAP **装不上**（9568289）。
+    //   回退方式 = 把数组末尾那一项整段注释掉，装包立刻恢复。
+    //   判据不要看代码，看界面：common/UsbPermission.ets:44 的
+    //   check_ddk_usb_permission() 问的是系统令牌账本，显示"已授予"才算 ACL 真的到手。
     //   ACCESS_EXTENSIONAL_DEVICE_DRIVER  normal + provisionEnable=false
     //                                     → 声明即授权，**不需要** ACL
     //                                     驱动扩展里的 deviceManager.queryDevices 用它
@@ -317,6 +341,22 @@
         //   日志里却看不到任何异常。所以这条必须显式写在这里。
         "name": "ohos.permission.PREPARE_APP_TERMINATE",
         "reason": "$string:tray_prepare_terminate_perm_reason",
+        "usedScene": {
+          "abilities": ["EntryAbility"],
+          "when": "always"
+        }
+      },
+      {
+        // ───────────────────────── 有线采集：USB DDK ─────────────────────────
+        // 2026-10-23 放回（理由见 requestPermissions 上方的更正）：
+        //   声明必须在，DevEco 自动签名才会替我们向 AGC 申请这条受限权限的 ACL。
+        //   usedScene.abilities 写 EntryAbility —— 真正调 OH_Usb_* 的就是它
+        //   （DriverExtAbility 里没有任何 DDK 调用，入口 Ability 里 OH_Usb_Init()
+        //    实测返回 0，从未出现过 27400002）。
+        //
+        // ⚠ 审核通过前，带这一项会装不上包（9568289）。要装就整段注释掉。
+        "name": "ohos.permission.ACCESS_DDK_USB",
+        "reason": "$string:usb_ddk_perm_reason",
         "usedScene": {
           "abilities": ["EntryAbility"],
           "when": "always"

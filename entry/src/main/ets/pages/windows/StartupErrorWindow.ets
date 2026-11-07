@@ -151,7 +151,7 @@ export interface StartupErrorArgs {
 
 /** 平台替换 2：Windows 的 %LOCALAPPDATA%\iPhoneMirror\Logs\startup.log 的鸿蒙对应物。 */
 function default_log_path(ctx: common.Context): string {
-  return ctx.filesDir + '/iPhoneMirror/Logs/startup.log';
+  return ctx.filesDir + '/PhoneMirror/Logs/startup.log';
 }
 
 /** 平台替换 1：把错误详情追加写进日志（真做）。返回是否写成功。 */

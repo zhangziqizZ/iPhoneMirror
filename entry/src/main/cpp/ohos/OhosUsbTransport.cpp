@@ -34,6 +34,7 @@
 
 #include "Device/AppleUsbDiscovery.h"
 #include "Logging.h"
+#include "OhosAppleProductId.h"
 #include "OhosUsbDdk.h"
 #include "OhosUsbDiagnostics.h"
 #include "Transport/AppleUsbIdentityCache.h"
@@ -551,8 +552,21 @@ std::vector<AppleUsbDevice> QtUsbContext::enumerate() const {
         UsbDeviceDescriptor descriptor{};
         if (OH_Usb_GetDeviceDescriptor(device_id, &descriptor) != 0) continue;
         if (descriptor.idVendor != AppleVendorId) continue;
-        if (descriptor.idProduct == 0x110A) continue; // USB-C 转 3.5mm 耳机转接头
-        if (!device::is_apple_mobile_capture_product_id(descriptor.idProduct)) continue;
+        // ★ 这里用的是**上游 usbmuxd 的区间口径**，不是 Core 的采集白名单。
+        //
+        //   上游 src/usb.h: PID_RANGE_LOW=0x1290 / PID_RANGE_MAX=0x12af
+        //   （udev 规则 39-usbmuxd.rules: 5ac/12[9a][0-9a-f]/*）
+        //
+        // Core 的 is_apple_mobile_capture_product_id() 是**采集**白名单
+        // （24 项稀疏列表），只覆盖"能做投屏采集"的机型。新机型（如 iPhone 16e
+        // 一类）的 PID 不在其中，被这里过滤掉的后果是：
+        //   设备不进 OH_Usb_GetDevices 的结果 → 枚举为空 → 不触发配对
+        //   → 界面毫无动静，也就是"插线没反应"。
+        //
+        // 采集链路由 QuickTime(0xFF/0x2A) 接口的存在性把关
+        //（AppleUsbDevice::quicktime_configuration），Apple TV/Watch/HomePod
+        // 不暴露那个接口，天然进不了采集。详见 OhosAppleProductId.h。
+        if (!ohos::is_apple_pairable_product_id(descriptor.idProduct)) continue;
 
         AppleUsbDevice device;
         device.vendor_id = descriptor.idVendor;
@@ -823,8 +837,12 @@ std::size_t QtUsbConnection::read(std::span<std::uint8_t> destination, unsigned 
     pipe.endpoint = endpoints_.bulk_in;
     if (OH_Usb_SendPipeRequest(&pipe, map) != 0) return 0;
 
-    const std::size_t received = std::min<std::size_t>(
-        map->transferedLength, destination.size());
+    // 上界取三者最小值：驱动偶尔会报出比缓冲区还大的 transferedLength，
+    // 只按 destination.size() 裁剪会让 memcpy 从 memmap 尾部之外读（越界读）。
+    const std::size_t received = std::min<std::size_t>({
+        static_cast<std::size_t>(map->transferedLength),
+        destination.size(),
+        static_cast<std::size_t>(state->transfer_size)});
     std::memcpy(destination.data(), map->address + map->offset, received);
     return received;
 #else

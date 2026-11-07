@@ -26,9 +26,9 @@
 // 交互约定（鸿蒙 PC 托盘明确区分左右键，且不支持代码拦截改映射）：
 //   · 左键：本实现把 quickOperation.abilityName 留空 ⇒ 点击不走弹窗 Ability，
 //    而是触发 statusBarIconClick 事件，由这里 showAbility() 唤回主窗口；
-//   · 右键：statusBarGroupMenu 挂两个菜单项（显示主窗口 / 退出），
-//    菜单项设 notifyOnly: true + menuCode ⇒ 点击不回拉 Ability，
-//    而是触发 rightMenuClick 事件，由这里自己执行业务。
+//   · 右键：statusBarGroupMenu 只挂「显示主窗口」一项（notifyOnly: true + menuCode
+//    ⇒ 点击不回拉 Ability，而是触发 rightMenuClick 事件，由这里自己执行业务）。
+//    「退出」不放：系统会自动追加自带的「退出」，我们再放就重复（2026-10-23）。
 //
 // ★ 本文件只做"纯 UI 托盘"，**不动**现有长时任务保活（BackgroundKeepAlive）。
 //   官方那个"用 NEW_PROCESS_ATTACH_TO_STATUS_BAR_ITEM 拉起绑定托盘的新进程"的
@@ -54,6 +54,8 @@ export class StatusBarTray {
 
   private context: common.UIAbilityContext | null = null;
   private added: boolean = false;
+  /** 左右键事件是否已挂过（statusBarManager.on 无配对 off，只能挂一次）。 */
+  private eventsRegistered: boolean = false;
   /** 能力复核不通过时的降级回调（由调用方注入，通常是拉起通知托盘）。 */
   private onFallback: (() => void) | null = null;
 
@@ -73,8 +75,18 @@ export class StatusBarTray {
    *                  让调用方补上通知方案（见 verifyCapability 的说明）
    */
   initialize(context: common.UIAbilityContext, onFallback?: () => void): boolean {
+    // ★ 重入保护。本类是**进程级单例**，而窗口阶段会在「收进托盘 → 从托盘唤回」
+    //   时走一遍销毁再重建（hideAbility() 同样触发 onWindowStageDestroy），
+    //   onWindowStageCreate 里的 initialize() 于是会被调用第二次、第三次……
+    //   以前这里每次都无脑 registerEvents() + addIcon()，而 statusBarManager.on()
+    //   在本工程里**没有配对的 off()**：收托盘 N 次后，点一下图标会并发 N 次
+    //   showAbility()，右键「退出」会并发 N 次 terminateSelf()。
+    //   context 是每次重建后新给的，必须刷新；图标与事件只挂一次。
     this.context = context;
     this.onFallback = onFallback ?? null;
+    if (this.added) {
+      return true;
+    }
     try {
       this.registerEvents();
       this.addIcon();
@@ -201,11 +213,19 @@ export class StatusBarTray {
   }
 
   /**
-   * 右键菜单：两个一级项，都设 notifyOnly + menuCode。
+   * 右键菜单：只放「显示主窗口」一项。
+   *
+   * ★★ 为什么没有「退出」（用户 2026-10-23 实测反馈）：
+   *   系统在自定义菜单之后会**自动追加一个自带的「退出」**（分隔线 + 退出），
+   *   我们再放一个就出现两个「退出」，而用户分不清哪个是哪个；
+   *   且我们那个走 quitApp() → terminateSelf()，会与退出拦截逻辑互相纠缠，
+   *   表现成"点了退出应用又回来"。系统的那个退出项由系统直接终止应用，
+   *   行为正确。自定义的退出项删除，事件侧的 MENU_QUIT 分支一并保留但永不触发
+   *   （万一将来系统不再追加，把菜单项加回来即可）。
    *
    * ★ notifyOnly 必须为 true 且必须给 menuCode，点击才会以 rightMenuClick 事件
-   *   回传（否则系统会按 menuAction.abilityName 去拉 Ability，拿不到"退出"这种
-   *   自定义业务）。官方样例（《应用接入状态栏》）逐字如此：
+   *   回传（否则系统会按 menuAction.abilityName 去拉 Ability，拿不到"显示主窗口"
+   *   这种自定义业务）。官方样例（《应用接入状态栏》）逐字如此：
    *     `let menuCode = data['menuCode'] as string;`
    * ★ menuCode 挂两份（值相同，官方明确"MenuItem 的会覆盖 menuAction 的"）：
    *   StatusBarMenuAction.menuCode 自 6.1.1(24) 起**已废弃**，官方建议改用
@@ -218,14 +238,8 @@ export class StatusBarTray {
       notifyOnly: true,
       menuCode: MENU_SHOW,
     };
-    const quitAction: statusBarManager.StatusBarMenuAction = {
-      abilityName: 'EntryAbility',
-      notifyOnly: true,
-      menuCode: MENU_QUIT,
-    };
     const items: statusBarManager.StatusBarMenuItem[] = [
       { title: '显示主窗口', menuCode: MENU_SHOW, menuAction: showAction },
-      { title: '退出', menuCode: MENU_QUIT, menuAction: quitAction },
     ];
     const groups: statusBarManager.StatusBarGroupMenu[] = [];
     groups.push(items);
@@ -241,19 +255,31 @@ export class StatusBarTray {
    * 所以不必判断 iconClickType，收到即视为"唤回主窗口"。
    */
   private registerEvents(): void {
+    if (this.eventsRegistered) {
+      return;
+    }
+    this.eventsRegistered = true;
     statusBarManager.on('statusBarIconClick', (): void => {
       hilog.info(0x0000, TAG, '托盘图标被点击 → 唤回主窗口');
       this.showMainWindow();
     });
 
     statusBarManager.on('rightMenuClick', (eventData: emitter.EventData): void => {
-      const data = eventData.data as Record<string, string>;
-      const code: string = data['menuCode'];
-      hilog.info(0x0000, TAG, '托盘右键菜单：%{public}s', code);
-      if (code === MENU_SHOW) {
-        this.showMainWindow();
-      } else if (code === MENU_QUIT) {
-        this.quitApp();
+      // 这一条由系统线程投递，**没有 try 兜底的话一次 TypeError 会结束整个应用**
+      // （本文件里其它系统回调都有同款防护）。eventData.data 取不到并不是不可能：
+      // 菜单配置与事件回传分属两次调用，缺字段时它是 undefined，解引用即抛。
+      try {
+        const data = eventData.data as Record<string, string>;
+        const code: string = data['menuCode'];
+        hilog.info(0x0000, TAG, '托盘右键菜单：%{public}s', code);
+        if (code === MENU_SHOW) {
+          this.showMainWindow();
+        } else if (code === MENU_QUIT) {
+          this.quitApp();
+        }
+      } catch (error) {
+        const failure = error as BusinessError;
+        hilog.warn(0x0000, TAG, '托盘右键菜单处理失败：%{public}s', failure.message);
       }
     });
   }
@@ -325,10 +351,13 @@ export class StatusBarTray {
   }
 
   /**
-   * 退出应用（托盘右键「退出」）。
+   * 退出应用（**当前菜单里没有入口**——「退出」项已删，见 buildGroupMenu）。
    *
-   * 必须先摘掉状态栏图标再 destroy —— 反序的话进程没了、图标还挂在状态栏上，
+   * 保留方法是因为 onWindowStageDestroy 的注释引用了它，且它是"程序化退出"
+   * 的唯一正路：先摘图标再 destroy，反序的话进程没了、图标还挂在状态栏上，
    * 用户会看到一个点了没反应的死图标，只能重启才能清掉。
+   * terminateSelf 触发的 onPrepareToTerminate 已改为一律放行（EntryAbility），
+   * 这里调用它能真正退出，不会再被拦回收托盘。
    */
   quitApp(): void {
     this.removeIcon();

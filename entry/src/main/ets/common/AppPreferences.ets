@@ -24,9 +24,6 @@ import common from '@ohos.app.ability.common';
 import { BusinessError } from '@ohos.base';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import {
-  ACRYLIC_ALPHA_DEFAULT,
-  ACRYLIC_ALPHA_KEY,
-  ACRYLIC_WINDOW_KEY,
   PERSIST_READ_RESULT_KEY,
   PERSIST_WRITE_RESULT_KEY,
   HIDE_POINTER_ON_TAKEOVER_KEY,
@@ -35,8 +32,10 @@ import {
   GLOW_DEGRADED_KEY,
   MINIMIZE_TO_TRAY_KEY,
   TRAY_AVAILABLE_KEY,
+  DEVELOPER_MODE_KEY,
 } from './WindowServices';
 import { LANG_INDEX_KEY } from './i18n';
+import { THEME_PREF_KEY, recomputeThemeScheme } from './theme_manager';
 import {
   KeyboardMappingSettings, KeyboardMappingEntry, MappedTouchAction,
   ALL_MAPPED_ACTIONS, KEYBOARD_MAPPING_MAX_ENTRIES, KEYBOARD_MAPPING_SCHEMA_VERSION,
@@ -48,8 +47,6 @@ import {
 const PREFS_NAME: string = 'iphone_mirror_prefs';
 
 /** ★ preferences 里的键：与 AppStorage 的 `im.xxx` 分开命名，避免两套键被误当成同一个。 */
-const PREFS_KEY_ACRYLIC_ON: string = 'acrylic_on';
-const PREFS_KEY_ACRYLIC_ALPHA: string = 'acrylic_alpha';
 /** ★ preferences 里的键：界面语言档位（0=跟随系统 1=简体 2=繁中香港 3=英文）。 */
 const PREFS_KEY_LANGUAGE: string = 'language_index';
 /** ★ preferences 里的键：反控接管时是否收起本地指针（默认 false = 保持可见）。 */
@@ -59,6 +56,8 @@ const PREFS_KEY_GLOW_STRENGTH: string = 'glow_strength';
 const PREFS_KEY_MINIMIZE_TO_TRAY: string = 'minimize_to_tray';
 /** ★ preferences 里的键：首启向导是否已看过（默认 false = 没看过，首次启动弹）。 */
 const PREFS_KEY_FIRST_RUN_DONE: string = 'first_run_done';
+/** ★ preferences 里的键：主题偏好（0=跟随系统 1=深色 2=浅色）。 */
+const PREFS_KEY_THEME: string = 'theme_pref';
 
 /** ★ AppStorage 键：首启向导是否已看过（false = 首次启动应弹出向导）。 */
 export const FIRST_RUN_DONE_KEY: string = 'im.firstRun.done';
@@ -81,58 +80,6 @@ export function open_app_preferences(context: common.Context): void {
     const openFailure = openError as BusinessError;
     AppStorage.setOrCreate(PERSIST_READ_RESULT_KEY,
       `偏好打开失败 ${openFailure.code} ${openFailure.message}`);
-  }
-}
-
-/**
- * 从磁盘读回半透明的两项偏好，写进 AppStorage。
- *
- * ★ 必须在 UI 装载**之前**调用：`@StorageLink` 首次读取会**创建**这个键（用的是它的
- *   默认值），一旦先创建，这里的写入就会被当成普通更新、用户看到的是被 UI 覆盖前的值。
- */
-export function load_acrylic_preferences(): void {
-  if (store === null) {
-    AppStorage.setOrCreate(PERSIST_READ_RESULT_KEY, '偏好未打开 · 本次不跨启动保留');
-    return;
-  }
-  try {
-    const on: boolean = store.getSync(PREFS_KEY_ACRYLIC_ON, true) as boolean;
-    const alpha: string = store.getSync(PREFS_KEY_ACRYLIC_ALPHA, ACRYLIC_ALPHA_DEFAULT) as string;
-    AppStorage.setOrCreate(ACRYLIC_WINDOW_KEY, on);
-    AppStorage.setOrCreate(ACRYLIC_ALPHA_KEY, alpha);
-    AppStorage.setOrCreate(PERSIST_READ_RESULT_KEY,
-      `存档 开关=${on ? '开' : '关'} 浓度=${alpha}`);
-  } catch (readError) {
-    const readFailure = readError as BusinessError;
-    AppStorage.setOrCreate(PERSIST_READ_RESULT_KEY,
-      `偏好读取失败 ${readFailure.code} ${readFailure.message}`);
-  }
-}
-
-/**
- * 写入半透明的两项偏好并**立即落盘**。
- *
- * ★ `flushSync()` 是这版能生效的关键：`putSync()` 只改内存副本，进程被直接杀掉时
- *   没机会走 Ability 的正常收尾 ⇒ 不 flush 就等于没存（第一版 PersistentStorage
- *   失败的根因就在这里）。
- *
- * @param on 半透明开关
- * @param alpha 浓度的 alpha 十六进制串（两位，如 '99'）
- */
-export function save_acrylic_preferences(on: boolean, alpha: string): void {
-  if (store === null) {
-    AppStorage.setOrCreate(PERSIST_WRITE_RESULT_KEY, '偏好未打开 · 未写入');
-    return;
-  }
-  try {
-    store.putSync(PREFS_KEY_ACRYLIC_ON, on);
-    store.putSync(PREFS_KEY_ACRYLIC_ALPHA, alpha);
-    store.flushSync();
-    AppStorage.setOrCreate(PERSIST_WRITE_RESULT_KEY, `落盘 ok ${on ? '开' : '关'}/${alpha}`);
-  } catch (writeError) {
-    const writeFailure = writeError as BusinessError;
-    AppStorage.setOrCreate(PERSIST_WRITE_RESULT_KEY,
-      `偏好写入失败 ${writeFailure.code} ${writeFailure.message}`);
   }
 }
 
@@ -173,6 +120,42 @@ export function save_language_preference(index: number): void {
   } catch (writeError) {
     const writeFailure = writeError as BusinessError;
     hilog.warn(0x0000, 'AppPreferences', '语言偏好写入失败 %d %{public}s',
+      writeFailure.code, writeFailure.message);
+  }
+}
+
+/**
+ * 从磁盘读回主题偏好，写进 AppStorage 的 `THEME_PREF_KEY` 并重算生效方案。
+ *
+ * ★ 必须在 UI 装载前调用（同其它 load_*）：主窗的 themeIndex 是 @StorageLink，
+ *   先建键就会用默认 0（跟随系统）覆盖掉已保存的选择。
+ */
+export function load_theme_preference(): void {
+  if (store === null) {
+    return;
+  }
+  try {
+    const index: number = store.getSync(PREFS_KEY_THEME, 0) as number;
+    AppStorage.setOrCreate<number>(THEME_PREF_KEY, index);
+    recomputeThemeScheme();
+  } catch (readError) {
+    const readFailure = readError as BusinessError;
+    hilog.warn(0x0000, 'AppPreferences', '主题偏好读取失败 %d %{public}s',
+      readFailure.code, readFailure.message);
+  }
+}
+
+/** 写入主题偏好并立即落盘。@param index 0=跟随系统 1=深色 2=浅色 */
+export function save_theme_preference(index: number): void {
+  if (store === null) {
+    return;
+  }
+  try {
+    store.putSync(PREFS_KEY_THEME, index);
+    store.flushSync();
+  } catch (writeError) {
+    const writeFailure = writeError as BusinessError;
+    hilog.warn(0x0000, 'AppPreferences', '主题偏好写入失败 %d %{public}s',
       writeFailure.code, writeFailure.message);
   }
 }
@@ -287,6 +270,46 @@ export function save_tray_preferences(minimizeToTray: boolean): void {
   } catch (writeError) {
     const writeFailure = writeError as BusinessError;
     hilog.warn(0x0000, 'AppPreferences', '托盘偏好写入失败 %d %{public}s',
+      writeFailure.code, writeFailure.message);
+  }
+}
+
+const PREFS_KEY_DEVELOPER_MODE: string = 'developer_mode';
+
+/**
+ * 读回开发者模式开关，写进 AppStorage 的 DEVELOPER_MODE_KEY。
+ *
+ * ★ 2026-10-31 由"有意不持久化"改为持久化（用户原话："开发者模式应该开启后
+ *   就保持开启，重开应用需要再开一遍，太麻烦了"）。它仍是调试入口，只是
+ *   开着的人不必每次重开。
+ * ★ 与其它 load_* 同理：必须在 UI 装载之前调用（EntryAbility.onCreate）。
+ */
+export function load_developer_mode_preference(): void {
+  if (store === null) {
+    AppStorage.setOrCreate(DEVELOPER_MODE_KEY, false);
+    return;
+  }
+  try {
+    const enabled: boolean = store.getSync(PREFS_KEY_DEVELOPER_MODE, false) as boolean;
+    AppStorage.setOrCreate(DEVELOPER_MODE_KEY, enabled);
+  } catch (readError) {
+    const readFailure = readError as BusinessError;
+    AppStorage.setOrCreate(DEVELOPER_MODE_KEY, false);
+    hilog.warn(0x0000, 'AppPreferences', '开发者模式读取失败 %d %{public}s',
+      readFailure.code, readFailure.message);
+  }
+}
+
+export function save_developer_mode_preference(enabled: boolean): void {
+  if (store === null) {
+    return;
+  }
+  try {
+    store.putSync(PREFS_KEY_DEVELOPER_MODE, enabled);
+    store.flushSync();
+  } catch (writeError) {
+    const writeFailure = writeError as BusinessError;
+    hilog.warn(0x0000, 'AppPreferences', '开发者模式写入失败 %d %{public}s',
       writeFailure.code, writeFailure.message);
   }
 }

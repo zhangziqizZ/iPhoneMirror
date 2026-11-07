@@ -22,10 +22,9 @@ enum class SessionState {
 };
 
 struct SessionOptions {
-    // Valeria=false makes iOS honor DisplaySize. The protocol selects an
-    // encoder tier from the requested long edge; an arbitrary huge square can
-    // fall back to 1440p. 1206x2622 is the highest tier verified on both test
-    // devices; broader 4K bounds make recent iOS choose a lower encoder tier.
+    // DisplaySize describes the receiver, not a guaranteed encoder size.
+    // The ordinary non-Valeria path can select a reduced AirPlay tier even
+    // for a panel-sized request; native_airplay enables the native iPad path.
     std::uint32_t requested_width{1206};
     std::uint32_t requested_height{2622};
     bool request_native_display_size{false};
@@ -40,6 +39,11 @@ struct SessionOptions {
     bool demo_mode{false};
     bool request_audio{true};
     bool advertise_hevc_444{false};
+    // Stevenote selects a presentation display without Valeria's status-bar
+    // override. Its AVC stream requires a real High 4:4:4 decoder; negotiate
+    // it only with that decoder AND a live system-direction monitor. Native
+    // sample attachments keep orientation zero even while content rotates.
+    bool native_airplay{false};
 };
 
 struct SessionEvent {
@@ -61,11 +65,18 @@ public:
         std::uint32_t width, std::uint32_t height);
     [[nodiscard]] std::vector<std::vector<std::uint8_t>> complete_display_reconfigure();
     void set_demo_mode(bool enabled) noexcept { options_.demo_mode = enabled; }
+    void set_native_airplay(bool enabled) noexcept { options_.native_airplay = enabled; }
     void reset();
 
     [[nodiscard]] SessionState state() const noexcept { return state_; }
     [[nodiscard]] std::uint64_t video_frames() const noexcept { return video_frames_; }
     [[nodiscard]] std::uint64_t audio_packets() const noexcept { return audio_packets_; }
+    [[nodiscard]] std::uint64_t need_sent() const noexcept { return need_sent_; }
+    [[nodiscard]] std::uint64_t reply_received() const noexcept { return reply_received_; }
+    [[nodiscard]] std::optional<std::chrono::steady_clock::time_point>
+    last_video_sample_at() const noexcept { return last_video_sample_at_; }
+    [[nodiscard]] std::optional<std::chrono::steady_clock::time_point>
+    last_audio_sample_at() const noexcept { return last_audio_sample_at_; }
     [[nodiscard]] const std::optional<coremedia::FormatDescription>& video_format() const noexcept { return video_format_; }
     [[nodiscard]] const std::optional<coremedia::FormatDescription>& audio_format() const noexcept { return audio_format_; }
     [[nodiscard]] const std::optional<coremedia::AudioStreamBasicDescription>& negotiated_audio() const noexcept { return negotiated_audio_; }
@@ -81,6 +92,13 @@ private:
     std::uint64_t local_host_clock_{};
     std::uint64_t video_frames_{};
     std::uint64_t audio_packets_{};
+    // Stream-flow diagnostics: the mirror currently emits NEED only per video
+    // sample and ignores RPLY entirely. These counters let a single idle-screen
+    // capture confirm how the device stall correlates with NEED/RPLY traffic.
+    std::uint64_t need_sent_{};
+    std::uint64_t reply_received_{};
+    std::optional<std::chrono::steady_clock::time_point> last_video_sample_at_{};
+    std::optional<std::chrono::steady_clock::time_point> last_audio_sample_at_{};
     std::optional<coremedia::FormatDescription> video_format_;
     std::optional<coremedia::FormatDescription> audio_format_;
     std::optional<coremedia::AudioStreamBasicDescription> negotiated_audio_;

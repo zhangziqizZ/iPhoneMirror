@@ -63,6 +63,9 @@ Socket UsbMuxClient::connect() {
 std::pair<Socket, plist::Value> UsbMuxClient::request_with_socket(const plist::Value& body) {
     Socket socket = connect();
     const std::string xml = plist::to_xml(body);
+    // Guard against silent uint32_t wraparound when building the length field.
+    // (Upstream 1.8.5 hardening, platform-neutral.)
+    if (xml.size() > 0xFFFFFFFFu - 16) throw std::runtime_error("usbmux packet too large");
     std::vector<std::uint8_t> packet;
     packet.reserve(16 + xml.size());
     append_u32le(packet, static_cast<std::uint32_t>(16 + xml.size()));

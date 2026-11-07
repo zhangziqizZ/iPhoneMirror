@@ -640,6 +640,13 @@ OhosPreviewRenderer::OhosPreviewRenderer() : impl_(std::make_unique<Impl>()) {}
 
 OhosPreviewRenderer::~OhosPreviewRenderer() { impl_->shutdown(); }
 
+std::string OhosPreviewRenderer::last_error() const {
+    // last_error_ 的所有写点都在 impl_->mutex 之下，读也必须拿同一把锁；
+    // 返回拷贝而不是引用（见头文件里的说明）。
+    std::scoped_lock lock(impl_->mutex);
+    return last_error_;
+}
+
 OhosPreviewRenderer& OhosPreviewRenderer::instance() {
     // 故意 new 出来永不 delete：本类的 EGL 上下文活在一个专属线程上，如果让静态
     // 局部变量在进程退出时析构，就得在那个时刻 join 渲染线程 —— 而它可能正卡在

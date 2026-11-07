@@ -631,6 +631,66 @@ export function vp_to_px_ratio(): number {
   return 1;
 }
 
+/** 一次开窗尝试的结果（ArkTS 禁止 throw 非 Error 值，BusinessError 上抛受限，用对象带回）。 */
+interface CreateAttempt {
+  win: window.Window | null;
+  err: BusinessError | null;
+}
+
+/** 包一层 createSubWindowWithOptions：异常转成结果对象，不往上传。 */
+async function try_create(owner: window.Window, name: string,
+  options: window.SubWindowOptions): Promise<CreateAttempt> {
+  try {
+    return { win: await owner.createSubWindowWithOptions(name, options), err: null };
+  } catch (e) {
+    return { win: null, err: e as BusinessError };
+  }
+}
+
+/**
+ * createSubWindowWithOptions 的 401（参数校验拒绝）分级降级重试：
+ * 部分系统形态不接受模态子窗（isModal）或夹取后的 windowRect 仍不合它的
+ * 口味。第一级去掉 isModal，第二级连 windowRect 也去掉交给系统摆放——
+ * 只要把窗开出来就行。其它错误以 Error 形式上抛（消息里带原 code）。
+ */
+async function create_with_401_fallback(owner: window.Window, spec: SubWindowSpec,
+  left: number, top: number, wantWidth: number, wantHeight: number): Promise<window.Window> {
+  const options: window.SubWindowOptions = {
+    title: spec.title,
+    // 原版 ExtendsContentIntoTitleBar="True"：系统装饰关掉，标题栏由外壳自绘。
+    decorEnabled: false,
+    isModal: spec.modal,
+    // windowRect 的单位是 px（不是 vp）：见 @ohos.window 的 Rect 定义，
+    // 「单位为px，该参数为整数」。传 vp 数值会让窗口实际尺寸偏小一圈。
+    windowRect: { left: left, top: top, width: wantWidth, height: wantHeight },
+  };
+  let attempt: CreateAttempt = await try_create(owner, spec.name, options);
+  if (attempt.err !== null && attempt.err.code === 401) {
+    hilog.warn(DOMAIN, TAG, 'createSubWindow(%{public}s) 报 401，降级重试（去 isModal）',
+      spec.name);
+    const noModal: window.SubWindowOptions = {
+      title: spec.title,
+      decorEnabled: false,
+      windowRect: { left: left, top: top, width: wantWidth, height: wantHeight },
+    };
+    attempt = await try_create(owner, spec.name, noModal);
+    if (attempt.err !== null && attempt.err.code === 401) {
+      hilog.warn(DOMAIN, TAG, '仍 401，再去掉 windowRect 交给系统摆放', spec.name);
+      const bare: window.SubWindowOptions = {
+        title: spec.title,
+        decorEnabled: false,
+      };
+      attempt = await try_create(owner, spec.name, bare);
+    }
+  }
+  if (attempt.err !== null || attempt.win === null) {
+    const code: number = attempt.err !== null ? attempt.err.code : 0;
+    const msg: string = attempt.err !== null ? attempt.err.message : '未知原因';
+    throw new Error(`createSubWindowWithOptions(${spec.name}) 失败 code=${code}: ${msg}`);
+  }
+  return attempt.win;
+}
+
 export class SubWindowHost {
   /**
    * 关窗前拦截钩子 —— 对应原版窗口 `Closing="OnWindowClosing"` 里 `e.Cancel = true`。
@@ -667,13 +727,18 @@ export class SubWindowHost {
         // 与原版 e.Cancel = true 等价：保持窗口打开。
         return;
       }
-      SubWindowHost.closeHooks.delete(name);
+      // ★ 钩子要等 destroyWindow **成功之后**才删：销毁失败（窗口还在）时若先删了，
+      //   下次关闭就不会再走回滚逻辑（ImageSettingsWindow 的"回滚失败就不关"会失效）。
     }
     const target: window.Window | null = SubWindowHost.find(name);
     if (target === null) {
+      // 窗口本来就不在：钩子留着只会占内存，且下次同名窗口打开时会先跑它。
+      SubWindowHost.closeHooks.delete(name);
       return;
     }
-    target.destroyWindow().catch((error: BusinessError): void => {
+    target.destroyWindow().then((): void => {
+      SubWindowHost.closeHooks.delete(name);
+    }).catch((error: BusinessError): void => {
       // 只取 describe_failure 的文本：拒绝原因可能是 undefined，
       // 在 .catch 回调里对它取 .message 会二次抛错（= 未捕获异常，会终止应用）。
       hilog.warn(DOMAIN, TAG, 'destroyWindow(%{public}s) 失败: %{public}s',
@@ -722,8 +787,23 @@ export class SubWindowHost {
     try {
       // 原版 Width/Height 是 DIP（= vp），窗口 API 收 px ⇒ 先换算再谈尺寸。
       const ratio: number = vp_to_px_ratio();
-      const wantWidth: number = Math.round(spec.width * ratio);
-      const wantHeight: number = Math.round(spec.height * ratio);
+      // ★ windowRect 超出物理屏会被参数校验直接打回 401 —— 先夹到屏幕内。
+      //   （FirstRunSetupWindow 880×820vp 在高密度屏上换算出的 px 可能超屏。）
+      let wantWidth: number = Math.round(spec.width * ratio);
+      let wantHeight: number = Math.round(spec.height * ratio);
+      try {
+        const dsp: display.Display = display.getDefaultDisplaySync();
+        if (dsp.width > 0 && wantWidth > dsp.width) {
+          wantWidth = dsp.width;
+        }
+        if (dsp.height > 0 && wantHeight > dsp.height) {
+          wantHeight = dsp.height;
+        }
+      } catch (error) {
+        // 拿不到屏幕尺寸就按原样请求，交给后面 401 重试链兜底。
+        hilog.warn(DOMAIN, TAG, '取屏幕尺寸失败，跳过夹取: %{public}s',
+          (error as BusinessError).message);
+      }
 
       const owner: window.Window = await window.getLastWindow(ctx);
       let left: number = 0;
@@ -746,16 +826,8 @@ export class SubWindowHost {
           (error as BusinessError).message);
       }
 
-      const options: window.SubWindowOptions = {
-        title: spec.title,
-        // 原版 ExtendsContentIntoTitleBar="True"：系统装饰关掉，标题栏由外壳自绘。
-        decorEnabled: false,
-        isModal: spec.modal,
-        // windowRect 的单位是 px（不是 vp）：见 @ohos.window 的 Rect 定义，
-        // 「单位为px，该参数为整数」。传 vp 数值会让窗口实际尺寸偏小一圈。
-        windowRect: { left: left, top: top, width: wantWidth, height: wantHeight },
-      };
-      sub = await owner.createSubWindowWithOptions(spec.name, options);
+      // ★ 401 重试链在 create_with_401_fallback 里（见上）。
+      sub = await create_with_401_fallback(owner, spec, left, top, wantWidth, wantHeight);
 
       // ResizeMode="NoResize" → 把 min 与 max 钉成同一个值。
       // 只做"尽力而为"：失败不影响窗口能否显示。

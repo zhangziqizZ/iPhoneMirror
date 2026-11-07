@@ -203,7 +203,10 @@ public:
     void set_enabled(bool enabled) noexcept override {
         playback_enabled_.store(enabled);
 #if IM_HAVE_OHOS_OHAUDIO
-        if (renderer_ != nullptr) {
+        // ★ 在锁内用 renderer_：stop() 会把它摘下并置空，锁外不存在"读到指针
+        //   后被释放"的窗口（此前的裸读就是 UAF 现场）。
+        std::scoped_lock lock(mutex_);
+        if (renderer_ != nullptr && !stopped_) {
             if (enabled) {
                 OH_AudioRenderer_Start(renderer_);
             } else {
@@ -220,29 +223,36 @@ public:
         //   PCM ramp 对这几条**没有因果**。v1.0.58 没用，撤回到系统级音量。
         volume_.store(volume);
 #if IM_HAVE_OHOS_OHAUDIO
-        if (renderer_ != nullptr) {
+        std::scoped_lock lock(mutex_);
+        if (renderer_ != nullptr && !stopped_) {
             OH_AudioRenderer_SetVolume(renderer_, volume);
         }
 #endif
     }
 
     void stop() noexcept override {
+        OH_AudioRenderer* retired = nullptr;
+        OH_AudioStreamBuilder* retired_builder = nullptr;
         {
             std::scoped_lock lock(mutex_);
             if (stopped_) return;
             stopped_ = true;
-        }
-        // 释放音频对象时必须放开 mutex_：OHAudio 的写回调会去抢同一把锁，
-        // 持锁 Stop/Release 会和回调线程互等。
-#if IM_HAVE_OHOS_OHAUDIO
-        if (renderer_ != nullptr) {
-            OH_AudioRenderer_Stop(renderer_);
-            OH_AudioRenderer_Release(renderer_);
+            // ★ 锁内只摘指针：下面 Stop/Release 必须放开 mutex_（OHAudio 的写回调
+            //   会抢同一把锁，持锁 Stop/Release 会和回调线程互等）。摘空之后
+            //   set_volume/set_enabled 在锁内看到的是 nullptr，不会再碰已释放句柄。
+            retired = renderer_;
             renderer_ = nullptr;
-        }
-        if (builder_ != nullptr) {
-            OH_AudioStreamBuilder_Destroy(builder_);
+            retired_builder = builder_;
             builder_ = nullptr;
+        }
+        // 释放音频对象时必须放开 mutex_：见上。
+#if IM_HAVE_OHOS_OHAUDIO
+        if (retired != nullptr) {
+            OH_AudioRenderer_Stop(retired);
+            OH_AudioRenderer_Release(retired);
+        }
+        if (retired_builder != nullptr) {
+            OH_AudioStreamBuilder_Destroy(retired_builder);
         }
 #endif
     }

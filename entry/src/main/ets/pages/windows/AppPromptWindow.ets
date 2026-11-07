@@ -70,6 +70,16 @@ const DOMAIN: number = 0x0100;
 export const WINDOW_NAME: string = 'AppPromptWindow';
 export const PAGE_PATH: string = 'pages/windows/AppPromptWindow';
 
+/**
+ * 请求序号（AppStorage）。
+ *
+ * ★ 为什么需要：SubWindowHost.open 对**已存在**的窗口只做 showWindow，不会再走
+ *   一次 aboutToAppear ⇒ 窗口开着时再来一条 prompt（例如连续两次 Inform），
+ *   界面还停在上一条的标题/正文，而 pending_prompt 已被新请求覆盖，
+ *   那条新请求既没显示、也没人消费。序号 + @Watch 让活着的窗口自己换内容。
+ */
+export const PROMPT_TICK_KEY: string = 'im.prompt.requestTick';
+
 /** 原版 MinHeight="250"：SizeToContent=Height 时的下限，这里当窗口高度用。 */
 const WINDOW_HEIGHT: number = 250;
 /** 原版 <Border Style="SettingsSection" Padding="16"> —— 覆盖了默认的 18。 */
@@ -124,6 +134,14 @@ export function open_prompt_preview(ctx: common.Context): void {
 
 function open_prompt(ctx: common.Context, request: PromptRequest, modal: boolean): void {
   WindowServices.pending_prompt = request;
+  // 序号 +1：窗口已经开着时由它的 @Watch 消费这条新请求（见 PROMPT_TICK_KEY）。
+  try {
+    const tick: number = AppStorage.get<number>(PROMPT_TICK_KEY) ?? 0;
+    AppStorage.setOrCreate<number>(PROMPT_TICK_KEY, tick + 1);
+  } catch (error) {
+    hilog.warn(DOMAIN, TAG, 'prompt tick 写入失败: %{public}s',
+      (error as BusinessError).message);
+  }
 
   const spec: SubWindowSpec = {
     name: WINDOW_NAME,
@@ -154,22 +172,43 @@ struct AppPromptWindow {
   private request: PromptRequest | null = null;
   /** 原版 Complete() 之后不再回调（保证 on_result 只发一次）。 */
   private resolved: boolean = false;
+  /** 页面是否已经上屏（after_shown 只在"既上屏、又有请求"时跑一次）。 */
+  private shown: boolean = false;
+  /** @Watch 的触发器：只是序号，内容一律从 pending_prompt 取。 */
+  @Watch('on_request_tick')
+  @StorageLink(PROMPT_TICK_KEY) promptTick: number = 0;
 
   aboutToAppear(): void {
-    const pending: PromptRequest | null = WindowServices.pending_prompt;
-    WindowServices.pending_prompt = null;
-    if (pending !== null) {
-      this.request = pending;
-      this.promptTitle = pending.title;
-      this.promptBody = pending.body;
-      this.showCancel = pending.showCancel;
-      this.confirmText = pending.showCancel ? S_CONTINUE() : S_CLOSE();
-    }
+    this.consume_pending();
     // 右上角 X 等价于「取消」（原版关闭按钮 Click=OnCancelClick）。
     SubWindowHost.register_close_hook(WINDOW_NAME, (): boolean => {
       this.complete(false);
       return true;
     });
+  }
+
+  /** 窗口还活着时又来了新请求：直接换上，不重开窗口。 */
+  private on_request_tick(): void {
+    this.consume_pending();
+  }
+
+  private consume_pending(): void {
+    const pending: PromptRequest | null = WindowServices.pending_prompt;
+    if (pending === null) {
+      return;
+    }
+    WindowServices.pending_prompt = null;
+    this.request = pending;
+    // 新请求 = 新一轮生命周期：旧请求的"已答复"锁不能挡住它的按钮。
+    this.resolved = false;
+    this.promptTitle = pending.title;
+    this.promptBody = pending.body;
+    this.showCancel = pending.showCancel;
+    this.confirmText = pending.showCancel ? S_CONTINUE() : S_CLOSE();
+    if (this.shown) {
+      // 窗口已经在屏上（aboutToAppear/onPageShow 不会再来），这里补跑 after_shown。
+      this.run_after_shown();
+    }
   }
 
   aboutToDisappear(): void {
@@ -178,6 +217,11 @@ struct AppPromptWindow {
 
   /** 原版 ContentRendered 里跑 afterShown（只跑一次）。 */
   onPageShow(): void {
+    this.shown = true;
+    this.run_after_shown();
+  }
+
+  private run_after_shown(): void {
     const request: PromptRequest | null = this.request;
     if (request === null || request.after_shown === null) {
       return;

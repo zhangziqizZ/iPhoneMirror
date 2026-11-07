@@ -61,7 +61,7 @@
 //   ① src/App/Services/DiagnosticLogger.cs
 //      · DirectoryPath = %LOCALAPPDATA%\iPhoneMirror\Logs；单文件上限 8 MB、
 //        保留 4 个归档、14 天/64 MB 清理上限。
-//        → 鸿蒙等价物：ctx.filesDir + '/iPhoneMirror/Logs'（与 AboutWindow 的
+//        → 鸿蒙等价物：ctx.filesDir + '/PhoneMirror/Logs'（与 AboutWindow 的
 //          平台替换 2/6 完全同一路径口径），见 diagnostic_dir()。
 //      · FormatEntry：`<ISO8601> level=… pid=… tid=… category=… event=… k=v …`
 //        → 本文件 format_entry() 按同样顺序拼（pid/tid 在 ArkTS 拿不到，写 0）。
@@ -151,15 +151,15 @@ import { FluentSymbol } from '../../common/FluentIcon';
 import { THEME_PREF_KEY, recomputeThemeScheme } from '../../common/theme_manager';
 import {
   GLOW_ENABLED_KEY, GLOW_STRENGTH_KEY, GLOW_DEGRADED_KEY, TRAY_AVAILABLE_KEY,
+  APP_WINDOW_VISIBLE_KEY,
 } from '../../common/WindowServices';
-import { TrayManager } from '../../common/TrayManager';
 import {
   show_developer_error_preview,
   show_developer_reverse_control_error_preview,
   show_developer_stopped_preview,
   show_developer_usb_preview,
 } from './CaptureStatusNoticeWindow';
-import { save_language_preference } from '../../common/AppPreferences';
+import { save_language_preference, save_theme_preference } from '../../common/AppPreferences';
 import { t, set_language, LANG_INDEX_KEY, active_lang, language_switch_cost_ms,
   LANGUAGE_LABELS as I18N_LANG } from '../../common/i18n';
 
@@ -365,7 +365,7 @@ function ui_context(): common.Context {
 
 /** 服务 ①：DiagnosticLogger.DirectoryPath 的鸿蒙等价物。 */
 function diagnostic_dir(): string {
-  return ui_context().filesDir + '/iPhoneMirror/Logs';
+  return ui_context().filesDir + '/PhoneMirror/Logs';
 }
 
 /** 服务 ②：AppLog.Sanitize 里与本窗口相关的两条（URL 与长 Hex 设备标识）。 */
@@ -566,7 +566,9 @@ struct DeveloperToolsWindow {
     this.themeIndex = index;
     AppStorage.setOrCreate<number>(THEME_PREF_KEY, THEME_PREF_BY_INDEX[index]);
     recomputeThemeScheme();
-    this.statusText = '应用主题已切换为「' + THEME_LABELS[index] + '」（当前进程生效）。';
+    // 立即落盘：主题偏好此前只活在内存里，重启就回到「跟随系统」。
+    save_theme_preference(THEME_PREF_BY_INDEX[index]);
+    this.statusText = '应用主题已切换为「' + THEME_LABELS[index] + '」（已保存）。';
     write_log('INFO', 'ui', 'developer_theme_changed', 'index=' + index.toString());
     this.refresh_diagnostics();
   }
@@ -659,6 +661,7 @@ struct DeveloperToolsWindow {
     this.themeIndex = 0;
     AppStorage.setOrCreate<number>(THEME_PREF_KEY, 0);
     recomputeThemeScheme();
+    save_theme_preference(0);
     this.languageIndex = 0;
     set_language(0);
     setTimeout((): void => {
@@ -728,6 +731,7 @@ struct DeveloperToolsWindow {
     const glowStrength: number = AppStorage.get<number>(GLOW_STRENGTH_KEY) ?? 1;
     const glowDegraded: boolean = AppStorage.get<boolean>(GLOW_DEGRADED_KEY) ?? false;
     const trayAvailable: boolean = AppStorage.get<boolean>(TRAY_AVAILABLE_KEY) ?? false;
+    const windowShown: boolean = AppStorage.get<boolean>(APP_WINDOW_VISIBLE_KEY) ?? true;
     let strengthLabel: string = '中';
     if (glowStrength === 0) {
       strengthLabel = '弱';
@@ -743,7 +747,7 @@ struct DeveloperToolsWindow {
       '光感：' + (glowOn ? '开' : '关') + ' · 强度' + strengthLabel +
         (glowDegraded ? ' · 已降级' : ' · 正常'),
       '托盘：' + (trayAvailable ? '可用' : '不可用') + ' · 窗口' +
-        (TrayManager.shared().isWindowVisible() ? '可见' : '隐藏'),
+        (windowShown ? '可见' : '隐藏'),
     ];
     this.diagnosticsText = lines.concat(INTEGRITY_LINES).join('\n');
   }

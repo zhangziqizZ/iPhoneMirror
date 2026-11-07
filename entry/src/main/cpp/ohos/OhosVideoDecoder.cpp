@@ -254,7 +254,9 @@ public:
         // 跳过 end marker（"1"）。这里必 +1：end marker 永远存在，包括 zeros=0 时
         // 也要消费 1 bit，否则连续 ue=0 会全部读到同一个 bit 上。
         if (pos_ < size_ * 8) ++pos_;
-        if (zeros > 32) return 0;
+        // ★ 守卫必须是 >= 32：`1u << 32` 是未定义行为（移位量等于位宽），
+        //   zeros == 32 时下面那行正好踩中。坏码字该返回 0，不该 UB。
+        if (zeros >= 32) return 0;
         const std::uint32_t suffix = read_bits(zeros);
         return (1u << zeros) - 1u + suffix;
     }
@@ -567,17 +569,30 @@ public:
         : preference_(preference) {}
 
     ~OhosVideoDecoder() override {
+        OH_AVCodec *retired = nullptr;
+        std::vector<OH_AVCodec*> also_retired;
         {
             std::scoped_lock lock(mutex_);
             stopping_ = true;
-        }
-        // 回调可能正阻塞在 mutex_ 上，先置停止位再释放编解码器。
-        if (codec_ != nullptr) {
-            OH_VideoDecoder_Stop(codec_);
-            OH_VideoDecoder_Destroy(codec_);
+            // ★ 必须在**锁内**把指针摘走：Stop/Destroy 会等在途回调返回，
+            //   而回调进入后第一件事就是拿 mutex_。若持锁去 Destroy，回调卡在
+            //   lock() 上、Destroy 等回调结束 —— 死锁。摘空之后回调看到
+            //   codec_ == nullptr 会直接跳过 FreeOutputBuffer，然后自行返回。
+            retired = codec_;
             codec_ = nullptr;
+            // 还没轮到销毁的实例（create_locked 失败/换档时登记的）一起摘走：
+            // 锁外遍历 retired_codecs_ 会与销毁路径的 swap 抢同一个 vector。
+            also_retired.swap(retired_codecs_);
+            format_ = {};
         }
-        format_ = {};
+        if (retired != nullptr) {
+            OH_VideoDecoder_Stop(retired);
+            OH_VideoDecoder_Destroy(retired);
+        }
+        for (OH_AVCodec* pending : also_retired) {
+            OH_VideoDecoder_Stop(pending);
+            OH_VideoDecoder_Destroy(pending);
+        }
     }
 
     void configure(const coremedia::FormatDescription& format,
@@ -598,13 +613,24 @@ public:
     // 走到 push —— 首次 push 时 have_input_buffer_=false，pump 直接返回。
     std::vector<DecodedFrame> decode_common(std::vector<std::uint8_t> bytes,
         std::int64_t timestamp_100ns) {
+        // 先清上一轮的"待销毁实例"：create_locked 失败时会 retire 并直接 throw，
+        // 那条路径走不到下面的解锁段，不在这里兜底就会一直泄漏旧句柄。
+        destroy_retired_codecs();
         {
             std::scoped_lock lock(mutex_);
             // 失败后不再尝试：decode_common 的调用方是 C 回调（raop），C++ 异常
             // 穿越 C 栈是未定义行为——所有异常必须在这层以内消化掉。
             if (failed_ && codec_ == nullptr) {
+                // ★ 不能在这里永久 return —— 它会把整个会话锁死在"零帧输出"。
+                //   上一轮"重建时 CreateByName 失败"最常见的原因是：retire_codec_locked()
+                //   把旧实例摘到 retired_codecs_ 但还没 Destroy，紧接着 create_locked()
+                //   就建新实例——在只允许单个硬解实例的机型上，新实例创建会失败
+                //   （AV_ERR_INVALID_STATE / 资源冲突）。而本函数**开头**已经先跑过
+                //   destroy_retired_codecs() 把旧句柄彻底清掉了，所以这一帧正是重建的
+                //   最佳窗口。这里只清失败标志和堆积的待推帧，交给下面的 create_locked()
+                //   再建一次；建不成也不会永久卡死（下一帧开头又会清一次再试）。
+                failed_ = false;
                 pending_input_.clear();
-                return {};
             }
             // 绿屏自愈（1.0.57）：关掉低延迟后按同一档重建。放在这里是因为
             // 这里是解码线程，安全；回调里销毁解码器会 UB。
@@ -639,6 +665,15 @@ public:
                 // 否则这里丢的帧会让后面每帧都拿错参考（= 花屏）。
                 Diag().needs_idr.store(1, std::memory_order_relaxed);
             }
+            // ★ IDR 扫描必须在 bytes 被 move 进队列**之前**做完：std::move 之后
+            //   源 vector 处于"有效但未指定"状态（libc++/libstdc++ 实现上就是
+            //   size()==0、data()==nullptr），再拿它去扫就恒为 false。这条踩过一次：
+            //   于是"等 IDR"只能靠 kRandomAccessGiveupMs 超时解除，每次配置、
+            //   每次策略换档都要白等 2 秒，四档策略链累计 8 秒黑屏。
+            const bool has_idr = waiting_for_random_access_
+                ? annex_b_has_nal_type(
+                    std::span<const uint8_t>(bytes.data(), bytes.size()), 5)
+                : false;
             pending_input_.push_back(PendingInput{std::move(bytes), timestamp_100ns});
             // 只增不减地记最大堆积深度：能区分"偶尔溢出"与"一直满"。
             if (pending_input_.size() > Diag().fill_peak.load(std::memory_order_relaxed)) {
@@ -649,8 +684,6 @@ public:
             if (waiting_for_random_access_) {
                 const std::int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now().time_since_epoch()).count();
-                const bool has_idr = annex_b_has_nal_type(
-                    std::span<const uint8_t>(bytes.data(), bytes.size()), 5);
                 if (has_idr) {
                     waiting_for_random_access_ = false;
                 } else if (now_ms - wait_random_access_start_ms_ >= kRandomAccessGiveupMs) {
@@ -683,6 +716,11 @@ public:
         //
         //   代价要说清：最后一帧要等下一次输入才会被带出来（上游同步 MFT 同理）。
         //   镜像是持续流，这等于多一帧的间隔；流停了则由 drain() 收尾。
+        // ★ 解码器实例的销毁**必须在锁外**做：OH_VideoDecoder_Destroy 会等在途
+        //   回调返回，而回调进入后第一件事就是拿 mutex_。持锁 Destroy 时若某个
+        //   回调正卡在 lock() 上，两边互等 —— 死锁。所以下面这段都是
+        //   "锁内只摘指针（retire_codec_locked），锁外统一销毁"。
+        this->destroy_retired_codecs();
         std::scoped_lock relock(mutex_);
         return take_decoded_locked();
     }
@@ -690,7 +728,14 @@ public:
     std::vector<DecodedFrame> decode(std::span<const std::uint8_t> length_prefixed_sample,
         std::int64_t timestamp_100ns, std::int64_t duration_100ns) override {
         (void)duration_100ns;
-        auto annex_b = to_annex_b(length_prefixed_sample, format_.nalu_length_size);
+        // ★ 锁内取一份格式化参数：configure()/configure_annex_b() 会整体重写
+        //   format_（含 vector 成员），锁外裸读它的字段是数据竞争（UB）。
+        std::uint8_t nalu_length_size = 0;
+        {
+            std::scoped_lock lock(mutex_);
+            nalu_length_size = format_.nalu_length_size;
+        }
+        auto annex_b = to_annex_b(length_prefixed_sample, nalu_length_size);
         return decode_common(
             std::vector<std::uint8_t>(annex_b.begin(), annex_b.end()), timestamp_100ns);
     }
@@ -713,7 +758,8 @@ public:
 // 赌不起，交给策略自动切换链（见 DecoderStrategy）。
     void configure_annex_b(std::span<const std::uint8_t> annex_b_codec_config,
         std::uint32_t width, std::uint32_t height, bool hevc) override {
-        std::scoped_lock lock(mutex_);
+        // unique_lock：中间要解锁销毁旧解码器实例（理由见下面的 retire 段）。
+        std::unique_lock<std::mutex> lock(mutex_);
         codec_config_override_.assign(annex_b_codec_config.begin(),
             annex_b_codec_config.end());
         have_codec_config_override_ = !codec_config_override_.empty();
@@ -734,6 +780,9 @@ public:
         //   新参数集 = 新流，旧怪癖未必复现，这里重置让它重新获得机会；
         //   若设备确实仍出 UV 全零，on_chroma_empty_locked 会再次关掉
         //   （有界代价：每个新流至多 kChromaEmptyStreakLimit 帧绿屏）。
+        //
+        // ★★ 2026-10-29 回退为 false（与成员默认值一致）：见成员声明处的说明。
+        //   真机零帧回归后先恢复基线能出画面的取值；延迟优化待出帧稳定后再单独评估。
         low_latency_ = false;
         low_latency_persistently_disabled_ = false;
         hw_ll_retry_done_ = false;
@@ -754,11 +803,11 @@ public:
         //   codec_config_override_ 却**从不生效**——create_locked() 里
         //   `if (codec_ != nullptr) return;` 会把它整个跳过去。于是"补到了正确的
         //   SPS/PPS"在 UI 上看起来毫无作用。现在先拆掉旧实例，让新参数集真正生效。
-        if (codec_ != nullptr) {
-            OH_VideoDecoder_Stop(codec_);
-            OH_VideoDecoder_Destroy(codec_);
-            codec_ = nullptr;
-        }
+        // ★ 只摘指针、不在这里 Destroy：本函数持有 mutex_，而 Destroy 要等在途
+        //   回调返回，回调又会来抢 mutex_ ⇒ 持锁 Destroy 是死锁路径。
+        //   真正的 Stop/Destroy 放在下面 unlock 之后（见 "锁外销毁" 那一段）。
+        OH_AVCodec *retired = codec_;
+        codec_ = nullptr;
         decoded_.clear();
         pending_input_.clear();
         have_input_buffer_ = false;
@@ -801,6 +850,15 @@ public:
         waiting_for_random_access_ = true;
         wait_random_access_start_ms_ = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
+        // ── 锁外销毁旧实例 ──
+        // 状态已全部更新完，可以放开锁：此时旧 codec 的回调即使进入，也只是
+        // 看到 codec_ == nullptr 后自行返回（不会碰新实例）。
+        lock.unlock();
+        if (retired != nullptr) {
+            OH_VideoDecoder_Stop(retired);
+            OH_VideoDecoder_Destroy(retired);
+        }
+        lock.lock();
         create_locked();
     }
 
@@ -889,15 +947,38 @@ private:
             "同一档重建解码器");
     }
 
+    /**
+     * 锁内把当前实例摘下来，登记到 retired_codecs_，由 destroy_retired_codecs()
+     * 在**锁外**统一 Stop/Destroy。
+     *
+     * ★ 为什么不能就地 Destroy：Destroy 会等在途回调返回，而所有回调进入后
+     *   第一件事就是拿 mutex_。持锁 Destroy 时若回调正卡在 lock() 上，就互等死锁。
+     *   摘空之后回调只会看到 codec_ == nullptr 并直接返回。
+     */
+    void retire_codec_locked() {
+        if (codec_ == nullptr) return;
+        retired_codecs_.push_back(codec_);
+        codec_ = nullptr;
+    }
+
+    /** 锁外销毁被摘下来的实例（调用方**不得**持有 mutex_）。 */
+    void destroy_retired_codecs() {
+        std::vector<OH_AVCodec*> doomed;
+        {
+            std::scoped_lock lock(mutex_);
+            doomed.swap(retired_codecs_);
+        }
+        for (OH_AVCodec* codec : doomed) {
+            OH_VideoDecoder_Stop(codec);
+            OH_VideoDecoder_Destroy(codec);
+        }
+    }
+
     // 执行"按当前档重建解码器"（在解码线程上跑，不在任何回调里）。
     void apply_restart_locked() {
         if (!strategy_restart_requested_) return;
         strategy_restart_requested_ = false;
-        if (codec_ != nullptr) {
-            OH_VideoDecoder_Stop(codec_);
-            OH_VideoDecoder_Destroy(codec_);
-            codec_ = nullptr;
-        }
+        retire_codec_locked();
         decoded_.clear();
         pending_input_.clear();
         have_input_buffer_ = false;
@@ -907,7 +988,9 @@ private:
         try {
             create_locked();
         } catch (const std::exception &) {
-            strategy_chain_active_ = false;
+            // ★ 不停用策略链：这次失败往往只是"旧实例尚未 Destroy 导致新实例
+            //   创建失败"的暂时态。decode_common 下一帧开头会先销毁旧实例再
+            //   重建，保留策略链才能继续换档兜底。异常在此消化，不穿 C 栈。
             failed_ = true;
         }
     }
@@ -954,11 +1037,7 @@ private:
             frames_since_create_ = 0;
             outputs_since_create_ = 0;
             pixels_since_create_ = 0;
-            if (codec_ != nullptr) {
-                OH_VideoDecoder_Stop(codec_);
-                OH_VideoDecoder_Destroy(codec_);
-                codec_ = nullptr;
-            }
+            retire_codec_locked();
             decoded_.clear();
             pending_input_.clear();
             have_input_buffer_ = false;
@@ -970,15 +1049,13 @@ private:
             try {
                 create_locked();
             } catch (const std::exception &) {
-                strategy_chain_active_ = false;
+                // 同上：保留策略链，交给下一帧清旧实例后重建。
                 failed_ = true;
             }
             return;
         }
         if (codec_ != nullptr) {
-            OH_VideoDecoder_Stop(codec_);
-            OH_VideoDecoder_Destroy(codec_);
-            codec_ = nullptr;
+            retire_codec_locked();
         }
         decoded_.clear();
         pending_input_.clear();
@@ -995,9 +1072,9 @@ private:
         try {
             create_locked();
         } catch (const std::exception &) {
-            // 重建失败（如平台没有软件解码器组件）：停用策略链、置失败态，
-            // 不让异常穿越 C 回调栈。
-            strategy_chain_active_ = false;
+            // 重建失败（如平台没有软件解码器组件，或旧实例尚未销毁导致新实例
+            // 创建失败）：只置失败态、不停用策略链，让 decode_common 下一帧先
+            // 清旧实例再重建。异常在此消化，不穿越 C 回调栈。
             failed_ = true;
         }
     }
@@ -1050,6 +1127,10 @@ private:
         callback.onNeedInputBuffer = &OhosVideoDecoder::OnNeedInputBuffer;
         callback.onNewOutputBuffer = &OhosVideoDecoder::OnNewOutputBuffer;
         if (OH_VideoDecoder_RegisterCallback(codec_, callback, this) != AV_ERR_OK) {
+            // ★ 半成品实例必须摘掉：留着 codec_ != nullptr 会让 decode_common 的
+            //   "codec_ == nullptr 就重建" 永远跳过，解码器就此永久停在坏态。
+            //   销毁交给锁外的 destroy_retired_codecs（这里持有 mutex_）。
+            retire_codec_locked();
             failed_ = true;
             throw std::runtime_error("OH_VideoDecoder_RegisterCallback 失败");
         }
@@ -1099,11 +1180,13 @@ private:
         const OH_AVErrCode configured = OH_VideoDecoder_Configure(codec_, description);
         OH_AVFormat_Destroy(description);
         if (configured != AV_ERR_OK) {
+            retire_codec_locked();     // 半成品实例见 RegisterCallback 失败处的说明
             failed_ = true;
             throw std::runtime_error("OH_VideoDecoder_Configure 失败");
         }
         if (OH_VideoDecoder_Prepare(codec_) != AV_ERR_OK ||
             OH_VideoDecoder_Start(codec_) != AV_ERR_OK) {
+            retire_codec_locked();
             failed_ = true;
             throw std::runtime_error("OH_VideoDecoder_Prepare/Start 失败");
         }
@@ -1120,6 +1203,8 @@ private:
                 format_.height, fps_numerator_, fps_denominator_));
         Diag().last_config_width.store(format_.width, std::memory_order_relaxed);
         Diag().last_config_height.store(format_.height, std::memory_order_relaxed);
+        // 实例已成功起跑：清掉任何历史失败标志，避免下游误判为坏态。
+        failed_ = false;
     }
 
     // 输入缓冲由 OnNeedInputBuffer 交给我们，因此这里只把待发样本往前推一格。
@@ -1268,6 +1353,10 @@ private:
         auto* self = static_cast<OhosVideoDecoder*>(user_data);
         if (self == nullptr) return;
         std::scoped_lock lock(self->mutex_);
+        // ★ 2026-10-29 撤销实例校验：SDK 头文件只注明回调首参是 "OH_AVCodec instance"，
+        //   并未保证它 == OH_VideoDecoder_CreateByName 的返回值。一旦不等，`codec !=
+        //   self->codec_` 会拦掉**全部**合法回调（必然零帧），风险远大于它要防的
+        //   "退役实例迟到回调"。缓冲归还改用回调首参 codec 各回各家，无需拦截。
         self->failed_ = true;
         self->output_ready_.notify_all();
         // 给宿主一个总计数，UI 看到 >0 就能立刻指出"OH_VideoDecoder 出错"，不用
@@ -1299,6 +1388,9 @@ private:
         if (self == nullptr) return;
         {
             std::scoped_lock lock(self->mutex_);
+            // 回到基线行为：不拦回调。退役实例交回的旧 index 即便偶发 push 失败，
+            // 也只记一次 push_failures，下一帧新实例回调会覆盖成正确缓冲——不会零帧；
+            // 而"拦掉全部回调"才是必然零帧，两害相权取其轻。
             self->input_index_ = index;
             self->input_buffer_ = buffer;
             self->have_input_buffer_ = true;
@@ -1307,21 +1399,45 @@ private:
         self->output_ready_.notify_all();
     }
 
-    static void OnNewOutputBuffer(OH_AVCodec*, std::uint32_t index, OH_AVBuffer* buffer,
+    static void OnNewOutputBuffer(OH_AVCodec* codec, std::uint32_t index, OH_AVBuffer* buffer,
         void* user_data) {
         auto* self = static_cast<OhosVideoDecoder*>(user_data);
         if (self == nullptr || buffer == nullptr) return;
 
+        // ★★ 2026-10-30 零帧回归修复：恢复"锁外做重活、锁内只写共享状态"的
+        //   基线时序。上一版"进入即 std::unique_lock 全程持锁 + 实例校验"有两个
+        //   致命问题，正是"airplay 连上后解码器零帧输出"的直接来源：
+        //     ① `if (codec != self->codec_) return;`：SDK 头文件只注明回调首参是
+        //        "OH_AVCodec instance"，**并未保证**它等于 OH_VideoDecoder_CreateByName
+        //        的返回值。真机上二者不等时，每一次合法输出回调都被这条拦掉，
+        //        outputs/pixels 恒为 0 —— 必然零帧。删除。
+        //     ② 全程持锁做 3MB 像素拷贝，还与解码线程 push / 喂帧回调抢同一把
+        //        mutex_，改变了基线已验证能出画面的回调时序。
+        //   现结构：锁外读 buffer 属性 / 拷像素 / 归还缓冲；锁内只写 self 的
+        //   decoded_ 与计数；通知宿主在解锁后。保留两条已验证修复：
+        //     · FreeOutputBuffer 用回调首参 codec —— 旧实例 index 还给旧实例，
+        //       天然不串到重建后的新实例（重建后零帧的另一根因）。
+        //     · notify_frame_available() 解锁后调用 —— 断开与 im_stop_capture
+        //       "持 capture_mutex 析构解码器拿 mutex_" 的 ABBA 环。
         OH_AVCodecBufferAttr attr{};
         if (OH_AVBuffer_GetBufferAttr(buffer, &attr) != AV_ERR_OK) {
-            OH_VideoDecoder_FreeOutputBuffer(self->codec_, index);
+            // 取不到属性也得把输出缓冲还回去，否则输出环卡死。用首参 codec 归还。
+            if (codec != nullptr) OH_VideoDecoder_FreeOutputBuffer(codec, index);
             return;
         }
+
+        // 宽高是持锁路径会改写的成员，锁外裸读是数据竞争。锁内快照两个整数，
+        // 随后整段像素处理在锁外用快照值。
+        std::uint32_t width = 0;
+        std::uint32_t height = 0;
+        {
+            std::scoped_lock lock(self->mutex_);
+            width = self->decoded_width_ != 0 ? self->decoded_width_ : self->format_.width;
+            height = self->decoded_height_ != 0 ? self->decoded_height_ : self->format_.height;
+        }
+
+        bool notify_frame = false;
         const bool end_of_stream = (attr.flags & AVCODEC_BUFFER_FLAGS_EOS) != 0;
-        const std::uint32_t width = self->decoded_width_ != 0
-            ? self->decoded_width_ : self->format_.width;
-        const std::uint32_t height = self->decoded_height_ != 0
-            ? self->decoded_height_ : self->format_.height;
 
         std::vector<std::uint8_t> pixels;
         std::int32_t stride = 0;
@@ -1334,31 +1450,72 @@ private:
                     // （NV12 size = stride × height × 3/2）。attr.size 紧凑相等时
                     // 直接整块拷；更大时按行拷——不处理的话画面会斜着裂开。
                     std::uint32_t stride_bytes = width;
+                    // ★★ native buffer 报的 stride 是**权威值**，必须优先于任何推导。
+                    //   开低延迟后解码器会把输出缓冲布局从紧致（stride==width）
+                    //   换成按 16/32/64 对齐（stride>width），而 attr.size 报的是
+                    //   逻辑大小（== w*h*3/2，不含对齐 padding）——那正是 v1.0.59
+                    //   撤回低延迟的根因：当年靠 attr.size 反推 stride，布局一换
+                    //   就推不出来，UV 拷到 Y 平面尾部 ⇒ 绿屏/颜色全错。现在有
+                    //   真值来源，低延迟与"颜色对"不再互斥。
+                    bool stride_from_native = false;
 #if IM_HAVE_OHOS_NATIVE_WINDOW
                     {
                         OH_NativeBuffer* nativeBuffer = OH_AVBuffer_GetNativeBuffer(buffer);
                         if (nativeBuffer != nullptr) {
                             OH_NativeBuffer_Config config{};
                             OH_NativeBuffer_GetConfig(nativeBuffer, &config);
-                            if (config.stride > 0) {
-                                stride_bytes = static_cast<std::uint32_t>(config.stride);
+                            // 合理性上下界：stride 不可能小于宽度（NV12 的 Y 行至
+                            // 少装得下一行像素），也不该大到离谱——按 4 倍宽度封顶，
+                            // 防止个别设备报野值把下面的读取量撑爆。
+                            // 两侧都提到 int64 再比：config.stride 的符号性随 SDK
+                            // 版本变化（有符号/无符号都见过），直接比会踩
+                            // -Wsign-compare，而且负数会被无符号提升成天文数字。
+                            const std::int64_t native_stride =
+                                static_cast<std::int64_t>(config.stride);
+                            if (native_stride >= static_cast<std::int64_t>(width) &&
+                                native_stride <= static_cast<std::int64_t>(width) * 4) {
+                                stride_bytes = static_cast<std::uint32_t>(native_stride);
+                                stride_from_native = true;
                             }
                             OH_NativeBuffer_Unreference(nativeBuffer);
                         }
                     }
 #endif
-                    if (stride_bytes == width && height > 0) {
-                        const std::uint32_t derived =
-                            static_cast<std::uint32_t>(attr.size) / (height * 3u / 2u);
-                        if (derived >= width) {
-                            stride_bytes = derived;
-                        } else if (self->low_latency_) {
-                            self->low_latency_ = false;
-                            self->low_latency_persistently_disabled_ = true;
-                            Diag().low_latency_disabled.fetch_add(1, std::memory_order_relaxed);
-                            self->strategy_restart_requested_ = true;
-                            logging::write(logging::Level::Warning, "decoder",
-                                "stride derivation failed (derived < width), disabling low-latency to avoid chroma corruption");
+                    if (!stride_from_native) {
+                        // 拿不到 native buffer（软解档、或未链接 native_window）：
+                        // 退回从 attr.size 反推。这条路在低延迟下必然失效，所以
+                        // 推不出来就自愈关掉低延迟——与 v1.0.59 的处置一致，只是
+                        // 现在只有"确实推不出来"时才付这个代价，不再是常态。
+                        if (height > 0) {
+                            const std::uint32_t derived =
+                                static_cast<std::uint32_t>(attr.size) / (height * 3u / 2u);
+                            if (derived >= width) {
+                                stride_bytes = derived;
+                            } else if (self->low_latency_) {
+                                self->low_latency_ = false;
+                                self->low_latency_persistently_disabled_ = true;
+                                Diag().low_latency_disabled.fetch_add(1, std::memory_order_relaxed);
+                                self->strategy_restart_requested_ = true;
+                                logging::write(logging::Level::Warning, "decoder",
+                                    "stride derivation failed (derived < width), disabling low-latency to avoid chroma corruption");
+                            }
+                        }
+                        // ★ 行距自检**只对推导值生效**。推导值本身是从 attr.size
+                        //   反推的，stride 一旦被高估，真正要读的
+                        //   `stride × height × 3/2` 就会超过 attr.size
+                        //   （810×1440 配 stride 1024 ⇒ 多读 462KB，堆越界）。
+                        //   attr.size 报的是逻辑大小、可能不含对齐 padding，这条
+                        //   不能指望它兜住。不成立就退回紧致行距：宁可画面错位，
+                        //   也不能越界读。
+                        //
+                        //   ★★ 这条**绝不能**套到 native buffer 给的真值上：
+                        //   真值的对齐 padding 本来就不在 attr.size 里，套上去会
+                        //   把正确的 stride 抹掉，等于又把低延迟的收益退回去。
+                        if (stride_bytes != width &&
+                            static_cast<std::uint64_t>(stride_bytes) *
+                                static_cast<std::uint64_t>(height) * 3ull / 2ull >
+                                static_cast<std::uint64_t>(attr.size)) {
+                            stride_bytes = width;
                         }
                     }
 
@@ -1400,14 +1557,17 @@ private:
                 Diag().output_too_small.fetch_add(1, std::memory_order_relaxed);
             }
         }
-        (void)OH_VideoDecoder_FreeOutputBuffer(self->codec_, index);
+        // 锁外归还输出缓冲：用回调首参 codec（各回各家），既不串到重建后的新
+        // 实例，也避免持锁调 FreeOutputBuffer 与同步回调重入抢锁。
+        if (codec != nullptr) {
+            (void)OH_VideoDecoder_FreeOutputBuffer(codec, index);
+        }
 
         Diag().output_callbacks.fetch_add(1, std::memory_order_relaxed);
         Diag().last_output_attr_size.store(attr.size, std::memory_order_relaxed);
         Diag().last_output_width.store(width, std::memory_order_relaxed);
         Diag().last_output_height.store(height, std::memory_order_relaxed);
 
-        std::scoped_lock lock(self->mutex_);
         // ★ 2026-10-02：只有**真正交出像素**才算"这一档能用"。
         //   以前任何输出回调（含 attr.size 不足被丢的 output_too_small、含 EOS）
         //   都自增 outputs_since_create_，而策略链判据正是
@@ -1419,6 +1579,10 @@ private:
         //   可用档位，策略链永不推进 —— 用户就只能对着绿屏干看着。现在废帧不进
         //   outputs_/pixels_ 计数，策略链会照常往下试；同时由
         //   on_chroma_empty_locked 判断要不要直接关掉低延迟模式重建。
+        // 【锁内】只写 self 的共享状态：decoded_ / 计数 / 策略链标志 / 条件变量。
+        // 上面像素处理全程锁外，这里不能裸写这些成员，故重新取锁。
+        {
+        std::scoped_lock lock(self->mutex_);
         const bool usable_pixels = !pixels.empty() &&
             !chroma_plane_all_zero(pixels, width, height);
         if (!pixels.empty() && !usable_pixels) {
@@ -1462,12 +1626,21 @@ private:
                 }
             }
             Diag().output_with_pixels.fetch_add(1, std::memory_order_relaxed);
-            ohos_bridge::notify_frame_available();
+            notify_frame = true;
         } else {
             Diag().output_no_pixels.fetch_add(1, std::memory_order_relaxed);
         }
         if (end_of_stream) self->drain_complete_ = true;
         self->output_ready_.notify_all();
+        } // scoped_lock 析构 ⇒ 释放 mutex_
+
+        // ★ 通知宿主必须在解锁之后：notify_frame_available() 要拿 capture_mutex，
+        //   而 im_stop_capture() 是"持 capture_mutex → 析构会话 → 析构解码器
+        //   （拿 mutex_）"。若持着 mutex_ 去拿 capture_mutex 就是 ABBA，点
+        //   "停止投屏"时正好有输出回调在跑会卡死。先放开再通知，环就断了。
+        if (notify_frame) {
+            ohos_bridge::notify_frame_available();
+        }
     }
 
   mutable std::mutex mutex_;
@@ -1476,6 +1649,8 @@ private:
   std::atomic<std::int64_t> last_output_us_{0};
 
     OH_AVCodec* codec_{};
+    /** 被摘下来、等锁外销毁的旧实例（见 retire_codec_locked）。 */
+    std::vector<OH_AVCodec*> retired_codecs_;
     OH_AVBuffer* input_buffer_{};
     std::uint32_t input_index_{};
     bool have_input_buffer_{};
@@ -1515,7 +1690,13 @@ private:
     //   撤回 v1.0.55 的低延迟开关；保留 v1.0.55 的非阻塞取帧（那是另一条独立
     //   改动）。代价：v1.0.55 测得的 ≈233ms 周期性滞后恢复，延迟回到 250-300ms 量级，
     //   与"颜色对"二选一。先要颜色对。
-    bool low_latency_{false};
+    //
+        // ★★ 2026-10-29 回退为 false：2026-10-23 曾改成 true，随后真机即报
+        //   "AirPlay 连上后解码器零帧输出"。该开关 @since 12、会改变硬解输出缓冲的
+        //   提供方式，而当前 SDK 上它的实际行为未在真机验证过；基线（能稳定出画面）
+        //   恒为 false。低延迟是性能优化，先让画面出来；出帧稳定后再单独评估。
+        //   注：stride 真值分支、ABBA 解锁等真正的正确性修复不受影响，继续保留。
+        bool low_latency_{false};
     bool low_latency_persistently_disabled_{false};
     // 硬解档"关低延迟同档重试"只做一次的闸门（防止无限重建），见
     // maybe_switch_strategy_locked；configure_annex_b 时随新流重置。

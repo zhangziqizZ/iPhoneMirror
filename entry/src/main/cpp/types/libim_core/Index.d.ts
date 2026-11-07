@@ -101,6 +101,25 @@ export const lastError: () => string;
 // 有线采集失败时，这串记录是屏幕上唯一能说明"卡在哪一步"的东西。
 export const usbDiagnostics: () => string;
 
+// 配对（"信任此电脑"）的用户可见状态，一句中文。
+// 与 usbDiagnostics 分开的原因：诊断尾巴是给排障的人看的原始事实、只在开发者
+// 模式显示；而"请在 iPhone 上点「信任此电脑」"是要用户动手的指令，必须在普通
+// 界面就看得见。没有内容时返回空串。
+export const pairingStatus: () => string;
+
+// usbManager 备用通道的配对入口（fd 由 UsbManagerHost.ets 经
+// getFileDescriptor 拿到）。native 在后台线程跑完整 usbmux/lockdownd 配对：
+// 自己定位 usbmux 接口、读 UDID（非系统应用拿不到 getDevices 的 serial）、
+// 发 Pair 把「信任此电脑」弹窗逼出来。
+// 返回 true = 配对线程已接受（或已有配对在跑），false = fd 无效。
+// 进程内同一时刻只允许一轮；60 秒等待窗口结束后自动放行下一轮。
+export const pairViaUsbFd: (fd: number) => boolean;
+
+// 设置配对记录的存放目录（应用沙箱路径，通常是 context.filesDir 下的子目录）。
+// 原生侧拿不到 context.filesDir，所以由 ArkTS 传入。
+// 传空串表示不持久化：配对仍能完成，只是下次插线要重新信任。
+export const setPairingStoreDirectory: (directory: string) => boolean;
+
 // 把原生诊断日志重定向到显式路径（通常应是应用沙箱 filesDir/iPhoneMirror/Logs/startup.log）。
 // 原生默认写系统 temp 目录，而 ArkTS 因沙箱隔离读不到，导致「实时日志」永远空白。
 // 必须在 initialize() 之前调用，返回 0 = 成功，非 0 = 失败（原因取 lastError()）。
@@ -369,3 +388,33 @@ export const airplayReportService: (
   ok: boolean,
   reason: string
 ) => number;
+
+// ── iOS AFC（文件浏览）：lockdown StartSession → TLS → com.apple.afc ──
+// 全部异步（Promise）；首次调用会做完整握手（约 1~2 秒），之后复用会话。
+// fd 来自 usbManager.getFileDescriptor（与配对通道同一来源）。
+export interface AfcEntry {
+  name: string;
+  isDir: boolean;
+  size: number;
+  mtime: number; // epoch 秒
+}
+export interface AfcDeviceInfo {
+  udid: string;
+  deviceName: string;
+}
+export const afcConnect: (fd: number) => Promise<AfcDeviceInfo>;
+export const afcListDir: (fd: number, path: string) => Promise<AfcEntry[]>;
+// 返回 ArrayBuffer（最大 512MB，超出 reject）。
+export const afcReadFile: (fd: number, path: string) => Promise<ArrayBuffer>;
+export const afcWriteFile: (
+  fd: number,
+  path: string,
+  data: ArrayBuffer
+) => Promise<boolean>;
+export const afcMakeDir: (fd: number, path: string) => Promise<boolean>;
+export const afcRemove: (fd: number, path: string) => Promise<boolean>;
+export const afcRename: (
+  fd: number,
+  from: string,
+  to: string
+) => Promise<boolean>;

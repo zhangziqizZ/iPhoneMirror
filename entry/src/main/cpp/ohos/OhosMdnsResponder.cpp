@@ -1632,6 +1632,12 @@ int im_ohos_primary_mac(char *out, unsigned int capacity) {
 int im_mdns_responder_start(void) {
     std::lock_guard<std::mutex> lifecycle_lock(g_lifecycle_lock);
     if (g_active.load(std::memory_order_acquire)) return 0;
+    // ★ worker 自己异常退出时只把 g_active 置 false，线程对象**仍然 joinable**。
+    //   `g_worker = std::thread(...)` 对一个 joinable 的 std::thread 赋值会
+    //   直接 std::terminate()——也就是"mDNS 崩一次 → 用户停用再启用"这条
+    //   再正常不过的路径会把整个进程戳死，且没有任何日志。这里先把僵尸线程
+    //   回收掉（它已经退出，join 立即返回），再往下走。
+    if (g_worker.joinable()) g_worker.join();
 
     {
         std::lock_guard<std::mutex> lock(g_state_lock);
@@ -1735,7 +1741,19 @@ int im_mdns_responder_start(void) {
     // 出向组播绑到最佳网卡（见 ApplyMulticastInterface 的说明）。
     ApplyMulticastInterface(best_ip);
     g_stop_requested.store(false, std::memory_order_release);
-    g_worker = std::thread(WorkerMain);
+    try {
+        g_worker = std::thread(WorkerMain);
+    } catch (...) {
+        // 线程创建失败（系统资源耗尽）：fd 必须在这里关掉，否则它既没被用上、
+        // 又会在下次 start() 里被 g_socket 覆盖 ⇒ 泄漏一个 fd 且无从察觉。
+        ::close(descriptor);
+        g_socket = -1;
+        {
+            std::lock_guard<std::mutex> lock(g_state_lock);
+            g_error = "原生 mDNS 工作线程创建失败（系统资源不足）";
+        }
+        return -1;
+    }
     g_active.store(true, std::memory_order_release);
     // 队列交给原生响应器消费：ArkTS 的 take_service/take_removal 从此返回空，
     // 避免两个消费者抢同一条待办。
@@ -1746,6 +1764,15 @@ int im_mdns_responder_start(void) {
 void im_mdns_responder_stop(void) {
     std::lock_guard<std::mutex> lifecycle_lock(g_lifecycle_lock);
     if (!g_active.load(std::memory_order_acquire)) {
+        // ★ 同 start() 那条兜底：g_active 为 false 不代表线程对象已经回收。
+        //   worker 异常退出走的正是这条路——此时若不 join，僵尸的 joinable
+        //   线程会留到下次 start()，赋值时 std::terminate()。顺便把可能还
+        //   开着的 socket 一起收掉（异常退出路径不会走到下面的 close）。
+        if (g_worker.joinable()) g_worker.join();
+        if (g_socket >= 0) {
+            ::close(g_socket);
+            g_socket = -1;
+        }
         im_dnssd_queue_set_native_backend(0);
         return;
     }

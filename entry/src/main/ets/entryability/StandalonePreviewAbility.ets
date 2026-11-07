@@ -308,10 +308,18 @@ export default class StandalonePreviewAbility extends UIAbility {
 // （原 apply_window_opacity 已删除：本 SDK 的 Window 没有 setWindowOpacity。
 //   透明度改由 StandalonePreviewWindow 根节点 .opacity() 声明式实现。）
 
+  /**
+   * 600ms 后兜底重试的句柄。
+   * ★ 要能取消：窗口在 600ms 内被关掉时，回调仍会去碰已销毁的 Window 并写 AppStorage。
+   */
+  private chromeRetryTimer: number = -1;
+
   /** 600ms 后再下发一次系统装饰隐藏（时序兜底）。 */
   private schedule_chrome_retry(win: window.Window): void {
     try {
-      setTimeout((): void => {
+      this.clear_chrome_retry();
+      this.chromeRetryTimer = setTimeout((): void => {
+        this.chromeRetryTimer = -1;
         // 定时器回调里一行都不能裸奔：抛出去就是应用被结束。
         try {
           this.apply_system_chrome(win);
@@ -323,6 +331,13 @@ export default class StandalonePreviewAbility extends UIAbility {
     } catch (error) {
       hilog.warn(DOMAIN, TAG, '无法安排重试: %{public}s',
         (error as BusinessError).message);
+    }
+  }
+
+  private clear_chrome_retry(): void {
+    if (this.chromeRetryTimer >= 0) {
+      clearTimeout(this.chromeRetryTimer);
+      this.chromeRetryTimer = -1;
     }
   }
 
@@ -372,6 +387,7 @@ export default class StandalonePreviewAbility extends UIAbility {
   }
 
   onWindowStageDestroy(): void {
+    this.clear_chrome_retry();
     // Ability 销毁 = 窗口真的没了。主窗口靠这个键判断"要不要把画面接回去"，
     // 所以**两个销毁入口都要写**（页面 aboutToDisappear 是另一处）。
     try {
@@ -383,6 +399,7 @@ export default class StandalonePreviewAbility extends UIAbility {
   }
 
   onDestroy(): void {
+    this.clear_chrome_retry();
     try {
       AppStorage.setOrCreate<boolean>(STANDALONE_ALIVE_KEY, false);
     } catch (error) {

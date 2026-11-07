@@ -72,11 +72,17 @@ set(IPHONEMIRROR_CORE_OHOS_SOURCES
     ${IM_OHOS_DIR}/OhosSharedGpuFrame.cpp
     ${IM_OHOS_DIR}/OhosUsbDdk.cpp
     ${IM_OHOS_DIR}/OhosUsbTransport.cpp
+    ${IM_OHOS_DIR}/OhosUsbFdTransport.cpp
+    ${IM_OHOS_DIR}/OhosUsbFdDevice.cpp
     ${IM_OHOS_DIR}/OhosVideoDecoder.cpp
     ${IM_OHOS_DIR}/OhosInputBridge.cpp
     ${IM_OHOS_DIR}/OhosUsbMux.cpp
+    ${IM_OHOS_DIR}/OhosPairing.cpp
+    ${IM_OHOS_DIR}/OhosPairingPki.cpp
+    ${IM_OHOS_DIR}/OhosPairingStore.cpp
     ${IM_OHOS_DIR}/OhosCoreDeviceTunnel.cpp
     ${IM_OHOS_DIR}/OhosHidMessage.cpp
+    ${IM_OHOS_DIR}/OhosIosAfc.cpp
 )
 
 # ---------------------------------------------------------------------------
@@ -105,6 +111,12 @@ target_include_directories(iPhoneMirrorCore
         # compat 必须排在最前：它用 include_next 的让路方式接住
         # <format> / <semaphore> / <libusb.h> / <openssl/evp.h>。
         ${IM_COMPAT_DIR}
+        # 真 OpenSSL 头（AFC 的 TLS 会话用）。★必须排在 compat 之后★：
+        # compat/openssl/evp.h 的 __has_include_next 会沿 -I 顺序继续找，
+        # 找到这里的真头就转发 —— 垫片自动失效，两边互不干扰。运行库
+        # （libssloh.so.3 / libcryptooh.so.3，来自本机 python hnp 环境）
+        # 在 entry/src/main/libs/arm64-v8a，随 HAP 分发。
+        ${IM_CPP_DIR}/third_party/openssl/include
         ${IM_CORE_DIR}/src
         ${IM_OHOS_DIR}
 )
@@ -161,8 +173,22 @@ target_link_libraries(im_core
     libnative_media_vdec.so      # OH_VideoDecoder（H.264/HEVC 解码）
     libohaudio.so                # OHAudio 播放
     libusb_ndk.z.so              # USB DDK（usb/usb_ddk_api.h）
+    libohcrypto.so              # CryptoArchitectureKit（RSA 密钥生成/签名，配对证书）
+    # OpenSSL 3（AFC 的 lockdown/AFC 两条 TLS 会话）。IMPORTED 指向 jniLibs
+    # 里的同名文件：链接时取符号，运行时加载器从应用 lib 目录按 DT_NEEDED
+    # （libssloh.so.3 → libcryptooh.so.3 → libc.so）解析，随 HAP 分发。
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/main/libs/arm64-v8a/libssloh.so.3
+    # 真 OpenSSL 头生效后（include_next 转发），compat 垫片的内置 SHA-256 退出，
+    # Logging.cpp 的 EVP_* 符号改由 libcryptooh 提供 —— 必须一起链接。
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/main/libs/arm64-v8a/libcryptooh.so.3
 )
 
-# 说明：OHOS 上应用访问 USB 走 USB DDK，需要 ohos.permission.ACCESS_DDK_USB
-# （见 entry/src/main/module.json5）；该权限与 macOS/USB 时代的 USB_MANAGER
-# 不是同一个，且设备按 VID 过滤后才出现在 OH_Usb_GetDevices 的结果里。
+# 说明：OHOS 上应用访问 USB 有两条通道。
+#   A. USB DDK（本目录的 OhosUsbDdk/OhosUsbTransport）：需要
+#      ohos.permission.ACCESS_DDK_USB 进签名 profile 的 allowed-acls，且设备按
+#      VID 过滤后才出现在 OH_Usb_GetDevices 的结果里（依赖驱动扩展 bind）。
+#   B. usbManager 备用通道（OhosUsbFdTransport/OhosUsbFdDevice + OhosUsbMux 的
+#      connect_fd）：ArkTS 侧 usbManager.requestRight 弹一次设备级授权窗
+#      （不查签名 ACL），getFileDescriptor 拿到标准 usbfs 节点的 fd，native
+#      直接在 fd 上做 bulk/控制传输。授权一次长期有效。
+# 两条通道的 usbmux/lockdownd 协议层完全共用（OhosUsbMux）。

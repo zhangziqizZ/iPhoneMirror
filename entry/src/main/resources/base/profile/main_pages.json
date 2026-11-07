@@ -7,6 +7,7 @@
     "pages/windows/CaptureRecoveryWindow",
     "pages/windows/ProtectedContentNoticeWindow",
     "pages/windows/UsbProjectionModeInfoWindow",
+    "pages/windows/FileManagerWindow",
     "pages/windows/AppPromptWindow",
     "pages/windows/AboutWindow",
     "pages/windows/UpdateWindow",
@@ -21,6 +22,10 @@
     "pages/windows/MediaOutputSettingsWindow",
     "pages/windows/ProjectionSettingsWindow",
     "pages/windows/ShortcutSettingsWindow",
-    "pages/windows/StandalonePreviewWindow"
+    "pages/windows/StandalonePreviewWindow",
+    "pages/windows/FirstRunSetupWindow",
+    "pages/windows/KeyboardMappingEditorWindow",
+    "pages/windows/KeyboardMappingWindow",
+    "pages/windows/WindowStyleSettingsWindow"
   ]
 }

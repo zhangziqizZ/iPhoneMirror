@@ -191,6 +191,34 @@ bool ContainsIdr(const std::vector<std::uint8_t> &bytes) {
 //     靠下面的"NAL 账本"看出来，不再闷在本地猜。
 std::vector<std::uint8_t> g_param_sps;   // 缓存的 SPS（不含起始码）
 std::vector<std::uint8_t> g_param_pps;   // 缓存的 PPS（不含起始码）
+// ★ 这两个 vector 是**跨线程**的：写侧是 g_video_thread（SweepPacketForNals，
+//   经 ProcessMirrorPacket），读侧是 raop 的收包线程（RaopVideoProcess 里
+//   判断是否已凑齐参数集）与 stop 路径。以前两边靠 g_video_queue_mutex"互斥"，
+//   但写侧根本不拿那把锁 ⇒ 假互斥，是真实的并发读写：size() 可能读到
+//   operator= 重分配过程中的中间态（长度已更新、data 还指向已释放的旧缓冲）。
+//
+//   g_param_mutex 必须是**最内层锁**：持它期间不得再取任何其它锁（只做拷贝与
+//   比较），否则会和"收包线程持 g_video_queue_mutex 再取本锁"构成 ABBA。
+std::mutex g_param_mutex;
+
+/** 锁内取一份参数集快照（读侧统一走这里，不要直接碰 g_param_*）。 */
+void SnapshotParams(std::vector<std::uint8_t> &sps, std::vector<std::uint8_t> &pps) {
+    std::lock_guard<std::mutex> lock(g_param_mutex);
+    sps = g_param_sps;
+    pps = g_param_pps;
+}
+
+/** 参数集是否已凑齐（SPS 与 PPS 都非空）。 */
+bool ParamsReady() {
+    std::lock_guard<std::mutex> lock(g_param_mutex);
+    return !g_param_sps.empty() && !g_param_pps.empty();
+}
+
+/** 只有 PPS、没有 SPS —— 配置包残缺的判据（见调用处的说明）。 */
+bool ParamsSpsMissingPpsPresent() {
+    std::lock_guard<std::mutex> lock(g_param_mutex);
+    return g_param_sps.empty() && !g_param_pps.empty();
+}
 
 // 参数集来源计数（判读：来自帧 = 配置包不可信但流本身是好的）
 std::atomic<uint64_t> g_param_from_config{0};
@@ -307,16 +335,24 @@ bool SweepPacketForNals(const std::vector<std::uint8_t> &bytes, bool from_config
                 break;
             case 7u:
                 saw_sps = true;
-                if (nal != g_param_sps) {
-                    g_param_sps = nal;
-                    changed = true;
+                // 写侧必须持 g_param_mutex：读侧（收包线程 / stop 路径）也在看
+                // 这两个 vector，且它们带堆缓冲，赋值不是原子的。
+                {
+                    std::lock_guard<std::mutex> lock(g_param_mutex);
+                    if (nal != g_param_sps) {
+                        g_param_sps = nal;
+                        changed = true;
+                    }
                 }
                 break;
             case 8u:
                 saw_pps = true;
-                if (nal != g_param_pps) {
-                    g_param_pps = nal;
-                    changed = true;
+                {
+                    std::lock_guard<std::mutex> lock(g_param_mutex);
+                    if (nal != g_param_pps) {
+                        g_param_pps = nal;
+                        changed = true;
+                    }
                 }
                 break;
             default:
@@ -351,6 +387,11 @@ bool SweepPacketForNals(const std::vector<std::uint8_t> &bytes, bool from_config
 
 // 把缓存里的 SPS/PPS 拼成 Annex-B 的 Codec Config（00 00 00 01 SPS 00 00 00 01 PPS）。
 std::vector<std::uint8_t> BuildParamSetBytes() {
+    // 先在锁内拷出快照再拼接：拼接本身（含 insert 扩容）不必持锁，
+    // 但**读** g_param_* 必须在锁内——否则拷到一半被重分配换掉缓冲。
+    std::vector<std::uint8_t> sps;
+    std::vector<std::uint8_t> pps;
+    SnapshotParams(sps, pps);
     std::vector<std::uint8_t> out;
     const auto append = [&out](const std::vector<std::uint8_t> &nal) {
         out.push_back(0x00);
@@ -360,8 +401,8 @@ std::vector<std::uint8_t> BuildParamSetBytes() {
         out.insert(out.end(), nal.begin(), nal.end());
     };
 
-    append(g_param_sps);
-    append(g_param_pps);
+    append(sps);
+    append(pps);
     return out;
 }
 
@@ -659,7 +700,7 @@ void ProcessMirrorPacket(const MirrorPacket &packet) {
     //    配置包来了就无条件放行数据帧 —— 配的是一份缺 SPS 的参数集时，整个会话
     //    都卡在"喂得进去、吐不出来"。现在以"手里是否有一份完整参数集"为准。
     if (param_changed || !g_video_configured) {
-        const bool params_ready = !g_param_sps.empty() && !g_param_pps.empty();
+        const bool params_ready = ParamsReady();
         if (params_ready) {
             if (!g_video_decoder) {
                 g_video_decoder = make_ohos_video_decoder(DecoderPreference::Auto);
@@ -679,7 +720,7 @@ void ProcessMirrorPacket(const MirrorPacket &packet) {
                 g_video_configured = false;
                 return;
             }
-        } else if (packet.is_config && g_param_sps.empty() && !g_param_pps.empty()) {
+        } else if (packet.is_config && ParamsSpsMissingPpsPresent()) {
             // ★ 只收到 PPS、没收到 SPS —— 这是**上游给我们的参数集本身就是残缺的**
             //   （raop_rtp_mirror.c 的配置包构造：lengthofSPS 解析成 0 时，产出的是
             //   `00 00 00 01 00 00 00 01 PPS…`，扫出来就只有 PPS 没有 SPS）。
@@ -888,7 +929,7 @@ void RaopVideoProcess(void * /*cls*/, h264_decode_struct *data,
             //   就只能让 codec 自己消化 P 帧。消化不出来 = 卡死。
             if (!g_demand_idr_after_reconfig.load(std::memory_order_relaxed)
                 && !g_video_wait_idr.load(std::memory_order_relaxed)
-                && g_param_sps.size() > 0 && g_param_pps.size() > 0
+                && ParamsReady()
                 && g_nal_idr.load(std::memory_order_relaxed) == 0
                 && g_video_frames.load(std::memory_order_relaxed) >= kNoIdrFrameThreshold) {
                 g_demand_idr_after_reconfig.store(true, std::memory_order_relaxed);
@@ -1064,9 +1105,13 @@ void ShutdownLocked() {
     g_video_configured = false;
     // 参数集缓存也是"上一会话的东西"：不清的话，下次连上来若先收到坏参数集，
     // 会拿上一台的 SPS/PPS 去解这一台的流（配得上就出野画面，配不上就全黑）。
-    // 这里已在 g_mutex 里、且解码线程已 join，动这些变量没有竞争。
-    g_param_sps.clear();
-    g_param_pps.clear();
+    // 解码线程已 join，但**收包线程未必**（它在 stop 期间仍可能读到这两个
+    // vector），所以清也要走 g_param_mutex，不能因为"解码线程停了"就裸写。
+    {
+        std::lock_guard<std::mutex> lock(g_param_mutex);
+        g_param_sps.clear();
+        g_param_pps.clear();
+    }
 
 
     // 音频流也要收掉：OHAudio 的音轨是系统资源，留着会在下次启动时占着端点。

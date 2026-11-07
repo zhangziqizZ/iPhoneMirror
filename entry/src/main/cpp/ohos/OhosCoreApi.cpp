@@ -42,6 +42,16 @@ std::mutex state_mutex;
 bool initialized{};
 std::mutex capture_mutex;
 std::condition_variable capture_frame_cv;
+/**
+ * 帧可用标志**单独一把锁**。
+ *
+ * ★ 为什么不能借用 capture_mutex：解码线程在输出回调里调 notify_frame_available()，
+ *   而 im_stop_capture() 的锁序是「持 capture_mutex → 析构会话 → 析构解码器 →
+ *   OH_VideoDecoder_Destroy（等在途回调返回）」。回调卡在 capture_mutex 上、
+ *   Destroy 等回调返回 ⇒ 教科书式 ABBA 死锁（点"停止投屏"时正好有一帧在跑就中）。
+ *   帧标志与"会话句柄"没有任何数据关系，本就该分开。
+ */
+std::mutex capture_frame_mutex;
 bool capture_frame_available{false};
 std::unique_ptr<iPhoneMirror::capture::CaptureSession> capture_session;
 std::wstring last_error;
@@ -420,7 +430,24 @@ std::int32_t IM_CALL im_stop_capture() {
         last_error.clear();
         return static_cast<std::int32_t>(iPhoneMirror::Result::Ok);
     }
-    capture_session->stop();
+    // ★ 必须接住异常：im_start_capture* 是有 try/catch 的，这里不对称的话，
+    //   stop()（含析构解码器/释放 USB 会话）抛出的异常会穿过 C ABI 边界
+    //   ⇒ std::terminate()，表现为"点停止就闪退"，且没有任何日志。
+    try {
+        capture_session->stop();
+    } catch (const std::exception& e) {
+        // 会话已经停不干净了，但句柄必须放掉：留着一个半死的会话会让下一次
+        // im_start_capture 直接返回 SessionAlreadyExists。
+        capture_session.reset();
+        last_error = L"停止采集失败：";
+        const std::string what = e.what();
+        last_error.append(what.begin(), what.end());
+        return static_cast<std::int32_t>(iPhoneMirror::Result::SessionTeardownFailed);
+    } catch (...) {
+        capture_session.reset();
+        last_error = L"停止采集失败：未知异常";
+        return static_cast<std::int32_t>(iPhoneMirror::Result::SessionTeardownFailed);
+    }
     capture_session.reset();
     last_error.clear();
     return static_cast<std::int32_t>(iPhoneMirror::Result::Ok);
@@ -767,14 +794,16 @@ std::shared_ptr<const media::DecodedFrame> latest_render_frame() {
 
 void notify_frame_available() {
     {
-        std::scoped_lock lock(capture_mutex);
+        // 见 capture_frame_mutex 的注释：这里**只能**用这把独立的锁，
+        // 拿 capture_mutex 会和 im_stop_capture 的"持锁析构解码器"互等。
+        std::scoped_lock lock(capture_frame_mutex);
         capture_frame_available = true;
     }
     capture_frame_cv.notify_one();
 }
 
 bool wait_frame_available(std::chrono::milliseconds timeout) {
-    std::unique_lock<std::mutex> lock(capture_mutex);
+    std::unique_lock<std::mutex> lock(capture_frame_mutex);
     capture_frame_cv.wait_for(lock, timeout, [] { return capture_frame_available; });
     if (capture_frame_available) {
         capture_frame_available = false;
@@ -847,7 +876,12 @@ std::int32_t IM_CALL im_send_touch(const iPhoneMirror::TouchPoint* points, std::
 
 std::int32_t IM_CALL im_send_keyboard(const std::uint8_t* usages, std::uint32_t count,
     std::int32_t release_all) {
-    if (usages == nullptr && release_all == 0) {
+    // ★ release_all 的语义是"松开所有键"，此时根本没有 usage 数组可传。但
+    //   判据不能写成 `usages == nullptr && release_all == 0`：那样
+    //   `nullptr + release_all != 0` 会被放行，而 count 仍可以是任意值，
+    //   一路传到 formatKeyboardBatch 的 `usages[i]` 就是空指针解引用。
+    //   正确的判据是"没给数组 ⇒ count 必须是 0"。
+    if (usages == nullptr && count != 0) {
         return fail(iPhoneMirror::Result::InvalidArgument, L"键盘参数无效");
     }
     if (count > iPhoneMirror::MaxKeyboardUsages) {

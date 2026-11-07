@@ -30,13 +30,23 @@
 #include "ohos/OhosPreviewRenderer.h"
 // 有线链路的诊断尾巴（C ABI 定义在 ohos/OhosUsbTransport.cpp）。
 #include "ohos/OhosUsbDiagnostics.h"
+#include "ohos/OhosPairing.h"
+#include "ohos/OhosPairingStatus.h"
+#include "ohos/OhosPairingStore.h"
+#include "ohos/OhosUsbFdDevice.h"
+// iOS AFC（文件浏览，lockdown TLS + com.apple.afc）。
+#include "ohos/OhosIosAfc.h"
 
 #include "napi/native_api.h"
 
+#include <atomic>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -195,6 +205,132 @@ napi_value JsUsbDiagnostics(napi_env env, napi_callback_info /*info*/) {
     napi_value out = nullptr;
     napi_create_string_utf8(env, text != nullptr ? text : "",
         NAPI_AUTO_LENGTH, &out);
+    return out;
+}
+
+// 配对（"信任此电脑"）的用户可见状态。
+//
+// 为什么单独一个出口而不是复用 usbDiagnostics：诊断尾巴是**给排障的人**看的
+// 原始事实，而且只在开发者模式下显示；而"请在 iPhone 上点「信任此电脑」"
+// 是**要用户动手**的指令，必须在普通界面就看得见 —— 弹窗弹出来的那一刻，
+// 界面上没有这句话，用户就不知道该不该继续等。
+//
+// 没有内容时返回空串，界面据此决定显不显示（不假成功）。
+napi_value JsPairingStatus(napi_env env, napi_callback_info /*info*/) {
+    const char* text = im_pairing_status();
+    napi_value out = nullptr;
+    napi_create_string_utf8(env, text != nullptr ? text : "",
+        NAPI_AUTO_LENGTH, &out);
+    return out;
+}
+
+// fd 通道的配对入口（usbManager 备用通道）。
+//
+// ArkTS 侧（UsbManagerHost.ets）拿到 getFileDescriptor 的 fd 后调这里；
+// native 在后台线程跑完整的 usbmux/lockdownd 配对（request_device_trust_fd），
+// UDID 由 connect_fd 的发现阶段读出（非系统应用拿不到 getDevices 的 serial）。
+//
+// 返回 true = 配对线程已接受（或在跑），false = fd 无效被拒。
+//
+// ★ 去重 ★：request_device_trust_fd 最多阻塞 60 秒且 pairing_status 是全局
+// 的 —— 心跳里重复触发会把“正在跑的配对”状态清掉、还会叠开线程抢同一个
+// fd 的端点。所以进程内同一时刻只允许一轮 fd 配对。
+napi_value JsPairViaUsbFd(napi_env env, napi_callback_info info) {
+    static std::atomic<bool> fd_pairing_in_flight{false};
+
+    size_t argc = 1;
+    napi_value argv[1] = {nullptr};
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+
+    int fd = -1;
+    if (argc >= 1) {
+        int32_t value = -1;
+        if (napi_get_value_int32(env, argv[0], &value) == napi_ok) {
+            fd = value;
+        }
+    }
+
+    napi_value out = nullptr;
+    if (fd < 0) {
+        iPhoneMirror::ohos_usb_diag::note("fd 配对入口收到无效的 fd，拒绝");
+        napi_get_boolean(env, false, &out);
+        return out;
+    }
+
+    bool expected = false;
+    if (!fd_pairing_in_flight.compare_exchange_strong(expected, true)) {
+        // 已有配对在跑：如实告诉 ArkTS（不算失败，不需要再发起）。
+        iPhoneMirror::ohos_usb_diag::note("fd 配对已在进行中，本次调用被忽略");
+        napi_get_boolean(env, true, &out);
+        return out;
+    }
+
+    // ★ 探活 ★：fd 是 ArkTS 缓存复用的；iPhone 重枚举（拔插/信任切换）后旧
+    // usbfs 节点被内核销毁，ioctl 全部 ENODEV —— 而缓存的键是 bus-devAddr，
+    // 重插后地址相同就判不出。这里同步发一次免认领的 GET_DESCRIPTOR（毫秒级）
+    // 验死活：死 fd 返回 false，让 ArkTS 重置缓存、下轮心跳重开新通道。
+    {
+        iPhoneMirror::ohos::OhosUsbFdTransport transport(fd);
+        if (!iPhoneMirror::ohos::probe_usb_fd_alive(transport)) {
+            iPhoneMirror::ohos_usb_diag::note(
+                "fd 探活失败：设备已重枚举，缓存 fd 已失效，要求重开通道");
+            fd_pairing_in_flight.store(false);
+            napi_get_boolean(env, false, &out);
+            return out;
+        }
+    }
+
+    iPhoneMirror::ohos_usb_diag::note("fd 配对入口：已接受，后台发起配对");
+    // 轮次标记：诊断窗口是滚动覆盖的，每轮开头插一条带编号的标记，
+    // 读窗口的人才能分清"哪几行属于哪一轮"。
+    static std::atomic<int> fd_pairing_round{0};
+    const int round = fd_pairing_round.fetch_add(1) + 1;
+    std::thread([fd, round]() {
+        iPhoneMirror::ohos_usb_diag::note(
+            "── fd 配对第 " + std::to_string(round) + " 轮 ──");
+        try {
+            const iPhoneMirror::ohos::PairingOutcome outcome =
+                iPhoneMirror::ohos::request_device_trust_fd(fd, 60);
+            // 注意：本文件（im_core 目标）没有强制预包含 compat 头，
+            // std::format 不可用 —— 拼接而不是 format。
+            iPhoneMirror::ohos_usb_diag::note(
+                "fd 通道配对结果：" +
+                iPhoneMirror::ohos::describe_pairing_outcome(outcome));
+        } catch (...) {
+            iPhoneMirror::ohos_usb_diag::note(
+                "fd 通道配对过程抛出异常，已忽略");
+        }
+        // 无论成败都放行下一轮（弹窗超时后用户重新插拔时能再试）。
+        fd_pairing_in_flight.store(false);
+    }).detach();
+
+    napi_get_boolean(env, true, &out);
+    return out;
+}
+
+// 设置配对记录的存放目录（应用沙箱路径）。
+//
+// 为什么原生侧要 ArkTS 传路径：原生拿不到 context.filesDir。日志路径也是
+// 这么解决的（im_set_log_file）。
+napi_value JsSetPairingStoreDirectory(napi_env env,
+    napi_callback_info info) {
+    size_t argc = 1;
+    napi_value argv[1] = {nullptr};
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    if (argc < 1) {
+        napi_value out = nullptr;
+        napi_get_boolean(env, false, &out);
+        return out;
+    }
+    size_t length = 0;
+    napi_get_value_string_utf8(env, argv[0], nullptr, 0, &length);
+    std::string directory(length, '\0');
+    napi_get_value_string_utf8(env, argv[0], directory.data(), length + 1,
+        &length);
+    directory.resize(length);
+    im_set_pairing_store_directory(directory.c_str());
+    napi_value out = nullptr;
+    napi_get_boolean(env, true, &out);
     return out;
 }
 
@@ -1093,6 +1229,390 @@ napi_value JsSendButton(napi_env env, napi_callback_info info) {
         stateStr.c_str()));
 }
 
+// ── iOS AFC（文件浏览）：Promise 异步桥 ───────────────────────────────
+//
+// 全程至少 1~2 秒的协议序列（mux 连接 ×2 + lockdown 会话 + 两次 TLS 握手 +
+// StartService），绝不能在 JS 线程同步跑 —— napi_create_async_work 把每个
+// 操作放到 UV 线程池，完成后回 JS 线程 resolve。
+//
+// 会话管理：进程内单会话（mutex 串行化）。connect 记住 fd；后续操作若
+// 会话已开则直接复用（一次握手，反复读写），断开/换设备自动重连。
+
+// 文件读取的单次上限（防呆：iOS 侧大视频动辄数 GB，UI 层传 maxBytes 控制）。
+constexpr std::int64_t AfcMaxReadBytes = 512LL * 1024LL * 1024LL;
+
+struct AfcManager {
+    std::mutex mutex;
+    int fd{-1};
+    std::unique_ptr<iPhoneMirror::ohos::OhosIosAfc> session;
+
+    // 确保会话对 fd 可用；force_new 为 true 时强制重建（上一次操作的
+    // 失败可能已经把 TLS 流搞脏，复用只会连环失败）。
+    iPhoneMirror::ohos::OhosIosAfc* acquire(int new_fd, bool force_new,
+        std::string& error) {
+        if (force_new || session == nullptr || !session->opened() ||
+            fd != new_fd) {
+            session.reset();
+            fd = new_fd;
+            session = std::make_unique<iPhoneMirror::ohos::OhosIosAfc>();
+            if (!session->open_fd(new_fd)) {
+                error = session->diagnostic();
+                return nullptr;
+            }
+        }
+        return session.get();
+    }
+
+    void reset() {
+        session.reset();
+        fd = -1;
+    }
+};
+
+AfcManager& afc_manager() {
+    static AfcManager manager;
+    return manager;
+}
+
+// 异步任务的通用载荷。op 决定 Execute 走哪条路、Complete 装哪种结果。
+constexpr int AfcOpConnect = 0;
+constexpr int AfcOpList = 1;
+constexpr int AfcOpRead = 2;
+constexpr int AfcOpWrite = 3;
+constexpr int AfcOpMkdir = 4;
+constexpr int AfcOpRemove = 5;
+constexpr int AfcOpRename = 6;
+
+struct AfcTask {
+    napi_async_work work{nullptr};
+    napi_deferred deferred{nullptr};
+    int op{0};
+    int fd{-1};
+    std::string path;
+    std::string path2;
+    std::vector<std::uint8_t> payload;
+    // 结果。
+    bool ok{false};
+    std::string error;
+    std::string udid;
+    std::string device_name;
+    std::vector<iPhoneMirror::ohos::AfcEntry> entries;
+    std::vector<std::uint8_t> bytes;
+};
+
+void AfcExecute(napi_env /*env*/, void* data) {
+    auto* task = static_cast<AfcTask*>(data);
+    // 同一时刻只允许一个 AFC 操作（协议栈不是线程安全的；文件操作本身
+    // 也是串行语义）。
+    std::lock_guard<std::mutex> lock(afc_manager().mutex);
+    auto& manager = afc_manager();
+    try {
+        switch (task->op) {
+        case AfcOpConnect: {
+            // connect 语义 = 强制（重新）打开，并带回设备身份。
+            manager.reset();
+            auto* session = manager.acquire(task->fd, true, task->error);
+            if (session != nullptr) {
+                task->ok = true;
+                task->udid = session->udid();
+                task->device_name = session->device_name();
+            }
+            break;
+        }
+        case AfcOpList: {
+            auto* session = manager.acquire(task->fd, false, task->error);
+            if (session == nullptr) break;
+            task->ok = session->list_dir(task->path, task->entries);
+            if (!task->ok) task->error = session->diagnostic();
+            break;
+        }
+        case AfcOpRead: {
+            auto* session = manager.acquire(task->fd, false, task->error);
+            if (session == nullptr) break;
+            task->ok = session->read_file(task->path, AfcMaxReadBytes,
+                task->bytes);
+            if (!task->ok) task->error = session->diagnostic();
+            break;
+        }
+        case AfcOpWrite: {
+            auto* session = manager.acquire(task->fd, false, task->error);
+            if (session == nullptr) break;
+            task->ok = session->write_file(task->path, task->payload);
+            if (!task->ok) task->error = session->diagnostic();
+            break;
+        }
+        case AfcOpMkdir:
+        case AfcOpRemove:
+        case AfcOpRename: {
+            auto* session = manager.acquire(task->fd, false, task->error);
+            if (session == nullptr) break;
+            if (task->op == AfcOpMkdir) {
+                task->ok = session->make_dir(task->path);
+            } else if (task->op == AfcOpRemove) {
+                task->ok = session->remove_path(task->path);
+            } else {
+                task->ok = session->rename_path(task->path, task->path2);
+            }
+            if (!task->ok) task->error = session->diagnostic();
+            // 删除/改名失败后流状态未知，下一操作强制重连，避免连环错。
+            if (!task->ok) manager.reset();
+            break;
+        }
+        default:
+            task->error = "未知操作";
+            break;
+        }
+        // 读/列表失败同样不再信任这条 TLS 流。
+        if (!task->ok && task->op != AfcOpConnect) {
+            // 连接类失败已经 reset 过；这里对操作失败兜底。
+            if (task->op != AfcOpConnect) manager.reset();
+        }
+    } catch (const std::exception& e) {
+        task->error = std::string("AFC 内部错误：") + e.what();
+        manager.reset();
+    }
+}
+
+// Complete 里装 JS 值的公共小件。
+napi_value AfcMakeError(napi_env env, const std::string& text) {
+    napi_value message = nullptr;
+    napi_create_string_utf8(env, text.c_str(), text.size(), &message);
+    napi_value error = nullptr;
+    napi_get_undefined(env, &error);
+    napi_create_error(env, nullptr, message, &error);
+    return error;
+}
+
+void AfcComplete(napi_env env, napi_status status, void* data) {
+    auto* task = static_cast<AfcTask*>(data);
+    napi_value result = nullptr;
+    if (status != napi_ok || !task->ok) {
+        const std::string& message = task->error.empty()
+            ? std::string("AFC 操作失败") : task->error;
+        result = AfcMakeError(env, message);
+        napi_reject_deferred(env, task->deferred, result);
+    } else {
+        switch (task->op) {
+        case AfcOpConnect: {
+            napi_value object = nullptr;
+            napi_create_object(env, &object);
+            napi_value udid = nullptr;
+            napi_create_string_utf8(env, task->udid.c_str(),
+                task->udid.size(), &udid);
+            napi_set_named_property(env, object, "udid", udid);
+            napi_value name = nullptr;
+            napi_create_string_utf8(env, task->device_name.c_str(),
+                task->device_name.size(), &name);
+            napi_set_named_property(env, object, "deviceName", name);
+            result = object;
+            break;
+        }
+        case AfcOpList: {
+            napi_value array = nullptr;
+            napi_create_array_with_length(env, task->entries.size(), &array);
+            for (std::size_t index = 0; index < task->entries.size(); ++index) {
+                const auto& entry = task->entries[index];
+                napi_value item = nullptr;
+                napi_create_object(env, &item);
+                napi_value name = nullptr;
+                napi_create_string_utf8(env, entry.name.c_str(),
+                    entry.name.size(), &name);
+                napi_set_named_property(env, item, "name", name);
+                napi_value is_dir = nullptr;
+                napi_get_boolean(env, entry.is_dir, &is_dir);
+                napi_set_named_property(env, item, "isDir", is_dir);
+                napi_value size = nullptr;
+                napi_create_int64(env, entry.size, &size);
+                napi_set_named_property(env, item, "size", size);
+                napi_value mtime = nullptr;
+                napi_create_int64(env, entry.mtime, &mtime);
+                napi_set_named_property(env, item, "mtime", mtime);
+                napi_set_element(env, array, static_cast<std::uint32_t>(index),
+                    item);
+            }
+            result = array;
+            break;
+        }
+        case AfcOpRead: {
+            void* buffer_data = nullptr;
+            napi_value buffer = nullptr;
+            if (task->bytes.empty()) {
+                napi_create_arraybuffer(env, 1, &buffer_data, &buffer);
+                static_cast<std::uint8_t*>(buffer_data)[0] = 0;
+                result = buffer;
+                break;
+            }
+            if (napi_create_arraybuffer(env, task->bytes.size(),
+                    &buffer_data, &buffer) == napi_ok) {
+                std::memcpy(buffer_data, task->bytes.data(), task->bytes.size());
+                result = buffer;
+            }
+            break;
+        }
+        default: {
+            napi_get_boolean(env, task->ok, &result);
+            break;
+        }
+        }
+        napi_resolve_deferred(env, task->deferred, result);
+    }
+    napi_delete_async_work(env, task->work);
+    delete task;
+}
+
+// 各入口共用的骨架：建 Promise → 装任务 → 入队。
+napi_value AfcStart(napi_env env, AfcTask* task, const char* name) {
+    napi_value promise = nullptr;
+    napi_create_promise(env, &task->deferred, &promise);
+    napi_value resource = nullptr;
+    napi_create_string_utf8(env, name, NAPI_AUTO_LENGTH, &resource);
+    if (napi_create_async_work(env, nullptr, resource, AfcExecute,
+            AfcComplete, task, &task->work) != napi_ok) {
+        delete task;
+        napi_reject_deferred(env, task->deferred,
+            AfcMakeError(env, "无法创建 AFC 异步任务"));
+        return promise;
+    }
+    napi_queue_async_work(env, task->work);
+    return promise;
+}
+
+napi_value JsAfcConnect(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value argv[1] = {nullptr};
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    auto* task = new AfcTask();
+    task->op = AfcOpConnect;
+    if (argc >= 1) {
+        int32_t fd = -1;
+        napi_get_value_int32(env, argv[0], &fd);
+        task->fd = fd;
+    }
+    if (task->fd < 0) {
+        napi_deferred deferred = nullptr;
+        napi_value promise = nullptr;
+        napi_create_promise(env, &deferred, &promise);
+        napi_reject_deferred(env, deferred,
+            AfcMakeError(env, "AFC 连接需要有效的 usb 设备 fd"));
+        delete task;
+        return promise;
+    }
+    return AfcStart(env, task, "afcConnect");
+}
+
+napi_value JsAfcListDir(napi_env env, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value argv[2] = {nullptr, nullptr};
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    auto* task = new AfcTask();
+    task->op = AfcOpList;
+    if (argc >= 1) {
+        int32_t fd = -1;
+        napi_get_value_int32(env, argv[0], &fd);
+        task->fd = fd;
+    }
+    if (argc >= 2) {
+        size_t length = 0;
+        napi_get_value_string_utf8(env, argv[1], nullptr, 0, &length);
+        task->path.resize(length, '\0');
+        napi_get_value_string_utf8(env, argv[1], task->path.data(),
+            length + 1, &length);
+        task->path.resize(length);
+    }
+    return AfcStart(env, task, "afcListDir");
+}
+
+napi_value JsAfcReadFile(napi_env env, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value argv[2] = {nullptr, nullptr};
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    auto* task = new AfcTask();
+    task->op = AfcOpRead;
+    if (argc >= 1) {
+        int32_t fd = -1;
+        napi_get_value_int32(env, argv[0], &fd);
+        task->fd = fd;
+    }
+    if (argc >= 2) {
+        size_t length = 0;
+        napi_get_value_string_utf8(env, argv[1], nullptr, 0, &length);
+        task->path.resize(length, '\0');
+        napi_get_value_string_utf8(env, argv[1], task->path.data(),
+            length + 1, &length);
+        task->path.resize(length);
+    }
+    return AfcStart(env, task, "afcReadFile");
+}
+
+napi_value JsAfcWriteFile(napi_env env, napi_callback_info info) {
+    size_t argc = 3;
+    napi_value argv[3] = {nullptr, nullptr, nullptr};
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    auto* task = new AfcTask();
+    task->op = AfcOpWrite;
+    if (argc >= 1) {
+        int32_t fd = -1;
+        napi_get_value_int32(env, argv[0], &fd);
+        task->fd = fd;
+    }
+    if (argc >= 2) {
+        size_t length = 0;
+        napi_get_value_string_utf8(env, argv[1], nullptr, 0, &length);
+        task->path.resize(length, '\0');
+        napi_get_value_string_utf8(env, argv[1], task->path.data(),
+            length + 1, &length);
+        task->path.resize(length);
+    }
+    if (argc >= 3) {
+        bool is_array_buffer = false;
+        napi_is_arraybuffer(env, argv[2], &is_array_buffer);
+        if (is_array_buffer) {
+            void* data = nullptr;
+            size_t length = 0;
+            napi_get_arraybuffer_info(env, argv[2], &data, &length);
+            const auto* bytes = static_cast<const std::uint8_t*>(data);
+            task->payload.assign(bytes, bytes + length);
+        }
+    }
+    return AfcStart(env, task, "afcWriteFile");
+}
+
+napi_value JsAfcSimple(napi_env env, napi_callback_info info, int op) {
+    size_t argc = 3;
+    napi_value argv[3] = {nullptr, nullptr, nullptr};
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    auto* task = new AfcTask();
+    task->op = op;
+    if (argc >= 1) {
+        int32_t fd = -1;
+        napi_get_value_int32(env, argv[0], &fd);
+        task->fd = fd;
+    }
+    auto read_string = [&](napi_value value, std::string& out) {
+        size_t length = 0;
+        napi_get_value_string_utf8(env, value, nullptr, 0, &length);
+        out.resize(length, '\0');
+        napi_get_value_string_utf8(env, value, out.data(), length + 1,
+            &length);
+        out.resize(length);
+    };
+    if (argc >= 2) read_string(argv[1], task->path);
+    if (argc >= 3) read_string(argv[2], task->path2);
+    return AfcStart(env, task, "afcSimple");
+}
+
+napi_value JsAfcMakeDir(napi_env env, napi_callback_info info) {
+    return JsAfcSimple(env, info, AfcOpMkdir);
+}
+
+napi_value JsAfcRemove(napi_env env, napi_callback_info info) {
+    return JsAfcSimple(env, info, AfcOpRemove);
+}
+
+napi_value JsAfcRename(napi_env env, napi_callback_info info) {
+    return JsAfcSimple(env, info, AfcOpRename);
+}
+
 } // namespace
 
 EXTERN_C_START
@@ -1123,6 +1643,9 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"airplayReportService", nullptr, JsAirPlayReportService, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"lastError",        nullptr, JsLastError,        nullptr, nullptr, nullptr, napi_default, nullptr},
         {"usbDiagnostics",   nullptr, JsUsbDiagnostics,   nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"pairingStatus",    nullptr, JsPairingStatus,    nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"pairViaUsbFd",     nullptr, JsPairViaUsbFd,     nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"setPairingStoreDirectory", nullptr, JsSetPairingStoreDirectory, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"getEnvironment",   nullptr, JsGetEnvironment,   nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setLogFile",       nullptr, JsSetLogFile,       nullptr, nullptr, nullptr, napi_default, nullptr},
         {"startReverseControl", nullptr, JsStartReverseControl, nullptr, nullptr, nullptr, napi_default, nullptr},
@@ -1131,6 +1654,13 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"sendTouch", nullptr, JsSendTouch, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"sendKeyboard", nullptr, JsSendKeyboard, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"sendButton", nullptr, JsSendButton, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"afcConnect",       nullptr, JsAfcConnect,       nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"afcListDir",       nullptr, JsAfcListDir,       nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"afcReadFile",      nullptr, JsAfcReadFile,      nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"afcWriteFile",     nullptr, JsAfcWriteFile,      nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"afcMakeDir",       nullptr, JsAfcMakeDir,        nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"afcRemove",        nullptr, JsAfcRemove,         nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"afcRename",        nullptr, JsAfcRename,         nullptr, nullptr, nullptr, napi_default, nullptr},
     };
     napi_define_properties(env, exports, sizeof(desc) / sizeof(desc[0]), desc);
     return exports;

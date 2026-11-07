@@ -620,13 +620,13 @@ struct ProjectionSettingsWindow {
   /** 表头「开始投屏」—— StartCommand。 */
   private on_start(): void {
     AppStorage.setOrCreate<boolean>(OUT_KEY_START_REQUESTED, true);
-    this.settingsStatus = `开始投屏：${REASON_COMMAND_BUS}`;
+    this.settingsStatus = '开始投屏：已向主窗口发出请求（主窗口下个轮询周期执行）。';
   }
 
   /** 表头「停止投屏」—— StopCommand。 */
   private on_stop(): void {
     AppStorage.setOrCreate<boolean>(OUT_KEY_STOP_REQUESTED, true);
-    this.settingsStatus = `停止投屏：${REASON_COMMAND_BUS}`;
+    this.settingsStatus = '停止投屏：已向主窗口发出请求（主窗口下个轮询周期执行）。';
   }
 
   /** cs ApplyVideoSettingsCommand。 */
@@ -699,11 +699,11 @@ struct ProjectionSettingsWindow {
     .margin({ top: 10 });
   }
 
-  /** ② 无线 AirPlay（Visibility=WirelessTopSettingsVisibility）。 */
+  /** ② 无线接收（AirPlay 实收。Visibility=WirelessTopSettingsVisibility）。 */
   @Builder
   wireless_card() {
     if (this.wirelessTopVisible) {
-      ControlSectionCard({ titleText: '无线 AirPlay', content: (): void => { this.wireless_body(); } });
+      ControlSectionCard({ titleText: '无线接收', content: (): void => { this.wireless_body(); } });
     }
   }
 

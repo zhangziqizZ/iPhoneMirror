@@ -3,6 +3,7 @@
 // 鸿蒙 USB DDK 封装与环境探测实现。
 
 #include "OhosEnvironmentProbe.h"
+#include "OhosAppleProductId.h"
 #include "OhosUsbDdk.h"
 
 #include "Device/AppleUsbDiscovery.h"
@@ -137,7 +138,12 @@ Enumeration enumerate_devices() noexcept {
             continue;
         }
         if (descriptor.idVendor != 0x05AC) continue;
-        if (!is_apple_mobile_capture_product_id(descriptor.idProduct) &&
+        // ★ 用上游 usbmuxd 的区间口径（0x1290..0x12AF），与 OhosUsbTransport.cpp
+        //   的枚举过滤保持一致 —— 否则这里报出来的「Apple 台数」会比实际
+        //   能进设备列表的数量少，「插线没反应」的排查会被引到错误的方向。
+        //   依据：usbmuxd src/usb.h 的 PID_RANGE_LOW / PID_RANGE_MAX。
+        //   详见 OhosAppleProductId.h。
+        if (!ohos::is_apple_pairable_product_id(descriptor.idProduct) &&
             !is_apple_audio_adapter_product_id(descriptor.idProduct)) {
             continue;
         }
@@ -165,7 +171,10 @@ Report probe() noexcept {
     probe_usbmuxd(report);
 
 #if IM_OHOS_USB_DDK_AVAILABLE
-    if (!ohos_usb::acquire()) {
+    // ★ 用 RAII 会话而不是裸 acquire()/release()：下面有两条早退分支，
+    //   以前那两条都漏了 release()，引用计数只增不减。
+    const ohos_usb::DdkSession session;
+    if (!session.ok()) {
         // 用**真实**返回码，不要写死 -1。这个数字是整条链路上信息量最大的一个：
         //   201      USB_DDK_NO_PERM          → 权限没下来，去补 allowed-acls
         //   27400002 USB_DDK_INVALID_OPERATION → 连不上 DDK 服务，多半是调用方不在
@@ -197,7 +206,6 @@ Report probe() noexcept {
     report.apple_config_readable = found.config_readable;
     report.apple_config_result = found.config_result;
     report.apple_config_index = found.config_index;
-    ohos_usb::release();
     if (found.apple > 0) {
         report.usb_ddk = UsbDdkAccess::Ready;
         report.ddk_diagnostic = "USB DDK 可用，且枚举到 Apple 设备";

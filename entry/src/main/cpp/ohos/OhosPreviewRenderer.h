@@ -81,7 +81,9 @@ public:
     [[nodiscard]] float curve_exponent() const;
     [[nodiscard]] std::int32_t quarter_turns() const;
 
-    [[nodiscard]] const std::string& last_error() const noexcept { return last_error_; }
+    // ★ 按值返回：last_error_ 是 std::string，写点在渲染线程（持 Impl::mutex），
+    //   返回引用会让 JS 线程与渲染线程并发读写同一个 string（撕裂/崩溃）。
+    [[nodiscard]] std::string last_error() const;
 
     // 填充渲染链诊断快照（供下面的 im_preview_renderer_diag 使用）。
     void fill_diag(PreviewRendererDiag *out) const;

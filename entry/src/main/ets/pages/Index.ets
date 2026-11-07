@@ -93,6 +93,8 @@ import {
   setPreviewCornerProfile,
   lastError,
   usbDiagnostics,
+  pairingStatus,
+  pairViaUsbFd,
   getEnvironment,
   airplayStart,
   airplayStop,
@@ -101,9 +103,12 @@ import {
   DeviceInfo,
   CaptureStatus,
   AirPlayStatus,
+  DecoderDiag,
+  PreviewRendererDiag,
   StartCaptureOptions,
   EnvironmentDiagnostics,
 } from 'libim_core.so';
+import { open_file_manager } from './windows/FileManagerWindow';
 import airPlayMdns from '../common/AirPlayMdns';
 import { BackgroundKeepAlive } from '../common/BackgroundKeepAlive';
 import { BluetoothHidPeripheral, HID_LAYOUT_MULTI, HID_LAYOUT_SINGLE } from '../common/BluetoothHidPeripheral';
@@ -118,6 +123,9 @@ import {
   UsbDriverState,
 } from '../common/UsbDriverState';
 import { scan_usb_host, UsbHostScan } from '../common/UsbHostProbe';
+import {
+  open_usb_fd_channel, reset_usb_fd_channel, UsbFdChannel,
+} from '../common/UsbManagerHost';
 import { check_ddk_usb_permission, DdkPermissionGrant } from '../common/UsbPermission';
 import {
   DriverBindState, ensure_usb_driver_bound, reset_usb_driver_bind_retry, usb_driver_bind_state,
@@ -167,18 +175,13 @@ import {
   REVERSE_CONTROL_DISABLED_KEY,
   HIDE_POINTER_ON_TAKEOVER_KEY,
   DEVELOPER_MODE_KEY,
-  ACRYLIC_WINDOW_KEY,
-  ACRYLIC_ALPHA_KEY,
-  ACRYLIC_ALPHA_DEFAULT,
   APP_WINDOW_VISIBLE_KEY,
-  WINDOW_ACRYLIC_RESULT_KEY,
   WINDOW_SHADOW_RESULT_KEY,
   PERSIST_READ_RESULT_KEY,
   PERSIST_WRITE_RESULT_KEY,
 } from '../common/WindowServices';
 import { SecondaryButton, SUBWINDOW_ERROR_KEY, SubWindowHost } from '../common/SubWindow';
 import {
-  save_acrylic_preferences,
   save_hide_pointer_preference,
   save_tray_preferences,
 } from '../common/AppPreferences';
@@ -190,7 +193,8 @@ import { open_advanced_settings, AdvancedSettingsArgs } from './windows/Advanced
 import { open_about } from './windows/AboutWindow';
 import { open_developer_tools } from './windows/DeveloperToolsWindow';
 import { open_media_output_settings } from './windows/MediaOutputSettingsWindow';
-import { open_projection_settings, OUT_KEY_SEPARATE_WINDOW_REQUESTED } from './windows/ProjectionSettingsWindow';
+import { open_projection_settings, OUT_KEY_SEPARATE_WINDOW_REQUESTED,
+  OUT_KEY_START_REQUESTED, OUT_KEY_STOP_REQUESTED } from './windows/ProjectionSettingsWindow';
 import { open_standalone_preview } from './windows/StandalonePreviewWindow';
 import { open_shortcut_settings } from './windows/ShortcutSettingsWindow';
 import { open_window_style } from './windows/WindowStyleSettingsWindow';
@@ -215,7 +219,7 @@ import {
   UsbProjectionModeOption,
   USB_PROJECTION_MODES,
 } from '../common/UsbProjectionMode';
-import { save_language_preference } from '../common/AppPreferences';
+import { save_language_preference, save_theme_preference } from '../common/AppPreferences';
 import { t, set_language, active_lang, LANGUAGE_LABELS, LANG_INDEX_KEY } from '../common/i18n';
 import { GlowLayer } from '../common/GlowLayer';
 import { status_glow_color, status_glow_animation } from '../common/GlowConfig';
@@ -273,27 +277,6 @@ const USB_MODE_INFO_BUTTON_RADIUS: number = 9;
 const USB_MODE_LABEL_RIGHT_MARGIN: number = 20;
 /** 原版 UsbModeTabItem 样式：Margin 2 / Padding 7,6 / MinHeight 38 / 圆角 10。 */
 const USB_MODE_ITEM_MARGIN: number = 2;
-/**
- * 半透明窗口的**浓度**：根容器那一层底色的 alpha（00=全透、FF=完全实色）。
- * 容器色与内容区背景现在都已全透，所以**只有这一个数**决定观感浓淡。
- * 默认 '99'≈60%；界面上的档位按钮可现场改（见 ACRYLIC_ALPHA_OPTIONS）。
- */
-const ROOT_ACRYLIC_ALPHA_HEX: string = ACRYLIC_ALPHA_DEFAULT;
-
-/** 浓度档位（设置面板现场切换，避免为调浓淡改代码重建）。 */
-interface AcrylicAlphaOption {
-  hex: string;
-  label: string;
-}
-
-/** 由实到透排列；hex 是根容器底色的 alpha（00=全透、FF=实色）。 */
-const ACRYLIC_ALPHA_OPTIONS: AcrylicAlphaOption[] = [
-  { hex: 'C8', label: '78%' },
-  { hex: '99', label: '60%' },
-  { hex: '80', label: '50%' },
-  { hex: '66', label: '40%' },
-];
-
 const USB_MODE_ITEM_CORNER: number = 12;
 
 // Strings: ApplicationModeLightweight / ApplicationModeComplete
@@ -379,6 +362,9 @@ function nav_main(): NavEntry[] {
     new NavEntry('binding', t('设备绑定器'), 'UsbPlug24', 20, t('管理真实设备的 USB、AirPlay 和 Bluetooth 身份绑定')),
     new NavEntry('output', t('输出'), 'VideoRecording20', 20, t('输出设置')),                  // Strings: NavOutput(NavOutputDescription)
     new NavEntry('driver', t('驱动'), 'DeveloperBoard20', 20, t('驱动管理')),                  // Strings: NavDriver(NavDriverDescription)
+    // iPhoneMirror 新增（2026-11-01）：设备工具 —— 文件（iOS AFC）。
+    // 是子窗口动作（同「设备绑定器 / 输出」），不切主区面板。
+    new NavEntry('files', t('文件'), 'Folder20', 20, t('浏览 iPhone 文件（AFC）')),
   ];
 }
 // 原版在 DeviceBindingNavButton 之后放 <ui:NavigationViewItemSeparator/>，
@@ -523,10 +509,6 @@ const HEADER_HEIGHT: number = 56;
 //   三键区的纵向让位由 setWindowDecorHeight 负责，横向让位由 header 右侧的
 //   TITLE_BUTTON_RESERVED_WIDTH 负责 ⇒ 这里改回 0，标题回到窗口最顶端。
 const TITLE_BAR_TOP_PADDING_VP: number = 0;
-// 窗口恢复动画窗口期（ms）：从"不可见变为可见"起的这段时间内，临时关掉全窗磨砂
-// （backgroundEffect radius 32）。磨砂在窗口缩放动画里每帧都要重算，是"打开最小化
-// 的 App 时动画掉帧"的最大单一来源；动画跑完再恢复，稳态观感不变。
-const WINDOW_RESTORE_GRACE_MS: number = 600;
 
 /**
  * 设备枚举周期。原版是 MainWindow 里 2 秒一次的 DispatcherTimer → RefreshAsync
@@ -1094,38 +1076,17 @@ struct Index {
   /**
    * 开发者模式（调试入口）：在「关于」子窗口里连点版本号 7 次开启，再点一次关闭。
    * 开启后主界面空状态会显示有线链路的原生/系统/权限/环境/驱动/窗口诊断，
-   * 方便排查"识别不到 Apple 设备"的问题。非持久化（仅内存），重启即失效。
-   * 由 AppStorage 经 @StorageLink 跨窗口（关于子窗 ↔ 主窗）联动。
+   * 方便排查"识别不到 Apple 设备"的问题。2026-10-31 起持久化（用户原话：
+   * "开启后就保持开启，重开应用需要再开一遍，太麻烦了"），由 AppPreferences
+   * 在启动期读回。由 AppStorage 经 @StorageLink 跨窗口（关于子窗 ↔ 主窗）联动。
    */
-  @Watch('on_dev_mode_changed')
   @StorageLink(DEVELOPER_MODE_KEY) devMode: boolean = false;
-  /**
-   * 半透明窗口：开 = 根容器改用带 alpha 的 Fluent 底色并挂 backgroundEffect 磨砂，
-   * 关 = 回到原来的实色 BACKGROUND。本工程的色板本来就是 Fluent 半透明 token
-   * （SIDEBAR='#C41F1F1F' 即 76% alpha），在 WPF 的不透明窗口上被混成了实色；
-   * 主窗背景一旦真透明，这些 alpha 色会直接混到桌面 —— 正是 Win11 原生观感的来路。
-   * ★ 已实机确认生效（读数：窗口透明=是、容器配色探测成功）⇒ 属正式特性，不再标实验；
-   *   磨砂能否模糊到桌面取决于系统合成器，但即使不模糊也只是"半透明无磨砂"，不影响功能。
-   */
   /**
    * 主窗口当前是否可见（EntryAbility 订阅 windowStageEvent 写入）。
    * ★ 不可见时**彻底停掉** 500ms 心跳 —— 见 APP_WINDOW_VISIBLE_KEY 的注释。
    */
   @Watch('on_window_visible_changed')
   @StorageLink(APP_WINDOW_VISIBLE_KEY) windowVisible: boolean = true;
-  /**
-   * 恢复动画窗口期（重新可见后的 WINDOW_RESTORE_GRACE_MS 毫秒）。
-   * 这段时间把全窗磨砂临时关掉，让系统恢复动画跑满帧。
-   */
-  @State windowRestoring: boolean = false;
-  private restoreTimer: number = -1;
-
-  @StorageLink(ACRYLIC_WINDOW_KEY) acrylicOn: boolean = true;
-  /**
-   * 半透明浓度档位（alpha 十六进制串）。默认取 ROOT_ACRYLIC_ALPHA_HEX，
-   * 设置面板可现场切换 ⇒ 调浓淡不必再改代码重建。
-   */
-  @StorageLink(ACRYLIC_ALPHA_KEY) acrylicAlpha: string = ROOT_ACRYLIC_ALPHA_HEX;
   // ★ 2026-10-18 删除「光感效果」总开关与「光感强度」弱/中/强档位（用户原话：
   //   "删除光感效果的开关，这个本来就没有用"）。此前这里的 glowEnabled /
   //   glowStrength 两个 @StorageLink 随之删除——辉光本身并不受影响：
@@ -1135,12 +1096,6 @@ struct Index {
   //   App 侧没有任何调节接口（已核对官方文档），UI 上放开关/档位只会误导用户。
   /** 最小化到托盘开关（投屏中关窗→隐藏，未投屏→退出）。 */
   @StorageLink(MINIMIZE_TO_TRAY_KEY) minimizeToTray: boolean = true;
-  /**
-   * 主窗属性回读（"系统到底给了什么"，不是"我们设了什么"）。
-   * 磨砂半透明要能透视桌面，前提是系统真的给了透明窗口；SDK 里没有公开的
-   * 「设主窗透明」接口，isTransparent 是只读属性 ⇒ 只能回读，不能下结论靠推断。
-   */
-  @State windowAcrylicReadout: string = '';
   /** HeaderPanel 的状态文本（原版 Binding DriverState） */
   @State driverState: string = '正在检查 Apple USB 环境…';   // Strings: StatusCheckingEnvironment
   /** 各卡片下方的操作结果行（原版 SettingsStatus） */
@@ -1241,6 +1196,16 @@ struct Index {
   @State usbDiagnostic: string = '';
 
   /**
+   * 配对（"信任此电脑"）的用户可见状态，一句中文；空串 = 没有配对在进行。
+   *
+   * 与 usbDiagnostic 分开的原因：usbDiagnostic 是给排障的人看的原始事实、只在
+   * 开发者模式下显示；而"请在 iPhone 上点「信任此电脑」"是**要用户动手**的
+   * 指令，必须在普通界面就看得见 —— 弹窗弹出来的那一刻，界面上没有这句话，
+   * 用户就不知道还要不要等；超时之后界面也没有交代，用户只会以为没反应。
+   */
+  @State pairingHint: string = '';
+
+  /**
    * 最近一次子窗口打开失败的原因（取不到就空串）。
    *
    * 与 usbDiagnostic 同样存在的理由：子窗口是**独立窗口**，它失败的原因原本只有
@@ -1309,6 +1274,29 @@ struct Index {
   @State usbDriverBindNote: string = '';
   @State usbDriverBindOk: boolean = false;
 
+  // ── usbManager 备用通道（fd → 原生配对）──
+  /** 最近一次通道尝试的状态（成功带 fd、失败带原因）；诊断区可见。 */
+  @State usbFdChannelNote: string = '';
+  /** DDK 枚举到的 Apple 设备数；-1 = 环境诊断还没刷出来（未知）。 */
+  @State ddkAppleCount: number = -1;
+  /** open_usb_fd_channel 的在飞标志：Promise 未落定前不叠开新一轮。 */
+  private usbFdAttemptBusy: boolean = false;
+  /** 失败后的冷却截止时间（Date.now() 毫秒）；冷却期内心跳不再发起。 */
+  private usbFdRetryAt: number = 0;
+  /** 普通失败（连接失败、fd 无效等）的冷却时长。 */
+  // 失败后的冷却。25 秒而不是 10：诊断窗口会被新一轮的记录推着走，太密的
+  // 轮次让"上一轮失败在哪一步"只存留几秒，截图都来不及。
+  private static readonly USB_FD_RETRY_MS: number = 25000;
+  // 配对**成功拿到 fd** 之后的再试间隔。
+  //
+  // 为什么成功分支也要冷却：native 侧只在"正在跑"时去重，一轮配对失败后
+  // 很快结束（秒级），2 秒心跳就会立刻再发起一轮 —— 每轮都是一次新的
+  // VERSION 握手 + 5 次 SYN 重试，等于不停骚扰设备（真机上观察到几小时内
+  // 打到第 6 轮）。留出 8 秒间隔，用户也有时间解锁手机。
+  private static readonly USB_FD_PAIR_COOLDOWN_MS: number = 8000;
+  /** 授权被拒后的冷却时长：用户刚点过"不允许"，秒级重试等于骚扰。 */
+  private static readonly USB_FD_RETRY_DENIED_MS: number = 60000;
+
   // ── 设置项（对照原版各 ComboBox / Slider 的绑定） ──
   @State appMode: number = 1;
   @State resolutionPreset: number = 0;
@@ -1331,8 +1319,32 @@ struct Index {
   private prevAirplayVideoFrames: number = -1;
   private prevAirplayVideoMs: number = 0;
   @State usbMode: number = 0;
-  @State languageIndex: number = AppStorage.get<number>(LANG_INDEX_KEY) ?? 0;
-  @State themeIndex: number = 0;
+  /**
+   * 界面语言档位。
+   *
+   * ★★ 2026-10-23 从 @State 改 @StorageProp（用户报"切换语言不能完全切换"）：
+   *   t() 的译文来自 i18n 模块里的缓存（为性能），切语言只更新缓存 + 写
+   *   LANG_INDEX_KEY —— 而原来这个 @State 只在**构造时**读了一次 AppStorage，
+   *   之后与该键毫无关系 ⇒ 全项目没有任何组件订阅语言键，切语言后只有
+   *   "恰好被 500ms 心跳重渲染"的节点换了词，静态文本（导航标签、标题等）
+   *   永远停在旧语言。这就是"部分切换"的结构性根子。
+   *   @StorageProp 让本组件真正订阅该键；build() 根容器的 key 绑定它
+   *   （见 build 里 root 的 .key），语言一变整树重建一次，所有 t() 重求值
+   *   —— 一次性的整页重建（同系统切语言的常见实现），预览 XComponent 也会
+   *   重建并重新走 attach 流程，画面闪一下属预期。
+   */
+  @StorageProp(LANG_INDEX_KEY) languageIndex: number = 0;
+  /**
+   * 主题偏好（0=跟随系统 1=深色 2=浅色）。
+   *
+   * ★ 1.0.65：从 @State 改成 @StorageLink。
+   *   原实现的问题有两层：① 偏好从不落盘，重启回到「跟随系统」；
+   *   ② aboutToAppear 里把本地默认值 **反写** 进 AppStorage，主窗一旦重建
+   *   （语言切换整树重建、从托盘唤回）就把开发者工具里设过的主题覆盖回 0。
+   *   改成 @StorageLink 后本页与 AppStorage 双向同步，启动时的磁盘值由
+   *   EntryAbility 在 UI 装载前读入（load_theme_preference）。
+   */
+  @StorageLink(THEME_PREF_KEY) themeIndex: number = 0;
 
   private xcController: XComponentController = new XComponentController();
   private statsTimer: number = -1;
@@ -1404,7 +1416,9 @@ struct Index {
   // ───────────────────────── 生命周期 ─────────────────────────
 
   aboutToAppear(): void {
-    AppStorage.setOrCreate(THEME_PREF_KEY, this.themeIndex);
+    // themeIndex 已是 @StorageLink：它的真值来自 AppStorage（启动时由
+    // EntryAbility 从磁盘读入，见 load_theme_preference），这里只按它算一次方案，
+    // **不要**再回写 —— 回写会用本地默认值把已保存的偏好覆盖掉。
     recomputeThemeScheme();
     this.appContext = getContext(this);
     // mDNS 广播需要 UIAbilityContext（@ohos.net.mdns 的 addLocalService 要它）。
@@ -1412,8 +1426,6 @@ struct Index {
     airPlayMdns.attach(this.appContext as common.UIAbilityContext);
     // 首屏就把应用主题同步给系统，系统三键颜色跟着一致。
     this.sync_system_color_mode();
-    // 回读主窗真实属性：半透明磨砂能否透视桌面由系统合成器决定，不靠推断。
-    this.refresh_window_acrylic_readout();
 
     // 画面调节：把预览/保存/回滚三个委托接到原生预览渲染器。
     // 不接的话 ImageSettingsWindow 的 apply 会落到 null 分支返回假成功，
@@ -1487,27 +1499,14 @@ struct Index {
   /**
    * windowVisible 变化回调（@Watch）：
    *   不可见 → 停心跳（最小化后不再空转，也不抢恢复动画的 CPU）；
-   *   重新可见 → 先进入"恢复动画窗口期"（临时关掉全窗磨砂），再重启心跳。
+   *   重新可见 → 重启心跳。
    */
   on_window_visible_changed(): void {
     if (this.windowVisible) {
-      this.mark_restoring();
       this.start_stats_timer();
     } else {
       this.stop_stats_timer();
     }
-  }
-
-  /** 标记"恢复动画窗口期"：这段时间内关掉全窗磨砂，让系统恢复动画跑满帧。 */
-  private mark_restoring(): void {
-    this.windowRestoring = true;
-    if (this.restoreTimer >= 0) {
-      clearTimeout(this.restoreTimer);
-    }
-    this.restoreTimer = setTimeout((): void => {
-      this.windowRestoring = false;
-      this.restoreTimer = -1;
-    }, WINDOW_RESTORE_GRACE_MS);
   }
 
   aboutToDisappear(): void {
@@ -1526,10 +1525,15 @@ struct Index {
       clearInterval(this.statsTimer);
       this.statsTimer = -1;
     }
-    // 恢复动画窗口期的一次性定时器也要收掉：否则页面销毁后它仍会去改 @State。
-    if (this.restoreTimer >= 0) {
-      clearTimeout(this.restoreTimer);
-      this.restoreTimer = -1;
+    // 「敬请期待」浮层的定时器：不收的话页面销毁后它仍会写 comingSoonText。
+    if (this.comingSoonTimer >= 0) {
+      clearTimeout(this.comingSoonTimer);
+      this.comingSoonTimer = -1;
+    }
+    // 导航栏提示的定时器同理（navTipKey 也是 @State，销毁后写它就是踩已销毁组件）。
+    if (this.navTipTimer >= 0) {
+      clearTimeout(this.navTipTimer);
+      this.navTipTimer = -1;
     }
     this.surfaceAttached = false;
     this.attachedSurfaceId = '';
@@ -1539,6 +1543,12 @@ struct Index {
     // 下次进入应用再启动会失败。
     airplayStop();
     airPlayMdns.clear();
+    // ★ 后台长时任务（DATA_TRANSFER）也必须在这里释放：申请它的唯一理由是
+    //   "切到后台时 AirPlay/mDNS 线程还要跑"，而这里采集与接收端都已经停了，
+    //   留着它只会把常驻通知一直挂在状态栏、并占着系统的长时任务名额。
+    //   以前只在 apply_wireless() 里手动停接收端时才会释放，
+    //   "启动过接收端 → 直接退出应用"这条路径从来没释放过。
+    this.stop_keep_alive();
     shutdown();
   }
 
@@ -1629,8 +1639,57 @@ struct Index {
   }
 
   /**
-   * 刷新 USB 环境诊断与驱动扩展状态。
+   * usbManager 备用通道：开 fd → 交给 native 发起配对。
    *
+   * 为什么在 UI 里包一层而不直接在心跳里调 open_usb_fd_channel：
+   *   · open_usb_fd_channel 会弹系统授权窗（仅首次），绝不能被 2 秒心跳反复
+   *     触发 —— 这里用冷却时间节流（失败后 USB_FD_RETRY_MS 内不再试）；
+   *   · pairViaUsbFd 原生侧有自己的去重（60 秒窗口内只跑一轮），但 ArkTS
+   *     侧先把 fd 拿好，避免无效的 connectDevice 调用。
+   *
+   * 方法是异步的、绝不抛出：所有失败都记进 fdChannelNote（诊断区可见）。
+   */
+  private attempt_usb_fd_channel(): void {
+    if (this.usbFdAttemptBusy) {
+      return;
+    }
+    const now: number = Date.now();
+    if (now < this.usbFdRetryAt) {
+      return;
+    }
+    this.usbFdAttemptBusy = true;
+    open_usb_fd_channel().then((channel: UsbFdChannel): void => {
+      this.usbFdAttemptBusy = false;
+      if (channel.ok) {
+        // fd 交给 native：后台线程跑 usbmux/lockdownd 配对（去重在原生侧）。
+        const accepted: boolean = pairViaUsbFd(channel.fd);
+        this.usbFdChannelNote = accepted
+          ? channel.summary
+          : `fd 通道配对被拒（fd=${channel.fd} 无效）`;
+        // 成功拿到 fd 也要冷却：别让心跳把配对打成连珠炮。
+        this.usbFdRetryAt = now + Index.USB_FD_PAIR_COOLDOWN_MS;
+        if (!accepted) {
+          // fd 无效多半是设备刚拔掉：把缓存清掉，下轮重新走完整流程。
+          reset_usb_fd_channel();
+        }
+        return;
+      }
+      // 失败：记录并冷却。授权被拒时冷却更久 —— 用户刚点过"不允许"，
+      // 秒级重试等于骚扰。
+      this.usbFdChannelNote = channel.summary;
+      const denied: boolean = channel.stage === 'authorized';
+      this.usbFdRetryAt = now + (denied
+        ? Index.USB_FD_RETRY_DENIED_MS : Index.USB_FD_RETRY_MS);
+    }).catch((error: BusinessError): void => {
+      this.usbFdAttemptBusy = false;
+      this.usbFdChannelNote =
+        `usbManager 通道异常（${error.code}）：${error.message}`;
+      this.usbFdRetryAt = now + Index.USB_FD_RETRY_MS;
+    });
+  }
+
+  /**
+   * 刷新 USB 环境诊断与驱动扩展状态。
    * probe=true 时向 Core 要一次环境探测结论；false 时只更新驱动扩展那条（读一个
    * 小文件，很便宜）。之所以让调用方决定，是因为探测本身会 OH_Usb_Init 并对每台
    * Apple 设备读一次设备描述符 —— 会话期间不该按 2 秒的节奏来一遍。
@@ -1661,6 +1720,37 @@ struct Index {
     }
     if (host.ok !== this.usbHostOk) {
       this.usbHostOk = host.ok;
+    }
+
+    // ★ usbManager 备用通道：插线即响应的第一梯队 ★
+    //
+    // ★ 2026-10-31 改序：fd 通道从"DDK 失败后的兑底"提为**先发** ★
+    //   之前让它等 ddkAppleCount===0，代价是等驱动扩展冷启动（bindDevice
+    //   需要已插入设备的 deviceId，没法预热）—— 信任弹窗慢 3~5 秒全耗在
+    //   这里。现在 fd 的 bulk 已走 URB 路径（SELinux 白名单内），不依赖
+    //   扩展，第一条心跳（≤2s）就能把 Pair 请求发出去。native 侧有
+    //   fd_pairing_active() 互斥：fd 配对在跑时 DDK 自动配对会让路，
+    //   不会两路同时抢设备。
+    //   触发条件：系统 USB 看得到 Apple 设备、当前无采集会话、超过冷却期。
+    //   内部去重由 UsbManagerHost 负责（channelBusy + fd 缓存）。
+    if (this.usbHostOk && this.usbHostAppleCount > 0 &&
+        !this.has_capture_session()) {
+      this.attempt_usb_fd_channel();
+    }
+
+    // fd 配对发生在**没有采集会话**的时候 —— poll_status 不跑，上面两条只在
+    // 会话期刷新的线路（usbDiagnostic / pairingHint）对它全是瞎的。这里补：
+    // 无会话时每轮心跳顺手拉一次（两条都是读进程内字符串的廉价 NAPI 调用）。
+    // 纪律与 poll_status 一致：原生诊断"有内容才覆盖"，配对状态无条件覆盖。
+    if (!this.has_capture_session()) {
+      const fdDiag: string = usbDiagnostics();
+      if (fdDiag.length > 0 && fdDiag !== this.usbDiagnostic) {
+        this.usbDiagnostic = fdDiag;
+      }
+      const fdPairing: string = pairingStatus();
+      if (fdPairing !== this.pairingHint) {
+        this.pairingHint = fdPairing;
+      }
     }
 
     // 权限授予状态：同样与 DDK 无关（问的是令牌账本），所以无条件刷。
@@ -1722,12 +1812,16 @@ struct Index {
         this.environmentDiagnostic = text;
       }
       this.environmentStatus = environment.status;
+      this.ddkAppleCount = -1;
       return;
     }
     if (environment.diagnostic !== this.environmentDiagnostic) {
       this.environmentDiagnostic = environment.diagnostic;
     }
     this.environmentStatus = 0;
+    if (environment.appleDevices !== this.ddkAppleCount) {
+      this.ddkAppleCount = environment.appleDevices;
+    }
   }
 
   select_device(device: DeviceInfo): void {
@@ -1787,6 +1881,9 @@ struct Index {
     // 独立预览窗口：同样放在早退之前。它要处理两种"窗口没了"的路径（我们关的、
     // 被别处销毁的），以及投屏设置窗口发来的开窗请求 —— 都不该受采集状态影响。
     this.sync_standalone_state();
+    // 投屏设置窗口的「开始 / 停止投屏」：只写不读的话按钮点了没有任何反应
+    // （按钮状态行会写成「命令总线未接通」，那是如实报告缺口，不是功能）。
+    this.sync_projection_commands();
 
     // 无线链路：先把待广播/待注销的服务消化掉，再取一次状态。
     // 放在采集状态之前，mDNS 的成败不会因为采集查询提前 return 而漏报。
@@ -1857,9 +1954,28 @@ struct Index {
     const state: number = status.state;
     // 系统托盘：每轮把采集状态同步给托盘通知（TrayManager 内部按状态去重）。
     TrayManager.shared().updateIconState(state);
-    // 有线诊断：会话不在（Idle）时清空，避免把上一轮的记录当成本次结果；
-    // 其余状态（含 Error / Stopped）都照实读，失败现场因此得以保留在屏幕上。
-    this.usbDiagnostic = state === 0 ? '' : usbDiagnostics();
+    // 有线诊断：只在原生侧**真的有记录**时才覆盖。
+    //
+    // ★ 2026-10-23 修掉一个把失败现场抹掉的写法：这里原先是
+    //     `state === 0 ? '' : usbDiagnostics()` —— 会话一回到 Idle 就清空。
+    //   而「点了开始投屏、异步失败」恰恰会回到 Idle，于是屏幕上**一行诊断都没有**，
+    //   排障无从下手（本轮现场就是这么丢的：iPhone 不弹信任框，失败后诊断区空白）。
+    //   原意图（"不要把上一轮的记录当成本次结果"）是对的，但清空的时机选错了：
+    //   该在**发起新一轮时**清，而不是在"当前没有会话"时清。见 start()。
+    const diag: string = usbDiagnostics();
+    if (diag.length > 0) {
+      this.usbDiagnostic = diag;
+    }
+    // 配对状态：每轮无条件覆盖。
+    //
+    // 为什么不像 usbDiagnostic 那样"有内容才覆盖"：配对状态是**要用户动手**的
+    // 指令，它必须随原生侧的进展实时变化（"正在请求…" → "请点信任" → "已信任"）。
+    // 用"有内容才覆盖"的话，配对结束后那句结论会一直留在界面上，看起来像
+    // 还在等；而新一轮配对开始时上一轮的结论也赖着不走。
+    const pairing: string = pairingStatus();
+    if (pairing !== this.pairingHint) {
+      this.pairingHint = pairing;
+    }
     // 有线投屏协议切换：排队中的重启。必须在状态跃迁处理之前做掉，
     // 否则「刚停稳又被当成意外停止」的告警会先弹出来。
     if (this.pendingRestartMode >= 0) {
@@ -1993,6 +2109,10 @@ struct Index {
         : '当前已有投屏会话，请先停止投屏';
       return;
     }
+    // 新一轮开始：先把上一轮的有线诊断清掉，免得把旧记录当成本次结果。
+    // 清空时机放在这里（发起时）而不是 poll_status 里（见那里 2026-10-23 的注释）——
+    // 放在"会话不在时清空"会把失败现场一起抹掉。
+    this.usbDiagnostic = '';
     // 走 with_options 而不是 startCapture(udid)：有线投屏模式、解码器偏好、色彩偏好
     // 在 C ABI 里只有这一条入口（没有对应 setter），不带就等于没选。
     const result: number = startCaptureWithOptions(this.selectedUdid, this.capture_options());
@@ -2240,7 +2360,7 @@ struct Index {
     }
     const ap: AirPlayStatus | null = this.airplay;
     if (ap !== null && ap.running !== 0 && ap.clients > 0) {
-      const d = ap.decoderDiag;
+      const d: DecoderDiag = ap.decoderDiag;
       if (d.lastStreamWidth > 0 && d.lastStreamHeight > 0) {
         return `${d.lastStreamWidth}×${d.lastStreamHeight}`;
       }
@@ -2344,7 +2464,7 @@ struct Index {
         return `AirPlay 解码器已失败：OnError×${ap.videoDecodeErrors}（${ap.videoDecoderLastError}）`;
       }
       if (ap.videoFrames > 0 && ap.decodedFrames === 0) {
-        const d = ap.decoderDiag;
+        const d: DecoderDiag = ap.decoderDiag;
         // 三种情况分别给一行诊断：根因不同。
         let why = '';
         if (d.pushedInputs === 0) {
@@ -2385,11 +2505,11 @@ struct Index {
         return `AirPlay 解码器未产出像素：${why}`;
       }
       if (ap.decodedFrames > 0) {
-        const d = ap.decoderDiag;
+        const d: DecoderDiag = ap.decoderDiag;
         // 解码已通 → 断点只可能在「解码帧 → 上屏」这一段。渲染器那条链上的
         // 失败原本全是静默的，这里把每个分支都亮出来，一眼分辨是
         // "surface 没挂上" 还是 "挂了但每帧被丢" 还是 "画了但 EGL 层没生效"。
-        const p = ap.previewDiag;
+        const p: PreviewRendererDiag = ap.previewDiag;
         const render: string = `渲染=${p.attached === 1 ? '已挂载' : '未挂载'}` +
           `·present${p.presentCalls}·draw${p.drawCalls}/成${p.drawOk}` +
           (p.dropNoDisplay > 0 ? `、无surface丢${p.dropNoDisplay}` : '') +
@@ -2546,7 +2666,7 @@ struct Index {
       // ★ 1.0.65 新增：此前这条数据已通过 NAPI 发出（previewDiag），但状态行从未
       //   读取它，于是"改了着色器后直接不显示"这类**渲染侧**回归一直被误读成
       //   "解码链未通"，排查方向整个错。现在把它补进判读。
-      const pr = ap.previewDiag;
+      const pr: PreviewRendererDiag = ap.previewDiag;
       let renderNote: string = '';
       if (pr) {
         if (pr.attached === 0 && pr.attachCalls > 0) {
@@ -2566,7 +2686,7 @@ struct Index {
         //                                  数据帧在 ProcessMirrorPacket 里被静默丢）
         //   参数集>0 · 真推=0            → configure 之后一个 input_buffer 都没拿到
         //   真推>0 · 回调=0 / 有像素=0   → 解码器收了帧但不吐（档位/尺寸/喂帧方式）
-        const d = ap.decoderDiag;
+        const d: DecoderDiag = ap.decoderDiag;
         // ★ 参数集本体：00000001 67… = SPS 开头（正常）；…28… = 只有 PPS，SPS 缺席。
         //   这一格是 1.0.45 新增的最关键证据 —— 上一轮黑屏的根就在这里。
         const cfgHead: string =
@@ -3115,6 +3235,11 @@ struct Index {
       this.launch_subwindow((ctx: common.Context): void => {
         open_about(ctx, 0);
       });
+    } else if (key === 'files') {
+      // 应用内文件资源管理器（iOS AFC：lockdown StartService → AFC 隧道）。
+      this.launch_subwindow((ctx: common.Context): void => {
+        open_file_manager(ctx);
+      });
     } else if (key === 'driver') {
       // 原版 OpenDriverManagerCommand 启动**独立的驱动管理器进程**（DriverInstaller.exe，
       // 自带 MainWindow + DeviceTrust/FailureHelp/Prompt/RequiredAction 四个窗口），
@@ -3212,7 +3337,24 @@ struct Index {
     // 水平方向不留内边距：原版条目宽度就等于 pane 宽度（CompactPaneLength/OpenPaneLength），
     // 高亮背景的左右 4 内缩由 nav_item 自己的 InteractionBackground 层负责。
     .padding({ left: 0, right: 0, top: 6, bottom: 10 })
-    .backgroundColor(this.themePalette().SIDEBAR)
+    // ★ macOS 26（Tahoe）式悬浮侧栏（2026-11-01，用户要求）：侧栏不再通高贴边，
+    //   而是一块四周留缝、大圆角、玻璃材质（毛玻璃 + 半透明染色）的悬浮面板。
+    //   · 四边间隙由**父级 Column 的 padding** 统一撑出（见 build()）—— 侧栏自身
+    //     height('100%') 指父级内容盒，不会像「100% + margin」那样把下边距挤出
+    //     视口导致四边间距不均（2026-11-01 用户截图反馈的根因）
+    //   · borderRadius 16 ≈ macOS 侧栏连续圆角观感（22 过圆，用户反馈不合适）
+    //   · backgroundBlurStyle COMPONENT_ULTRA_THIN：取侧栏身后内容的实时模糊，
+    //     再叠一层按明暗主题染色的半透明底色 —— 玻璃质感来源
+    //   · 0.5vp 高光描边 + 柔和投影：把面板从背景上「抬」起来
+    .borderRadius(16)
+    .backgroundColor(this.scheme === 'dark' ? '#B3181818' : '#B3F2F2F4')
+    .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN, {
+      colorMode: this.scheme === 'dark' ? ThemeColorMode.DARK : ThemeColorMode.LIGHT,
+      adaptiveColor: AdaptiveColor.DEFAULT,
+    })
+    .border({ width: 0.5, color: this.scheme === 'dark' ? '#26FFFFFF' : '#33000000' })
+    .shadow({ radius: 18, color: '#2E000000', offsetY: 3 })
+    .clip(true)
   }
 
   // ═══════════════════════════ HeaderPanel ═══════════════════════════
@@ -3592,7 +3734,7 @@ struct Index {
         this.settingsStatus = '截图保存失败：拿不到应用上下文';
         return;
       }
-      const dir: string = context.filesDir + '/iPhoneMirror/Screenshots';
+      const dir: string = context.filesDir + '/PhoneMirror/Screenshots';
       try {
         fs.mkdirSync(dir, true);
       } catch (e) {
@@ -4463,7 +4605,7 @@ struct Index {
     if (status === null || status === undefined) {
       return [0, 0];
     }
-    const diag = status.previewDiag;
+    const diag: PreviewRendererDiag = status.previewDiag;
     if (diag === null || diag === undefined) {
       return [0, 0];
     }
@@ -4721,6 +4863,33 @@ struct Index {
     }
   }
 
+  /**
+   * 消化投屏设置窗口的「开始投屏 / 停止投屏」。
+   *
+   * 该窗口是子窗口，拿不到主窗口的方法，只能通过 AppStorage 出参总线请求；
+   * 协议是「写 true → 主窗口读到后立即复位 → 执行」。此前这两个键只有写入端，
+   * 于是按钮点了永远没反应（窗口状态行还写着"命令总线未接通"）。
+   */
+  private sync_projection_commands(): void {
+    try {
+      const startRequested: boolean =
+        AppStorage.get<boolean>(OUT_KEY_START_REQUESTED) ?? false;
+      if (startRequested) {
+        AppStorage.setOrCreate<boolean>(OUT_KEY_START_REQUESTED, false);
+        this.start();
+      }
+      const stopRequested: boolean =
+        AppStorage.get<boolean>(OUT_KEY_STOP_REQUESTED) ?? false;
+      if (stopRequested) {
+        AppStorage.setOrCreate<boolean>(OUT_KEY_STOP_REQUESTED, false);
+        this.stop();
+      }
+    } catch (error) {
+      const failure = error as BusinessError;
+      console.warn('iPhoneMirror projection command read failed:', failure.message);
+    }
+  }
+
   /** 原版 EnvironmentPanel（Padding 10,9,10,9，Margin 0,0,0,14）+ PreviewQuickActions。 */
   @Builder
   environment_panel() {
@@ -4835,13 +5004,30 @@ struct Index {
           .margin({ top: 8 })
           .constraintSize({ maxWidth: 440 })
       }
+      // 配对提示：普通界面就显示（不进开发者模式）。
+      //
+      // 为什么它必须在这里而不是只在诊断区：「信任此电脑」的弹窗出现在**手机上**，
+      // 而用户此刻盯着的是**平板/电脑这一侧**。弹窗弹出来的那一刻，这一条是
+      // 唯一告诉他"该去手机上点哪个按钮"的提示；没有它，用户会一直等下去，
+      // 直到超时才知道刚才手机上有个框没点。
+      if (this.pairingHint.length > 0) {
+        Text(this.pairingHint)
+          .fontSize(12)
+          .fontColor(this.themePalette().PREVIEW_TEXT)
+          .textAlign(TextAlign.Center)
+          .margin({ top: 10 })
+          .constraintSize({ maxWidth: 440 })
+      }
       // 开发者模式（调试入口）：连点版本号 7 次开启后，下面这些有线链路诊断才会显示。
       if (this.devMode) {
       // 有线链路的原生诊断（认领接口 / 厂商 0x52 / 重枚举 / 端点）。
       // 必须内联 Text：@Builder 的参数按值传递，走方法参数的话状态变化不会刷新。
       if (this.usbDiagnostic.length > 0) {
-        Text(this.usbDiagnostic.length > 220
-          ? `原生：${this.usbDiagnostic.substring(0, 220)}…`
+        // 900 字符：诊断已改为每条一行（换行分隔），超限时截**尾部** ——
+        // 记录按时间顺序追加，最新（失败现场）在最下。
+        Text(this.usbDiagnostic.length > 900
+          ? `原生：…\n${this.usbDiagnostic.substring(
+              this.usbDiagnostic.length - 900)}`
           : `原生：${this.usbDiagnostic}`)
           .fontSize(10)
           .fontColor(this.themePalette().PREVIEW_MUTED_TEXT)
@@ -4858,6 +5044,19 @@ struct Index {
           .fontSize(10)
           .fontColor(this.usbHostOk && this.usbHostAppleCount > 0
             ? this.themePalette().PREVIEW_MUTED_TEXT : this.themePalette().WARNING)
+          .textAlign(TextAlign.Center)
+          .margin({ top: 8 })
+          .constraintSize({ maxWidth: 460 })
+      }
+      // usbManager 备用通道（fd）的进展/失败原因。★ 必须渲染 ★：fd 配对发生在
+      // 没有采集会话的时候，poll_status 不跑，这条是唯一能看到"通道卡在哪一步"
+      // 的地方 —— 只赋值不渲染的话，插线没反应就永远是黑箱。
+      if (this.usbFdChannelNote.length > 0) {
+        Text(this.usbFdChannelNote.length > 200
+          ? `fd 通道：${this.usbFdChannelNote.substring(0, 200)}…`
+          : `fd 通道：${this.usbFdChannelNote}`)
+          .fontSize(10)
+          .fontColor(this.themePalette().PREVIEW_MUTED_TEXT)
           .textAlign(TextAlign.Center)
           .margin({ top: 8 })
           .constraintSize({ maxWidth: 460 })
@@ -5393,9 +5592,12 @@ struct Index {
 
       Scroll() {
         Column() {
-          // ── 卡片 1：无线 AirPlay ──
+          // ── 卡片 1：无线接收（AirPlay 实收）──
+          // 2026-10-31 融合：原先只有 AirPlay 一个接收端，卡片名从
+          // 「无线 AirPlay」改叫「无线接收」，应用/停止开关就是唯一的总
+          // 开关；将来若增加了别的接收通道也共用它。
           Column() {
-            this.section_title('无线 AirPlay', '常驻')    // Strings: WirelessReceiverTitle + WirelessServiceAlwaysOn
+            this.section_title('无线接收', '常驻')    // Strings: WirelessReceiverTitle + WirelessServiceAlwaysOn
             this.field_label('连接分辨率')                // Strings: WirelessResolutionLabel
             MaterialSelect({
               options: WIRELESS_PROFILE_OPTIONS,
@@ -5929,6 +6131,8 @@ struct Index {
                 AppStorage.setOrCreate(THEME_PREF_KEY, index);
                 recomputeThemeScheme();
                 this.sync_system_color_mode();
+                // 立即落盘：此前主题偏好只活在内存里，重启就丢。
+                save_theme_preference(index);
               },
             })
 
@@ -5982,76 +6186,10 @@ struct Index {
             .width('100%')
             .margin({ top: 12 })
 
-            // ── 半透明窗口 ──
-            // 对齐 Windows 11 原生深色界面的 Acrylic 观感。
-            // ★ 2026-10-18 换成系统设置同款 Switch（Toggle + ToggleType.Switch）。
-            //   Toggle 的 isOn 由 @State 驱动、onChange 里写回，本身就是状态驱动的，
-            //   不再需要 @Builder 按值传递那条内联约束的注释（那个坑只作用于
-            //   @Builder 内的 Text，与 Toggle 无关）。
-            Row() {
-              Text('半透明窗口')
-                .fontSize(10)
-                .fontColor(this.themePalette().MUTED_TEXT)
-              Blank()
-              Toggle({ type: ToggleType.Switch, isOn: this.acrylicOn })
-                .onChange((isOn: boolean): void => {
-                  this.acrylicOn = isOn;
-                  // ★ 立刻写盘（putSync + flushSync）：拖到 Ability 收尾才刷，
-                  //   用户关掉/杀进程时就来不及了 ⇒ 选完重启又回默认。
-                  save_acrylic_preferences(isOn, this.acrylic_alpha_hex());
-                  this.refresh_window_acrylic_readout();
-                })
-            }
-            .width('100%')
-            .margin({ top: 12 })
-
-            // ── 浓度档位（只在半透明开启时可选）──
-            // 选中态进 ForEach 的 key（ArkUI 只按 key 复用组件，不进 key 不会重绘）。
-            if (this.acrylicOn) {
-              Row() {
-                Text('浓度')
-                  .fontSize(10)
-                  .fontColor(this.themePalette().MUTED_TEXT)
-                Blank()
-                ForEach(ACRYLIC_ALPHA_OPTIONS, (item: AcrylicAlphaOption): void => {
-                  Button(item.label)
-                    .fontSize(11)
-                    .fontColor(item.hex === this.acrylicAlpha
-                      ? '#FFFFFF'
-                      : this.themePalette().TEXT)
-                    .backgroundColor(item.hex === this.acrylicAlpha
-                      ? this.themePalette().ACCENT
-                      : this.themePalette().CONTROL_FILL)
-                    .borderRadius(RADIUS_CONTROL)
-                    .margin({ left: 6 })
-                    .hoverEffect(HoverEffect.Highlight)
-                    .onClick((): void => {
-                      this.acrylicAlpha = item.hex;
-                      save_acrylic_preferences(this.acrylicOn, item.hex);
-                      this.refresh_window_acrylic_readout();
-                    })
-                }, (item: AcrylicAlphaOption): string =>
-                  `${item.hex}${item.hex === this.acrylicAlpha ? '-on' : '-off'}`)
-              }
-              .width('100%')
-              .margin({ top: 8 })
-            }
-
-            // ── 参数读数（仅开发者模式）──
-            // 这是排查用的内部账本（窗口透明与否、容器配色 4 组探测的成功/失败码），
-            // 正常使用者看到只会困惑 ⇒ 只在开发者模式下显示。
-            if (this.devMode && this.windowAcrylicReadout.length > 0) {
-              Text(this.windowAcrylicReadout)
-                .fontSize(10)
-                .fontColor(this.themePalette().MUTED_TEXT)
-                .width('100%')
-                .margin({ top: 4 })
-                // 这是一份账本（窗口属性 + 容器配色 4 组探测 + 偏好读写），行数按内容增长：
-                // 截断就等于读不到 ⇒ 宁可放宽（现在最长约 6 行，留两行余量）。
-                .maxLines(8)
-            }
-
-            this.hint_text('窗口底色半透明，对齐 Windows 原生深色观感；浓度可在上面选档。若观感不合适，点「关闭」即回到原纯色背景。')
+            // ★ 2026-10-23 删除「半透明窗口」开关 + 浓度档位 + 窗口参数读数：
+            //   全窗 backgroundEffect 磨砂在最小化 / 最大化 / 还原等系统窗口动画里
+            //   **每帧都要重算**，是掉帧最大单一来源，用户要求整体移除；
+            //   窗口背景随之固定为不透明实色（见 root_background_color()）。
           }
           .control_card(this.themePalette())
 
@@ -6162,92 +6300,17 @@ struct Index {
   // ═══════════════════════════ 组装（AppShell） ═══════════════════════════
 
   /**
-   * 开发者模式开关变化 ⇒ 重算窗口参数读数。
-   * 为什么需要：读数只在开发者模式下显示，而开发者模式是**运行中**才开的
-   * （关于页连点版本号）；不重算的话，开完回到主界面读数区会是空的。
-   */
-  private on_dev_mode_changed(): void {
-    this.refresh_window_acrylic_readout();
-  }
-
-  /**
-   * 回读主窗属性，把「系统给不给透明」变成一行能读的数字。
+   * 根容器背景色：**固定为不透明实色**（主题色板的 BACKGROUND）。
    *
-   * ★ 为什么必须有这行：半透明磨砂有两种失败路径 —— ① 系统根本不给透明窗口
-   *   （isTransparent=false，UI 的 alpha 底色只是叠在不透明窗口背景上，混出来和
-   *   原色差几个亮度值，肉眼"根本没变化"）；② 给了透明但模糊采不到桌面。
-   *   两种的下一步完全不同，靠猜区分不开，只能读真值。
+   * ★ 2026-10-23 移除半透明与磨砂（用户要求）。原实现是根容器挂带 alpha 的
+   *   Fluent 底色 + backgroundEffect(radius 32) 磨砂；代价是窗口缩放 / 最大化 /
+   *   还原 / 最小化这些系统动画期间，全窗模糊**每帧都要重算** —— 项目注释此前已
+   *   自己认定这是掉帧最大单一来源，并只为「恢复动画」做了临时让路，覆盖不全。
+   *   现在一律走不透明 BACKGROUND，与内容区背景同源：纯色 Fluent 观感，
+   *   系统动画里不再有全窗模糊重算。
    */
-  private refresh_window_acrylic_readout(): void {
-    const ctx: common.Context | null = this.appContext;
-    if (ctx === null) {
-      this.windowAcrylicReadout = '窗口属性回读失败：拿不到应用上下文';
-      return;
-    }
-    try {
-      window.getLastWindow(ctx)
-        .then((win: window.Window): void => {
-          try {
-            const props: window.WindowProperties = win.getWindowProperties();
-            const container: string = AppStorage.get<string>(WINDOW_ACRYLIC_RESULT_KEY) ?? '';
-            const shadow: string = AppStorage.get<string>(WINDOW_SHADOW_RESULT_KEY) ?? '';
-            const persisted: string = AppStorage.get<string>(PERSIST_READ_RESULT_KEY) ?? '';
-            const persistedWrite: string = AppStorage.get<string>(PERSIST_WRITE_RESULT_KEY) ?? '';
-            this.windowAcrylicReadout =
-              `窗口透明=${props.isTransparent ? '是' : '否'} · 类型=${props.type} · 全屏=${props.isFullScreen ? '是' : '否'}`
-              + ` · 底浓度=${Math.round(parseInt(this.acrylic_alpha_hex(), 16) / 255 * 100)}%`
-              // 「存档」两字是偏好读写的结果：读=启动时从磁盘取回的值，写=最近一次落盘。
-              // 持久化失败与"用户没改过"同形（都回到默认），只能靠这两个读数区分。
-              + (persisted.length > 0 ? ` ｜ ${persisted}` : '')
-              + (persistedWrite.length > 0 ? ` ｜ ${persistedWrite}` : '')
-              + (container.length > 0 ? ` ｜ ${container}` : '')
-              + (shadow.length > 0 ? ` ｜ ${shadow}` : '');
-          } catch (readError) {
-            const readFailure = readError as BusinessError;
-            this.windowAcrylicReadout = `窗口属性回读失败：${readFailure.message}`;
-          }
-        })
-        .catch((error: BusinessError): void => {
-          this.windowAcrylicReadout = `窗口属性回读失败：${error.code} ${error.message}`;
-        });
-    } catch (error) {
-      const failure = error as BusinessError;
-      this.windowAcrylicReadout = `窗口属性回读失败：${failure.message}`;
-    }
-  }
-
-  /**
-   * 根容器背景色：磨砂开 = 带 alpha 的 Fluent 底色（窗口背景已在 EntryAbility 设为
-   * 全透明，alpha 部分直接混到桌面，即 Win11 原生观感的来路）；关 = 原实色。
-   * 基色与 WINDOW_BACKGROUND 同源（#1F1F1F / #F3F3F5），只把 alpha 提到
-   * ROOT_ACRYLIC_ALPHA_HEX。★ 现在容器色与内容区背景都已**全透**，这一层的 alpha
-   * 就是**唯一**决定"透多少"的量 —— 想更透就把它调小（00=全透、FF=实色）。
-   */
-  /**
-   * 当前浓度 alpha（两位十六进制串）。
-   *
-   * ★ 防脏值：档位来自 AppStorage，若被人写入非法串（长度不对 / 非十六进制），
-   *   `#${x}1F1F1F` 会拼出非法颜色 ⇒ 根容器着色异常。这里统一校验后回退默认值。
-   */
-  private acrylic_alpha_hex(): string {
-    const value: string = this.acrylicAlpha;
-    if (value.length !== 2) {
-      return ROOT_ACRYLIC_ALPHA_HEX;
-    }
-    const parsed: number = parseInt(value, 16);
-    if (Number.isNaN(parsed)) {
-      return ROOT_ACRYLIC_ALPHA_HEX;
-    }
-    return value;
-  }
-
   private root_background_color(): string {
-    if (!this.acrylicOn) {
-      return this.themePalette().BACKGROUND;
-    }
-    return this.scheme === 'dark'
-      ? `#${this.acrylic_alpha_hex()}1F1F1F`
-      : `#${this.acrylic_alpha_hex()}F3F3F5`;
+    return this.themePalette().BACKGROUND;
   }
 
   build() {
@@ -6255,7 +6318,14 @@ struct Index {
     // （未实现功能的统一反馈，见 show_coming_soon）。
     Stack({ alignContent: Alignment.Bottom }) {
       Row() {
-        this.nav_rail()
+        // 悬浮侧栏的四边间隙在这里统一撑出：padding 8 = 侧栏与窗口上/左/下三边
+        // 的等距留缝（右缝由内容区自身留白承担）。Column 高度 100%、内容盒即
+        // nav_rail 的 100% 基准 —— 保证侧栏上下同步缩进，不会被挤出视口。
+        Column() {
+          this.nav_rail()
+        }
+        .height('100%')
+        .padding({ left: 8, top: 8, bottom: 8 })
 
         Column() {
           this.header()
@@ -6291,19 +6361,9 @@ struct Index {
       }
       .width('100%')
       .height('100%')
+      // ★ 纯实色背景，不挂 backgroundEffect：全窗磨砂在系统窗口动画里每帧重算，
+      //   是掉帧最大单一来源（2026-10-23 移除，见 root_background_color() 的注释）。
       .backgroundColor(this.root_background_color())
-      // 磨砂：radius=0 时等于没有模糊。模糊能否作用到窗口外的桌面取决于
-      // 系统合成器 —— 窗口 surface 内没有内容可采时，这里大概率只是无操作；
-      // 半透明的观感由 root_background_color() 的 alpha 底色承担，两者叠加。
-      .backgroundEffect({
-        // ★ 恢复动画期间临时关磨砂：全窗 radius 32 的模糊在窗口缩放动画里
-        //   **每帧都要重算**，是"打开最小化的 App 掉帧"的最大单一来源。
-        //   动画跑完（WINDOW_RESTORE_GRACE_MS）自动恢复，稳态观感不受影响。
-        radius: (this.acrylicOn && !this.windowRestoring) ? 32 : 0,
-        color: this.root_background_color(),
-        saturation: this.scheme === 'dark' ? 0.2 : 0.35,
-        brightness: 1.0,
-      })
 
       if (this.comingSoonText.length > 0) {
         this.coming_soon_toast()
@@ -6311,6 +6371,13 @@ struct Index {
     }
     .width('100%')
     .height('100%')
+    // ★ 语言切换的整树重建锚点（用户 2026-10-23 报"切语言切不全"）：key 里绑定
+    //   语言档位，切换语言 ⇒ key 变化 ⇒ 整棵子树销毁重建，页面上所有 t() 重求值
+    //   —— 静态文本（导航标签、标题、设置分组名……）也会换语言。此前全项目
+    //   没有任何组件订阅语言键，只有"恰好被心跳重渲染"的节点会换词（=部分切换）。
+    //   代价：一次性整页重建，预览 XComponent 同步重建并重走 surface attach
+    //   （画面闪一下，与独立窗口互挪同一条恢复路径）；平时 key 不变，零开销。
+    .key(`lang-${this.languageIndex}`)
   }
 
   /**

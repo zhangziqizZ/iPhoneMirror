@@ -23,7 +23,7 @@ import { BusinessError } from '@ohos.base';
 
 /** 检查目标仓库（与关于页 GITHUB_REPO_URL 同源）。 */
 const OWNER: string = 'zhangziqizZ';
-const REPO: string = 'iPhoneMirror';
+const REPO: string = 'iiPhoneMirror';
 /** Releases API：latest = 最新一条非草稿 Release（可能含预发布）。 */
 const LATEST_RELEASE_URL: string =
   `https://api.github.com/repos/${OWNER}/${REPO}/releases/latest`;

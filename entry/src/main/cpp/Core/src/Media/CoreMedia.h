@@ -135,7 +135,27 @@ struct SampleBuffer {
     std::vector<SampleTimingInfo> timing;
     std::vector<std::uint8_t> sample_data;
     std::vector<std::uint32_t> sample_sizes;
+    // QuickTime sample attachment index 29. Keep the wire value separate
+    // from decoder geometry: the compressed canvas may stay portrait while
+    // the sender changes presentation orientation on every frame.
+    std::optional<std::uint32_t> display_rotation;
 };
+
+// QuickTime uses its own orientation values, not EXIF orientation numbers.
+// The three nonidentity transforms were verified against Home-screen text
+// on iPad15,7; zero preserves the canvas. Leave other values unapplied
+// instead of guessing a mirror.
+[[nodiscard]] constexpr std::optional<unsigned> display_rotation_turns(
+    std::optional<std::uint32_t> value) noexcept {
+    if (!value) return std::nullopt;
+    switch (*value) {
+    case 0: return 0;
+    case 3: return 2;
+    case 4: return 1;
+    case 7: return 3;
+    default: return std::nullopt;
+    }
+}
 
 // Input begins with the `sbuf` magic returned by parse_sample_envelope.
 // Every nested length is checked before any field is read.

@@ -71,7 +71,11 @@ function resolve_system_lang(): string {
     const sys: string = i18n.System.getSystemLanguage();
     const lower: string = (sys ?? '').toLowerCase();
     if (lower.startsWith('zh')) {
-      cached_system_lang = lower.includes('hk') ? 'zh-HK' : (lower.includes('tw') ? 'zh-TW' : 'en-US');
+      // ★ 2026-10-23 修：简中系统上这里原来给的是 'en-US'（注释写"含 zh 其它 →
+      //   zh-CN"，代码却写 en-US）——「跟随系统」档在简中系统上直接变英文界面，
+      //   这就是用户报"切换语言不能完全切换"里最扎眼的一条。
+      cached_system_lang = lower.includes('hk') ? 'zh-HK'
+        : (lower.includes('tw') ? 'zh-TW' : 'zh-CN');
     } else {
       cached_system_lang = 'en-US';
     }
@@ -408,6 +412,22 @@ const ZH2EN: Record<string, string> = {
   'WizardDuplicate': 'This key is already mapped',
   'WizardChooseAction': 'Choose an action first',
   '完成': 'Done',
+  // ── 1.0.65 补齐：这些串此前只有中文，英文界面会直接显示中文 ──
+  '确认退出': 'Confirm exit',
+  '投屏正在进行，确认退出？': 'Mirroring is in progress. Exit anyway?',
+  '最小化到托盘': 'Minimize to tray',
+  '应用信息、更新和诊断': 'App info, updates and diagnostics',
+  '查看更新内容并一键完成升级': 'See what is new and upgrade in one tap',
+  '刷新检查': 'Refresh check',
+  '解绑': 'Unbind',
+  'iPhoneMirror 已在运行': 'iPhoneMirror is already running',
+  '关闭其他窗口后，当前窗口会继续启动；关闭当前窗口不会影响已经运行的投屏。':
+    'The current window keeps starting after the other one is closed; closing this window does not affect mirroring already in progress.',
+  '首次使用此投屏设备时，请确认列表中的蓝牙客户端就是当前设备。之后切换选项卡会自动使用此绑定。':
+    'When using this mirroring device for the first time, confirm the Bluetooth client in the list is the current device. Switching tabs afterwards applies this binding automatically.',
+  '请确认当前视频投放是否正常？': 'Is the current video output working correctly?',
+  '统一预览所有页面、弹窗和运行期参数':
+    'Preview all pages, dialogs and runtime parameters in one place',
 };
 
 /** 简体中文 → 繁體中文（香港）。 */
@@ -727,6 +747,22 @@ const ZH2HK: Record<string, string> = {
   'WizardDuplicate': '此按鍵已經被映射',
   'WizardChooseAction': '請先選擇動作',
   '完成': '完成',
+  // ── 1.0.65 补齐（与 ZH2EN 同一批） ──
+  '确认退出': '確認退出',
+  '投屏正在进行，确认退出？': '投屏正在進行，確認退出？',
+  '最小化到托盘': '最小化至系統匣',
+  '应用信息、更新和诊断': '應用程式資訊、更新與診斷',
+  '查看更新内容并一键完成升级': '查看更新內容並一鍵完成升級',
+  '刷新检查': '重新整理檢查',
+  '解绑': '解除綁定',
+  'iPhoneMirror 已在运行': 'iPhoneMirror 已在執行',
+  '关闭其他窗口后，当前窗口会继续启动；关闭当前窗口不会影响已经运行的投屏。':
+    '關閉其他視窗後，目前視窗會繼續啟動；關閉目前視窗不會影響已經運行的投屏。',
+  '首次使用此投屏设备时，请确认列表中的蓝牙客户端就是当前设备。之后切换选项卡会自动使用此绑定。':
+    '首次使用此投屏裝置時，請確認清單中的藍牙用戶端就是目前裝置。之後切換分頁會自動使用此綁定。',
+  '请确认当前视频投放是否正常？': '請確認目前視訊投放是否正常？',
+  '统一预览所有页面、弹窗和运行期参数':
+    '統一預覽所有頁面、彈窗與執行期參數',
 };
 
 /**

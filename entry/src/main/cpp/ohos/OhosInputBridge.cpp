@@ -4,6 +4,7 @@
 #include "Text/Utf.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 namespace iPhoneMirror::ohos {
@@ -51,6 +52,13 @@ std::int32_t OhosInputBridge::start(const wchar_t* udid) {
         lastErrorMessage_ = "反向控制通道已在运行";
         return static_cast<std::int32_t>(Result::SessionAlreadyExists);
     }
+    // 每次开启新的反向控制会话都推进输入生命周期代号并重置序号，防止上一会话
+    // 残留的排队 HID 帧带着相同 generation 被新会话接收（对应上游 1.8.5
+    // "Keep host input lifetimes distinct across child-process restarts so queued
+    //  input and clipboard requests cannot enter a later session with a reused
+    //  protocol counter" 的等价加固）。generation 由 OhosHidMessage 编码进每帧。
+    ++generation_;
+    seq_ = 0;
     state_ = ReverseControlState::Connecting;
     tunnel_ = std::make_unique<OhosCoreDeviceTunnel>();
     const std::string udidUtf8 = text::wide_to_utf8(udid);
@@ -96,7 +104,14 @@ std::int32_t OhosInputBridge::sendTouch(const TouchPoint* points, std::uint32_t 
         if (!validAction(points[i].action)) {
             return static_cast<std::int32_t>(Result::InvalidArgument);
         }
-        if (points[i].normalizedX < 0.0f || points[i].normalizedX > 1.0f ||
+        // ★ 必须显式判 isfinite：IEEE-754 下 `NaN < 0.0f` 与 `NaN > 1.0f`
+        //   **都是 false**，光靠上下界比较放不放不住 NaN；±Inf 也只被挡住一半。
+        //   漏过去的 NaN 最终进 std::to_string(float) ⇒ 拼出 `{"x":nan}` 这种
+        //   非法 JSON，对端整条报文拒绝，界面上只表现为"点了没反应"。
+        const bool finite = std::isfinite(points[i].normalizedX) &&
+            std::isfinite(points[i].normalizedY);
+        if (!finite ||
+            points[i].normalizedX < 0.0f || points[i].normalizedX > 1.0f ||
             points[i].normalizedY < 0.0f || points[i].normalizedY > 1.0f) {
             return static_cast<std::int32_t>(Result::InvalidArgument);
         }
@@ -124,7 +139,10 @@ std::int32_t OhosInputBridge::sendTouch(const TouchPoint* points, std::uint32_t 
 
 std::int32_t OhosInputBridge::sendKeyboard(const std::uint8_t* usages, std::uint32_t count,
     std::int32_t releaseAll) {
-    if (usages == nullptr && releaseAll == 0) {
+    // ★ 与 im_send_keyboard 同一条判据："没给数组 ⇒ count 必须为 0"。
+    //   写成 `usages == nullptr && releaseAll == 0` 会放行
+    //   `nullptr + releaseAll != 0`，下面 formatKeyboardBatch 的 usages[i] 就是 UAF。
+    if (usages == nullptr && count != 0) {
         return static_cast<std::int32_t>(Result::InvalidArgument);
     }
     if (count > MaxKeyboardUsages) {

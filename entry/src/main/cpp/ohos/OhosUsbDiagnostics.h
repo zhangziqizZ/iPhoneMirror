@@ -39,9 +39,10 @@ inline std::deque<std::string>& usb_diag_lines() {
     return value;
 }
 
-// 保留条数：够覆盖"认领 → 0x52 → 重枚举 → 选中配置 → 开流"这一串判断，
-// 又不至于把界面行撑爆。
-inline constexpr std::size_t UsbDiagCapacity = 6;
+// 保留条数：原 20 条按 iPhone fd 配对链路估的；实测一轮配对（含接口
+// 发现、握手、隧道、lockdown 对话）就能刷掉十几条，提到 60 才装得下
+// 一整轮现场。
+inline constexpr std::size_t UsbDiagCapacity = 60;
 
 } // namespace detail
 
@@ -57,14 +58,18 @@ inline void note(std::string_view line) noexcept {
     }
 }
 
-// 按时间顺序拼成一行，` | ` 分隔。没有记录时返回空串——界面据此决定是否显示。
+// 按时间顺序拼成多行（每条一行）。没有记录时返回空串——界面据此决定是否显示。
+//
+// ★ 为什么用换行而不是 " | " ★：fd 配对链路一步一条、一条比一条关键，单行
+// 拼接 + 定长截断会把最早被推出来、但往往正是失败发生处的条目整个吞掉。
+// 换行后 UI 按行显示，截断也按行丢，每条记录的完整性有保障。
 [[nodiscard]] inline std::string tail() {
     try {
         std::scoped_lock lock(detail::usb_diag_mutex());
         const auto& lines = detail::usb_diag_lines();
         std::string result;
         for (const auto& line : lines) {
-            if (!result.empty()) result += " | ";
+            if (!result.empty()) result += '\n';
             result += line;
         }
         return result;

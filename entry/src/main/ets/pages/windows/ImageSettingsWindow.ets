@@ -272,6 +272,9 @@ struct ImageSettingsWindow {
     this.contrastValue = DEFAULT_CONTRAST;
     this.saturation = DEFAULT_SATURATION;
     this.gamma = DEFAULT_GAMMA;
+    // ★ 重置也必须走一次预览：原版 OnResetClick 里调了 OnAdjustmentValueChanged，
+    //   这里漏掉的话滑杆归位了、画面却还是上一组参数（直到用户再动一次滑杆）。
+    this.schedule_preview();
   }
 
   /** 原版 OnSaveClick。 */

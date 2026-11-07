@@ -1,10 +1,12 @@
 #include "Media/CoreMedia.h"
+#include "Media/H264.h"
 #include "Protocol/QuickTimePacket.h"
 
 #include <bit>
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 
 namespace iPhoneMirror::coremedia {
@@ -78,9 +80,34 @@ void parse_avcc(FormatDescription& format) {
         if (!valid || sps.empty() || pps.empty()) continue;
         format.sequence_parameter_sets = std::move(sps);
         format.picture_parameter_sets = std::move(pps);
+        if (const auto sample_format = h264::sample_format_from_sps(format.sequence_parameter_sets.front())) {
+            format.chroma_format = sample_format->chroma_format;
+            format.bit_depth_luma = sample_format->bit_depth_luma;
+            format.bit_depth_chroma = sample_format->bit_depth_chroma;
+        }
         format.decoder_configuration_record.assign(config.begin(), config.begin() + static_cast<std::ptrdiff_t>(offset));
         return;
     }
+}
+
+std::optional<std::uint32_t> parse_display_rotation(std::span<const std::uint8_t> bytes) {
+    std::optional<std::uint32_t> result;
+    std::size_t offset{};
+    while (offset < bytes.size()) {
+        const auto pair = read_chunk(bytes, offset);
+        if (pair.magic != quicktime::fourcc('k', 'e', 'y', 'v')) continue;
+        std::size_t position{};
+        const auto key = read_chunk(pair.payload, position);
+        if (key.magic != quicktime::fourcc('i', 'd', 'x', 'k') || key.payload.size() != 2 ||
+            key.payload[0] != 29 || key.payload[1] != 0) continue;
+        const auto value = read_chunk(pair.payload, position);
+        if (position == pair.payload.size() && value.magic == quicktime::fourcc('n', 'm', 'b', 'v') &&
+            value.payload.size() == 5 && value.payload[0] == 3) {
+            const auto rotation = u32le(value.payload.data() + 1);
+            if (rotation <= 7) result = rotation;
+        }
+    }
+    return result;
 }
 
 void parse_hvcc(FormatDescription& format) {
@@ -317,10 +344,10 @@ SampleBuffer parse_sample_buffer(std::span<const std::uint8_t> serialized) {
             }
         } else if (chunk.magic == quicktime::fourcc('f', 'd', 's', 'c')) {
             result.format = parse_format_description(chunk.payload);
-        } else if (chunk.magic == quicktime::fourcc('s', 'a', 't', 't') ||
-                   chunk.magic == quicktime::fourcc('s', 'a', 'r', 'y')) {
-            // Attachments affect frame metadata but not the encoded payload.
-            // They are validated by read_chunk and intentionally skipped here.
+        } else if (chunk.magic == quicktime::fourcc('s', 'a', 't', 't')) {
+            result.display_rotation = parse_display_rotation(chunk.payload);
+        } else if (chunk.magic == quicktime::fourcc('s', 'a', 'r', 'y')) {
+            // Per-sample decode flags do not describe display rotation.
         } else {
             throw std::runtime_error("unknown CMSampleBuffer chunk: " + quicktime::fourcc_string(chunk.magic));
         }

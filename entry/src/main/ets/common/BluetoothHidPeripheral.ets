@@ -79,7 +79,7 @@ const REPORT_TYPE_FEATURE = 3;
 //     （HID Service 规范 2.5.3.2 只要求"同一 Report 类型存在多个实例时 Report ID
 //      必须非零"；只有一个实例时允许为 0），所有 report 共用它，**载荷首字节带
 //      report id**。同 UUID 的 Report 特征只有一个 ⇒ 投递没有歧义。
-//     这正是 Android 手机当蓝牙键鼠外设时用的那套布局，iOS / Windows 都认。
+//     这正是手机当蓝牙键鼠外设时最通用的一套布局，iOS / Windows 都认。
 //   MULTI（0）：照抄上游 Windows 的 5 特征布局（Report ID 1/2/3/4/5，载荷不带 id）。
 //     Windows 能工作是因为它的栈按**特征对象**投递；鸿蒙这条走不通（见上），
 //     保留它只作对照 —— 切换一次就能证明"到底是布局问题还是别的问题"。
