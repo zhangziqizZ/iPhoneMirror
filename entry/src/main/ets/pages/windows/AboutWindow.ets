@@ -208,7 +208,7 @@ const S_TITLE = (): string => t('关于');                                    //
 const S_SUBTITLE = (): string => t('应用信息、更新和诊断');// AboutSubtitle
 const S_DESCRIPTION = (): string => t('低延迟 iPhone 屏幕投射、录制、直播与虚拟摄像头。');// AboutDescription
 /**
- * 一个版本的更新记录（关于页「版本更新」按版本分组展示）。
+ * 一个版本的更新记录（关于页「版本更新」展示的**最新一版**）。
  *
  * 为什么在代码里存一份而不是读文件：鸿蒙 App 安装包里没有随包可读的
  * CHANGELOG.md（也没有 explorer 打开本地文件），所以关于页直接内嵌这份常量。
@@ -231,18 +231,17 @@ export class ChangelogRelease {
 }
 
 /**
- * 变更说明（CHANGELOG.md 的镜像），**最新版本排在最前**。
+ * 最新版本的变更说明（CHANGELOG.md 顶节的镜像）。
  *
- * ★ 对外条目粒度（用户 2026-10-02 要求）：只保留最近若干版，更早的全部折成
- *   末尾一条「之前的更新」。理由：每天连续迭代出十几个版本号是开发节奏，不是
- *   用户关心的功能边界 —— 摊成一长列表只会让用户看不清"今天到底改了什么"。
- *   版本号本身仍然逐次 +1（用来核对改动有没有进包），但**条目**按功能合并。
+ * ★ 应用内**只展示最新一版**（用户 2026-11-07 要求）：不展示历史更新。
+ *   历史逐版记录留在仓库的 CHANGELOG.md 与 docs/CHANGELOG-archive.md，
+ *   应用内通过「更新日志」按钮跳 GitHub Releases 查看 —— 那里本来就是按
+ *   版本分的完整档案，比在应用里摊一长列表更清楚。
  *
- * 关于页按版本分组：默认只展开最新一版，**其余版本（含「之前的更新」）也都可以
- * 点开**（用户 2026-10-02 晚间更正：上一版把旧版做成了不可展开，点不开）。
+ * 发新版本时**只替换这一个常量**（版本号、日期、条目整体换成新版），
+ * 旧版条目不要往这里堆。
  */
-const CHANGELOG_RELEASES: ChangelogRelease[] = [
-  new ChangelogRelease('1.1.1', '2026-11-07', [
+const LATEST_RELEASE: ChangelogRelease = new ChangelogRelease('1.1.1', '2026-11-07', [
     '新增：iOS 有线文件浏览（AFC）—— 侧边栏「文件」入口直连 iPhone 内部存储，支持面包屑路径、目录进退、下载到沙箱 Downloads、删除、新建目录、重命名。链路自己实现（上游 Windows 版走 Apple AMDS 本地 socket，没有这条）',
     '修复：usbmux 隧道被设备 RST —— 伪 TCP 头的 th_off 是 4 bit 数据偏移、占 tcphdr 高 4 位，20 字节头的正确编码是 0x50 而我们写的是 0x05，设备按高 4 位算出"头长 = 0"判为坏包直接 RST。已用 static_assert 把这条不变量钉死',
     '修复：设备 SYN|ACK 的 seq 可能不是 0，确认号改为按设备 seq 计算（收到 SYN|ACK 时 tx_ack = seq + 1，收数据后 tx_ack = seq + len(payload)），不再假定设备 seq 为 0',
@@ -257,186 +256,25 @@ const CHANGELOG_RELEASES: ChangelogRelease[] = [
     '修复（原生）：USB 批量读按 memmap 实际容量裁剪长度 —— 驱动报出异常大的 transferedLength 时会越界读',
     '修复（原生）：音频渲染器 set_volume/set_enabled 裸读句柄与 stop() 的 Release 并发即 UAF；帧可用通知与"持 capture_mutex 析构解码器"构成 ABBA —— 两处都改为锁内只摘指针、锁外销毁',
     '依赖：新增 OpenSSL 3（libssloh.so.3 / libcryptooh.so.3）随 HAP 分发 —— AFC 的两条 TLS 会话需要，NDK 不带 OpenSSL',
-  ]),
-  new ChangelogRelease('1.1.0', '2026-10-18', [
-    '新增：沉浸光感视觉体系（GlowLayer 辉光组件，三档强度 + 悬停淡入淡出 + 状态动画），并接入系统级材质让原生控件也带沉浸光感',
-    '新增：系统托盘（Tray）—— 关闭或最小化后驻留后台，常驻通知 + 一键唤回主窗口',
-    '新增：统一光感下拉 MaterialSelect，修复此前下拉"重启后为空、需先点选才显示"的问题',
-    '新增：设置持久化 AppPreferences —— 主题、语言、分辨率、帧率、解码偏好重启后保留',
-    '新增：窗口隐藏时暂停光感渲染（WindowVisibilityController），减少后台开销',
-    '完整逐版记录见仓库 CHANGELOG.md 与 docs/RELEASE_v1.1.0.md',
-  ]),
-  new ChangelogRelease('1.0.65', '2026-10-29', [
-    '修复编译失败：Index.ets 里 root_background_color() 被定义了两次（移除磨砂时的遗留），ArkTS 报 Duplicate function implementation，整个 CompileArkTS 任务失败',
-    '修复：投屏设置窗口的「开始投屏 / 停止投屏」点了完全没反应 —— 两个请求键只有写入端，主窗口从来没订阅过。现在主窗口每轮轮询消费并立即复位，状态行也不再谎称"命令总线未接通"',
-    '修复：画面调节的「重置」只把滑杆拨回默认值，画面不变、也不置脏 —— 缺的是那次 150ms 防抖预览调用',
-    '修复：主题偏好重启就丢，而且主窗口一旦重建（切语言整树重建 / 从托盘唤回）会把已选主题覆盖回「跟随系统」—— 偏好现在落盘，themeIndex 改为 @StorageLink 双向同步，启动时在 UI 装载前读回',
-    '修复：提示框已经开着时再来一条提示不显示（SubWindowHost 对已存在窗口只做 showWindow，aboutToAppear 不会再跑），新请求留在 pending 里污染下一次；现在用请求序号 + @Watch 让活着的窗口换内容',
-    '修复：关窗后的异步回调继续写已销毁组件 —— 关于页的「检查更新」网络请求、独立预览窗口的 600ms 装饰重试、导航栏提示定时器，三处都补了销毁判定/句柄回收',
-    '修复：子窗口 destroyWindow 失败时关窗钩子已被提前删除，下次关闭不再走回滚（画面调节"回滚失败就不关"会失效）',
-    '补齐 13 条缺失译文（英文/繁中）：此前「确认退出」「最小化到托盘」「解绑」等串在英文界面直接显示中文',
-    '修复（原生）：解码器销毁持锁调用 Stop/Destroy，而解码回调进入即抢同一把锁 ⇒ 参数集切换/停止投屏时可能互等卡死。现在一律"锁内只摘指针、锁外销毁"',
-    '修复（原生）：解码器 Configure/RegisterCallback/Prepare 失败时半成品实例不销毁也不置空，导致之后的重建判断永远跳过、解码器永久停在坏态；现在失败即摘除并在锁外销毁',
-    '修复（原生）：USB 批量读只按调用方缓冲裁剪长度，未按 memmap 实际容量裁剪 —— 驱动报出异常大的 transferedLength 时会越界读',
-    '修复（原生）：音频渲染器的 set_volume/set_enabled 裸读句柄，与 stop() 的 Release 并发就是 UAF；现在句柄在锁内摘取、锁外释放',
-    '修复（原生）：帧可用通知借用 capture_mutex，与「持 capture_mutex 析构解码器」构成 ABBA —— 停止投屏时正好有一帧输出就会卡死；现在帧通知用独立锁',
-  ]),
-  new ChangelogRelease('1.0.64', '2026-10-11', [
-    '对外文档诚实性收紧（纯文档改动，不含任何代码改动）：README 不再宣称 USB 有线投屏可用 —— ACCESS_DDK_USB 必须进 AGC 签名 profile 的 ACL 才能装包，现已临时移出，改用 ⚠️ 并说明请走 AirPlay',
-    '第三方许可声明不再失实：THIRD_PARTY_NOTICES.md 原先整份是 Windows 版内容（ffmpeg.exe / *.ps1 / WPF-UI / Markdig 在鸿蒙版都不存在），且其中"应用不链接 receiver"那句在鸿蒙版不成立 —— CMake 里是真实的静态链接。已在文件头列明实际链入的三个组件及其许可',
-    'SECURITY.md 记一笔已知限制：vendored plist 解析无递归深度上限。暂不修 —— 攻击者须先连上你的 AirPlay 会话；且修补点在第三方源码内，代价是失去与上游逐文件可比对的能力',
-    '修复：无线投屏延迟动辄上百、偶发上千毫秒（原版 Windows 只几十毫秒）—— 真因是 OH_MD_KEY_VIDEO_ENABLE_LOW_LATENCY 在真机上**从来没有生效过**。configure_annex_b 里那行 `low_latency_ = false` 与它正上方那段注释的结论完全相反（注释写「原版 MFT 永远开 low_latency、没有关闭路径」，代码写关），成员默认值也是 false。于是每次来参数集（会话开始必有、分辨率切换也必有）就无条件把低延迟关掉，v1.0.55 实测的那 ≈233ms 周期性滞后一直都在，从来没被兑现',
-    '低延迟与「颜色对」不再二选一：v1.0.59 撤回低延迟的根因是靠 attr.size 反推 stride —— 而低延迟会把输出缓冲布局从紧致改成 stride>width，attr.size 报的却是逻辑大小，UV 就拷到了 Y 平面尾部（绿屏/颜色全错）。现在 stride 直接取 OH_NativeBuffer_GetConfig 的真值，并且那条「stride×h×3/2 > attr.size 就退回 width」的越界兜底改为**只对推导值生效**（真值的对齐 padding 本来就不在 attr.size 里，套上去会把正确的 stride 抹掉）。两件事同时成立，才敢把低延迟开回来',
-    '自愈路径全部保留，收益落地但风险有界：本机若确实不兼容（UV 连续全零 / 硬件档探帧零像素 / 拿不到 native buffer 且 stride 推不出来），会在几帧内自动关掉低延迟并按原档重建。验证看状态行的「已自动关低延迟 N 次」—— 它 >0 说明自动关过，=0 则说明低延迟正在生效',
-    '移除：窗口半透明与全窗磨砂。全窗 backgroundEffect（radius 32）在最小化 / 最大化 / 还原 / 拖拽缩放这些系统窗口动画里**每帧都要重算模糊**，是掉帧最大单一来源。随之删掉「半透明窗口」开关、浓度档位、容器配色探测读数，以及只为「动画期临时关磨砂」而存在的窗口尺寸脉冲广播；主窗背景改由根容器的不透明 BACKGROUND 兜底',
-    '修复：托盘右键出现两个「退出」（第一个是应用自己的，第二个是系统自动追加的），且两个都关不掉应用 —— 真因是 EntryAbility.onPrepareToTerminate 把所有系统级终止（Dock 右键关闭 / 系统托盘退出 / 关机）统统拦截成收托盘，而这些入口没有任何一个能穿过它 ⇒ 除了任务管理器别无退路。现在删掉应用自己的那一项，onPrepareToTerminate 一律放行：Dock 右键关闭 = 退出，系统托盘「退出」= 退出，窗口 × = 收托盘（受「最小化到托盘」开关控制）',
-  ]),
-  new ChangelogRelease('1.0.63', '2026-10-11', [
-    '"iPhone 配置包无 IDR"边界自愈：v1.0.62 那次画面黑屏的真因是 iOS 偶发只给 SPS+PPS 不给 IDR（vendor 库没暴露 /feedback 让接收端主动让 iPhone 重发），不是 shader 问题。本版在入队侧检测"参数集已就绪 + 入队 ≥ 60 帧仍无 IDR" → 进入 demand_idr 模式截短非 IDR 帧，等 IDR slice 来了再放行',
-    '状态行补"⚠️ 配置包无 IDR，请在 iPhone 控制中心重新点一次屏幕镜像"指引 —— 真有 IDR 缺失的话最稳的恢复路径是 iPhone 端重连，目前工程能力做不到不重连自愈',
-    '导出诊断 videoNoIdrDropped / videoNoIdrReconfigures / videoDemandIdrAfterReconfig 三字段',
-  ]),
-  new ChangelogRelease('1.0.62', '2026-10-11', [
-    '画面"色边糊"修复：shader 改用 texelFetch + 4 邻居手动双线性 chroma 上采样，替代 GL_LINEAR 默认滤波。NV12 UV 平面是 4:2:0，色度物理上限只有 1/4（修不掉），但算法叠加的糊应该明显减轻。如果还有糊 = 源端物理糊（修不动）',
-  ]),
-  new ChangelogRelease('1.0.61', '2026-10-11', [
-    '视频诊断：加收包率（videoRxRate）显示，区分"iPhone 源端 30 fps 已拿满" vs "源端 60 fps 我们丢了一半"。状态行追加 收包 N fps/解码 N fps（已拿满 / ★丢 N fps）。下次截图一眼分清，决定要不要把队列上限 2 → 5–6',
-  ]),
-  new ChangelogRelease('1.0.60', '2026-10-05', [
-    '撤回 v1.0.58 的 PCM 增益 ramp —— 那条改的方向错了，PCM ramp 与"持续电音/底噪/延迟/错位"没有因果，撤回到系统级音量（OH_AudioRenderer_SetVolume）',
-    '收紧音频缓冲到 v1.0.50 口径 —— 起播预缓冲 16 包→4 包、积压 32 包→6 包。鸿蒙侧没有音画同步（上游也没做），音频延迟 570ms 与视频 250ms 必然错位 ~280ms；现在音频总延迟 ~220ms，与视频更接近',
-  ]),
-  new ChangelogRelease('1.0.59', '2026-10-05', [
-    '撤回：v1.0.55 开的低延迟模式（OH_MD_KEY_VIDEO_ENABLE_LOW_LATENCY=1）—— 它改变了硬件解码器输出缓冲布局（stride>width），而 attr.size 报的是逻辑大小，导致 UV 拷到错位置、画面色彩全错。永久关掉，恢复 v1.0.55 之前的色彩正确状态。代价：v1.0.55 兑现的 ≈233ms 周期性滞后恢复，延迟回到 250-300ms 量级',
-  ]),
-  new ChangelogRelease('1.0.58', '2026-10-05', [
-    '修复：音频「咔咔」爆音 —— 启播/暂停/调音量时系统级音量瞬时切换是有声的硬切，对照上游在 PCM 回调里加线性增益 ramp，让音量在一个 endpoint buffer（~10ms）内平滑过渡；启播从 0 淡入，停播衰减到 0，调音量也不咔',
-  ]),
-  new ChangelogRelease('1.0.57', '2026-10-05', [
-    '修复：画面全绿 —— 开低延迟模式后解码器的输出缓冲不再是紧致布局，按逻辑大小推出的 chroma 位置指到了对齐填充区（全零），而 NV12 里 UV 全零渲染出来正好是纯绿。现在出帧前先校验 chroma 是否有效，废帧直接丢弃不上屏，并把「★绿屏废帧 N」如实摊出来',
-    '修复：策略链认不出坏档位 —— 它只问"回调有没有像素"，一个只会吐绿屏废帧的档位会被当成成功、链永不推进。现在废帧不算出过像素：链会自动往下试，并在确认是低延迟引起的（连续 3 帧）时自动关掉它按同档重建',
-    '音频：对照上游重做抖动与缓冲 —— 重传等待窗从 4 包（≈44ms）放宽到上游的 16 包（≈175ms），Wi-Fi 上一个几十毫秒的抖动不再让包被静音顶替（那正是反复出现的电音）；起播预缓冲、积压上限、环形容量也换成上游无线档的口径（180ms / 400ms / 500ms）。代价：音频起播延迟从 ~90ms 涨到 ~190ms',
-  ]),
-  new ChangelogRelease('1.0.56', '2026-10-05', [
-    '修复：延迟读数会骗人（偏低一整个帧间隔）—— 上一版改成"非阻塞取帧"后，出帧实际发生在**下一个**包被推入时，而延迟仍拿"本次推入的那个包"的到达时刻去减，等于每帧凭空少算一个帧间隔（帧率越低少算越多）。现在按帧自己的 PTS 反查它对应输入包的到达时刻来算，这才是对的口径',
-    '诊断：新增「延迟未归因 N」—— 出帧对不上输入包的帧会被跳过而不是凑进平均数。延迟格显示「—」时，靠它区分"还没量到"与"永远量不到（该读数不可信）"',
-  ]),
-  new ChangelogRelease('1.0.55', '2026-10-05', [
-    '修复：帧率低、延迟高 —— 对照上游源码逐条补齐：① 打开解码器的低延迟模式（上游禁止解码器为排序多留帧，文档记此举消除了约 233ms 的周期性滞后）；② 不再"每帧阻塞等这一帧的输出"（上游是喂完就把当时所有可读输出一次取走、一次都不等）——等待既把帧率钉在 1/等待，又让每帧凭空多等一轮，还占住解码线程导致收包跟着堆积；③ 两处队列上界按上游收敛到 2 帧',
-    '诊断：「解码耗时」读数改口径为「出帧间隔」（原来那个数含等待上限，本来就不等于解码耗时）；现在量的是解码器多久吐一帧',
-  ]),
-  new ChangelogRelease('1.0.54', '2026-10-04', [
-    '修复：音频「电音、很炸」—— 三处叠加的根因都在 AAC 解码链上：① 解码失败的包原来会把缓冲里的上一包残留当 PCM 播出去（听感就是周期性电音），现在补静音并新增「AAC解码错误 N」读数；② 解码器输出缓冲把"字节数"当"元素数"用，512 帧的包会越界写坏相邻缓冲，已放大并按正确单位传参；③ 收包路径被上游硬编码成"永远不请求重传"，UDP 一丢包就是永久空档 + 时间轴压缩，已恢复标准的重传机制',
-    '修复：音频持续断续、丢旧帧 ≈ 已播帧数 —— 预缓冲 43ms、积压容忍 65ms 在 Wi-Fi 抖动下都不够（实测 26 秒欠载 362 次），现放宽到 87ms / 208ms，并加大 UDP 内核接收缓冲，减少"内核队列满了静默丢包"这一层',
-  ]),
-  new ChangelogRelease('1.0.53', '2026-10-04', [
-    '诊断：状态行新增「收包停滞」读数 —— 「已收 N 帧」是累计值，它一停就有两种相反解读（iPhone 不发了 / 我们的收包线程卡了），此前没有任何读数能把两者分开，只能猜。现在会显示"距最后一个视频包多久"，超过 3 秒明确标为 ★收包已停滞；上一版那个收包线程死锁，本该靠这一格一眼定案',
-    '修复：mDNS「工作线程被冻结」的告警不会消失 —— 进程被后台冻结过一次之后，哪怕早已回到前台、心跳完全正常，那条过期报错仍永久挂在界面上，带着一条不成立的报错去排查方向必然错。现在心跳恢复即自动解除（且只解除这一条，不会误删别处的真实错误）',
-    '修复：「冻结告警只报一次」的闩锁既无法复位、也没在新一轮广播时归零 —— 「重置告警」一直是个空操作（它复位的是另一个互不相关的同名变量），而重新广播后若再被冻结则**再也不报错**，表现为"界面一切正常、iPhone 就是搜不到"且毫无提示',
-  ]),
-  new ChangelogRelease('1.0.52', '2026-10-04', [
-    '修复：收包线程可能永久卡死 —— 上游把长度前缀改写成起始码的循环，在长度字段为 0（截断/错位/末尾残缺）时既不推进也不退出，整条收包线程就此静止（现场表现：收到 204 帧后再无任何进展，画面全黑无输出）。已补齐三种退出条件',
-    '诊断：新增「★配置包只有PPS没有SPS」提示 —— 此前这种情况只表现为"缺集待解 N 帧"，看不出问题在上游给的参数集本身残缺，排查方向容易整个搞错',
-  ]),
-  new ChangelogRelease('1.0.51', '2026-10-04', [
-    '诊断：状态栏「分辨率」不再显示来源不明的数字 —— 原来在解码器未上报流尺寸时会回落到渲染帧尺寸，而那个值可能只是 Configure 的配置尺寸（提示值），看着有值实则不实，已改为只认真值、拿不到就显示「—」',
-    '状态行并排摊出三个分辨率口径并标注来源：流尺寸（解码器上报的真值）/ 解码输出 / 配置，真值缺失时明确提示不要拿后两个当分辨率',
-  ]),
-  new ChangelogRelease('1.0.50', '2026-10-02', [
-    '修复：声音「炸」（爆音）—— AAC-ELD 的输出包长不是恒定 480（FDK 文档明写 512 或 480，取决于 downscale 因子），而音频链路把每包字节数无条件按 480 帧写死，解码器实际只写了一半、后面是上一包的残留被当成音频播出去。抖音这类高码率内容最容易触发（两种包长交替出现）。现按解码器实际帧长计算，播放回调粒度也跟随实测值',
-    '修复：帧率只有 0–5fps —— 丢帧策略过敏，画面反复定住。上一版是"队列一满就清空+等关键帧"，高码率高运动内容里瞬时抖动就够到队列上限（3），于是几乎每几秒冻一次。现在改为连续溢出 2 次才冻结，单次只丢一帧不冻结（短暂花屏会被下一个关键帧修掉，观感远好于画面定住）',
-    '诊断：状态行新增「★画面冻结中 N ms（在等关键帧）」—— 冻结时队列被清空，延迟读数反而很低，不显式说出来就会被误读成"延迟已经好了"，而实际画面是定住的',
-  ]),
-  new ChangelogRelease('1.0.49', '2026-10-02', [
-    '修复：延迟高、帧率低 —— 真根因是解码器内部「待推队列」没有任何上限。上一版给收包队列加了上限，但真正的堆积点在下一段（解码线程→解码器）：解码慢于实时就无限堆积，而每帧又阻塞等输出 50ms，队列越长等越久、越等越长（正反馈）。现已加上限（溢出丢最旧的帧并记账），等待时长改为按实测解码耗时自适应 —— 那个固定 50ms 其实是帧率天花板',
-    '修复：解码跟不上时，收包侧也要进入「等 IDR」—— 上一版只在收包队列满时等关键帧，但解码慢不等于收包慢，内部溢出时收包队列未必满，那条路径一直漏着，于是参考链断了还继续喂 P 帧（花屏）。现在解码器溢出会主动通知宿主，宿主清队列并等下一个关键帧',
-    '修复：解码器身份读数会骗人 —— 该字段此前从「用户偏好」推而不是从实际选中的档位推，策略链换到软解后仍显示硬件解码，与组件名里的 (sw) 自相矛盾；上一版让你据此判断的那个读数不可信，现以实际请求的解码器类型为准',
-    '修复：解码策略切换链卡在坏档位上 —— 判据是「有过输出回调」，而空回调也算，于是只会吐空帧的档位被当成成功，软件解码档永远轮不到；现改为只认真实出像素，探帧数也从 30 降到 8（高分辨率下等 30 帧要好几秒，用户只看到卡住）',
-    '诊断：状态行新增「解码器内堆积N次(峰值M)」「内部溢出重同步K次」「解码耗时Xms」，软解耗时超过一帧预算时直接给出结论「软解扛不住这个分辨率」，不必再靠帧率反推',
-  ]),
-  new ChangelogRelease('1.0.48', '2026-10-02', [
-    '修复：画面「胡成一坨」（花屏）—— 丢帧策略从"丢最旧的非关键帧"重写为"丢到下一个关键帧（IDR）为止"。被丢的 P 帧是后续所有帧的参考基准，丢一个 = 后面解出的每帧都拿错参考；现改为队列满即清空并等下一个 IDR 重新同步（等超 2 秒放弃，宁可花屏不冻结），并新增重同步次数/跳帧数/超时读数',
-    '修复：没有声音 —— RAOP 协议的音量单位是 dB（0=满刻度、-144=静音），旧实现把负值直接钳到 0 增益，而 iPhone 连接时必报一次音量 ⇒ 从第一次报音量起流就永远静音。现按原版口径换算（-30..0 dB → 0..100%），当前增益也显示在音频诊断里（0% 会明确提示 iPhone 侧静音）',
-    '诊断：状态行新增「解码器=组件名(hw/sw)·档N换M」与即时队列深度 —— 帧率低的第一分叉是"软解扛不动 3440×1440"还是"硬解但丢帧策略问题"，下一张截图即可定案',
-  ]),
-  new ChangelogRelease('1.0.47', '2026-10-02', [
-    '修复：切换语言仍然卡顿 —— 根因是 i18n.System.setAppPreferredLanguage()：官方口径写明它会让应用收到配置更新、由框架触发整个页面树 rebuild（社区另有"调用后卡死"报告），而它对本项目零收益（每个字都来自自带词典，没有一处读系统资源）。交互路径已不再调用它，系统层对齐挪到启动时（三道闸：每进程一次、现值相同不写、失败静默）',
-    '修复：整窗每 500ms 无差别重建 —— 轮询把状态对象换成新引用就等于"变了"，哪怕字段一模一样也会重渲染整棵树（主窗 362 处翻译 + 全部布局测量）。现改为逐字段比较后再赋值',
-    '修复：翻译函数每次调用都读一次全局存储 —— 主窗每秒两次整树重渲染 × 362 处调用，等于每秒上千次；生效语言已改为缓存',
-    '修复：关于页「实时日志」每 500ms 整本读日志文件（startup.log 无上限增长，跑一阵就是几 MB，且全在 JS 主线程同步读）—— 改为只读尾部 16KB，刷新周期降到 1s，内容没变不重建',
-    '新增：开发者工具里切换语言后显示本次切换自身耗时（ms），卡不卡有数字可核对，不再靠感觉',
-  ]),
-  new ChangelogRelease('1.0.46', '2026-10-02', [
-    '修复：状态栏「分辨率/帧率/延迟」在 AirPlay 投屏时恒为「—」—— 此前只读 USB 采集状态机，AirPlay 镜像不经过它。现接真值：分辨率=解码器上报的实际流尺寸，帧率=轮询差分实测（EMA 平滑），延迟=C++ 侧实测「收包入队→解码出帧」（不含 iPhone 编码与网络前段）',
-    '修复：音频格不再显示假数据 —— 改为渲染器回读的真实格式（如 48 kHz · 2 ch），没在播就如实「—」（此前只要开关开着就恒显 48 kHz · 2 ch）',
-    '修复：「之前的更新」无法展开 —— 所有版本都可展开/收起，默认只展开最新一版；展开真值收拢到父组件，消除 Prop→State 拷贝时序',
-    '修复：语言切换卡顿 —— 系统层切换调用与偏好落盘延后到整树重渲染之后，「跟随系统」档的系统语言解析改为缓存（原来每次 t() 都打一次系统调用）',
-    '翻译：与原版逐条对齐 —— 解析上游 Strings.xaml 三语词典，222 条译文替换为上游措辞，并补齐状态栏等新增键',
-  ]),
-  new ChangelogRelease('1.0.45', '2026-10-02', [
-    '新增：关于页「检查更新」真接入 GitHub Release 检查 —— 查询 Releases API 最新 tag 与本机版本比较；拿到就报版本号/日期/说明，仓库还没有 Release 或网络失败都照实说（不许在查不到时说"已是最新"）',
-    '「启动时检查更新」开关真正生效：进关于页时静默查一次，只在确认有更新时才改那行状态文案（失败不打扰，避免把自动检查的网络抖动当成按钮坏了）',
-    '修复黑屏根因之一：参数集不再只认配置包 —— 任何一个包里出现 SPS(7)/PPS(8) 都收进参数集缓存，凑齐即重建解码器。此前配置包是唯一来源，而它实测是 PPS 开头（`00000001 28…` = 缺 SPS），于是整个会话拿着坏参数集去解：推得进去、永远吐不出来，四档策略全试完也一样（它们共用同一份参数集，换档必然无效）',
-    '诊断：新增「集头」读数 —— Configure 真正用的那段参数集的前 8 字节（此前的「首帧头」是参数集+首帧拼好的结果，看不出 SPS 在不在），以及 NAL 账本 slice/IDR/SPS/PPS/无NAL、参数集来源（帧内/包内）与重配次数',
-    '缺参数集而未解码的数据帧不再静默丢弃，计入「缺集待解」',
-    '调整：更新日志按用户要求收敛 —— 早期版本折为一条「之前的更新」，只保留最近几版的功能条目',
-  ]),
-  new ChangelogRelease('1.0.44', '2026-10-02', [
-    '诊断：黑屏状态行直接携带解码链断点读数（参数集/真推/回调/有像素/太小/SPS失败/cfg/档位/丢弃），一张截图即可定位',
-    '新增 SPS/PPS 参数集包计数器：videoFrames 涨而参数集=0 ⇒ 解码器从未被配置，数据帧被静默丢掉（这条路此前没有任何可见计数）',
-  ]),
-  new ChangelogRelease('1.0.43', '2026-10-02', [
-    '优化：镜像画面延迟 —— 视频队列上界 12→3（直播镜像里旧帧没有价值，排队等于把延迟攒起来），丢帧时避开 IDR 关键帧（丢 IDR 会让后面一整段 P 帧作废、画面花掉好几秒）',
-    '优化：解码输出拷贝整块化 —— stride==width 时 Y/UV 各一次 memcpy（原来 1080p 每帧 1620 次调用），并绕开 resize() 的零初始化',
-    '优化：声音清晰度 —— OHAudio 回调粒度对齐一包（480 帧，AAC-ELD 固定包长），消除「每次回调都差一截、尾部补零」的系统性缺口；起播/高水位按包下调到 ~43ms / ~65ms',
-    '音频开流后回读真值并记日志：实际采样率、回调帧数、全链路延迟（请求的和 granted 的常常不是一回事，不回读只能靠猜）',
-    '变更：反控接管期间默认不再收起本地指针（用户要求「鼠标不要消失」）；想要上游观感可在设置里自己打开该项，跨启动保留',
-  ]),
-  new ChangelogRelease('1.0.42', '2026-10-02', [
-    '新增：界面语言真正可切换（简体 / 繁中香港 / 英文）—— 此前「界面语言」下拉只是没有作用的选项，选了不改任何界面文案；开发者工具里还直接回一句「当前不支持」',
-    '切换后立即生效：左侧导航、投屏按钮（开始/停止投屏）、画面工具（调节画面/独立窗口/刷新画面/全屏预览/录制与推流）、设置项标签（应用模式/界面语言/应用主题）、页脚按钮与「敬请期待」浮层',
-    '四档：跟随系统 / 简体中文 / 繁體中文（香港）/ English；下拉的选项文案本身也随当前语言变化',
-    '档位跨启动保留（@ohos.data.preferences 显式 putSync+flushSync 落盘，启动时在 UI 装载前读回）',
-    '修复：主窗左侧导航文案此前写在模块级常量数组里、只在加载时求值一次 ⇒ 加了翻译也不会刷新；开发者工具的语言键与主窗不同步，已统一',
-  ]),
-  // ── 更早的版本（1.0.42 及以前）折为一条 ──────────────────────────────────
-  // 版本号仍在仓库的 CHANGELOG.md / docs/CHANGELOG-archive.md 里逐条留档，
-  // 这里只放按主题归并的摘要（可展开查看）。
-  new ChangelogRelease('之前的更新', '1.0.42 及更早', [
-    '多语言真正可切换（1.0.42）：简体 / 繁中香港 / 英文，档位跨启动保留',
-    '延迟与音频优化（1.0.43）：视频队列 12→3、丢帧避开 IDR、OHAudio 回调粒度对齐 AAC-ELD 480 帧',
-    '黑屏诊断（1.0.44-45）：参数集自愈（配置包实测缺 SPS，改为扫帧内 SPS/PPS 凑齐重建解码器）、NAL 账本、检查更新接入 GitHub Releases',
-    '蓝牙 HID 反控（无感操控）：GATT 服务端自应答、Report Map 建链、单指指针 + 键盘投递、rawDelta 三态判据、接管层与键盘焦点等各轮定位与修复',
-    '窗口与显示：半透明/阴影子窗口、独立窗口 UIAbility、系统装饰两刀、EGLSurface 重挂与多窗口启停回读真值',
-    'AirPlay 音视频：mDNS 原生响应器、音频渲染链（OHAudio）、黑屏的多轮渲染/解码修复',
-    '工程与权限：开发者模式、权限 ACL 排错、USB DDK 权限、后台保活、截图与全屏预览等',
-    '完整逐版记录见仓库 CHANGELOG.md 与 docs/CHANGELOG-archive.md',
-  ]),
-];
-
-const LATEST_RELEASE_VERSION: string = CHANGELOG_RELEASES[0].version;
+  ]);
 
 /** 「最新」标记文案（标在最新版本的版本行上）。 */
 const S_LATEST_TAG = (): string => t('最新');
-/** 「版本更新」区块标题（按版本分组折叠，参考微信更新日志）。 */
+/** 「版本更新」区块标题（只展示最新一版的更新内容）。 */
 const S_WHATS_NEW = (): string => t('版本更新');
 
 /**
- * 单个版本的变更分组（「版本更新」里的一项）。
- * ★ 交互规则（用户 2026-10-02 晚间更正）：**所有版本都可展开/收起** ——
- *   上一版只允许展开最新版（旧版固定折叠、点击无效果），用户实测发现
- *   「之前的更新」根本点不开。展开真值在父组件的 expandedReleases，
- *   这里只拿 @Prop 标记 + 点击回调，不存在 Prop→State 拷贝时序。
+ * 最新一版的变更内容（「版本更新」区块的唯一一块）。
+ *
+ * ★ 只展示最新版本（用户 2026-11-07 要求）：应用内不再摊历史更新，
+ *   所以这里不需要「按版本分组 + 折叠/展开」那套交互 —— 只有一块内容，
+ *   直接铺开显示即可。
  */
 @Component
 struct ChangelogGroup {
   @Prop version: string = '';
   @Prop date: string = '';
   @Prop items: string[] = [];
-  @Prop isLatest: boolean = false;
-  @Prop expanded: boolean = false;
-  /** 点击版本行时回调父组件切换展开态（默认空实现，避免未接线时空转）。 */
-  onToggle: (version: string) => void = (): void => {};
 
   build(): void {
     Column() {
@@ -449,48 +287,34 @@ struct ChangelogGroup {
           .fontSize(11)
           .fontColor(DARK.MUTED_TEXT)
           .margin({ left: 8, top: 1 });
-        if (this.isLatest) {
-          Text(S_LATEST_TAG())
-            .fontSize(10)
-            .fontColor(ON_ACCENT)   // 亮蓝 ACCENT 底上的文字走 ON_ACCENT token（Apple 口径：亮底深字）
-            .backgroundColor(ACCENT)
-            .borderRadius(4)
-            .padding({ left: 6, right: 6, top: 2, bottom: 2 })
-            .margin({ left: 8 });
-        }
-        Blank();
-        FluentSymbol({
-          iconName: this.expanded ? 'ChevronUp20' : 'ChevronDown20',
-          iconSize: 16,
-          iconColor: DARK.MUTED_TEXT,
-        });
+        Text(S_LATEST_TAG())
+          .fontSize(10)
+          .fontColor(ON_ACCENT)   // 亮蓝 ACCENT 底上的文字走 ON_ACCENT token（Apple 口径：亮底深字）
+          .backgroundColor(ACCENT)
+          .borderRadius(4)
+          .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+          .margin({ left: 8 });
       }
       .width('100%')
       .alignItems(VerticalAlign.Center)
-      .padding({ top: 11, bottom: 11 })
-      .hoverEffect(HoverEffect.Highlight)
-      .onClick((): void => {
-        this.onToggle(this.version);
-      });
+      .padding({ top: 11, bottom: 11 });
 
-      if (this.expanded) {
-        ForEach(this.items, (item: string): void => {
-          Row() {
-            Text('•')
-              .fontSize(12)
-              .fontColor(ACCENT)
-              .margin({ right: 8 });
-            Text(item)
-              .fontSize(12)
-              .fontColor(DARK.MUTED_TEXT)
-              .lineHeight(18)
-              .layoutWeight(1);
-          }
-          .width('100%')
-          .alignItems(VerticalAlign.Top)
-          .margin({ bottom: 4 });
-        }, (item: string): string => item);
-      }
+      ForEach(this.items, (item: string): void => {
+        Row() {
+          Text('•')
+            .fontSize(12)
+            .fontColor(ACCENT)
+            .margin({ right: 8 });
+          Text(item)
+            .fontSize(12)
+            .fontColor(DARK.MUTED_TEXT)
+            .lineHeight(18)
+            .layoutWeight(1);
+        }
+        .width('100%')
+        .alignItems(VerticalAlign.Top)
+        .margin({ bottom: 4 });
+      }, (item: string): string => item);
     }
     .width('100%');
   }
@@ -909,11 +733,6 @@ struct AboutWindow {
   @StorageLink(GLOW_DEGRADED_KEY) glowDegraded: boolean = false;
   /** 版本号连点计数，达到 7 即触发开发者模式开启；未开启时每点一次 +1。 */
   @State versionTapCount: number = 0;
-  /**
-   * 「版本更新」里处于展开态的版本号集合。真值放父组件：子组件只拿 @Prop 标记
-   * 与回调，展开状态不参与 Prop→State 拷贝时序。默认只展开最新一版。
-   */
-  @State expandedReleases: string[] = [LATEST_RELEASE_VERSION];
   private logTimer: number = -1;
   /** 启动时更新检查的延时句柄（只为等版本号读回来，见 aboutToAppear）。 */
   private startupCheckTimer: number = -1;
@@ -1081,25 +900,6 @@ struct AboutWindow {
    * ★ 整个 async 链必须自己接住异常：这里是从 UI 点击回调进来的 async 函数，
    *   未接住的 reject 没人接管 ⇒ 应用被结束（子窗口铁律 1）。
    */
-  /**
-   * 展开/收起某个版本的变更条目（「版本更新」区块）。
-   * 用整表重赋值（filter/concat）而不是就地 splice：@State 数组要靠引用变化
-   * 才能可靠触发重渲染，ForEach 复用子组件后 @Prop expanded 会跟着同步。
-   */
-  private toggle_release(version: string): void {
-    try {
-      if (this.expandedReleases.indexOf(version) >= 0) {
-        this.expandedReleases =
-          this.expandedReleases.filter((v: string): boolean => v !== version);
-      } else {
-        this.expandedReleases = this.expandedReleases.concat([version]);
-      }
-    } catch (error) {
-      hilog.warn(DOMAIN, TAG, '版本分组展开/收起失败: %{public}s',
-        (error as BusinessError).message);
-    }
-  }
-
   private on_check_updates(): void {
     this.checkingUpdates = true;
     this.updateStatus = S_UPD_CHECKING();
@@ -1287,19 +1087,15 @@ struct AboutWindow {
         .width('100%')
         .alignItems(VerticalAlign.Center);
 
-        // ── 版本更新（按版本分组折叠，参考微信更新日志）──────────────────
-        // 所有版本都可展开/收起；默认只展开最新一版，点版本行切换。
+        // ── 版本更新（只展示最新一版）────────────────────────────────
+        // 应用内不展示历史更新（用户 2026-11-07 要求）：历史逐版记录在仓库
+        // CHANGELOG.md 与 GitHub Releases 里，页脚的「更新日志」按钮可跳转。
         section_title(S_WHATS_NEW());
-        ForEach(CHANGELOG_RELEASES, (rel: ChangelogRelease): void => {
-          ChangelogGroup({
-            version: rel.version,
-            date: rel.date,
-            items: rel.items,
-            isLatest: rel.version === LATEST_RELEASE_VERSION,
-            expanded: this.expandedReleases.indexOf(rel.version) >= 0,
-            onToggle: (version: string): void => { this.toggle_release(version); },
-          });
-        }, (rel: ChangelogRelease): string => rel.version);
+        ChangelogGroup({
+          version: LATEST_RELEASE.version,
+          date: LATEST_RELEASE.date,
+          items: LATEST_RELEASE.items,
+        });
 
         // Border Height 1 / BorderSoftBrush / Margin 0,20
         Column()
