@@ -172,6 +172,7 @@ import {
 } from '../../common/Theme';
 import { FluentSymbol } from '../../common/FluentIcon';
 import { DEVELOPER_MODE_KEY, GLOW_ENABLED_KEY, GLOW_DEGRADED_KEY } from '../../common/WindowServices';
+import { save_developer_mode_preference } from '../../common/AppPreferences';
 import { t } from '../../common/i18n';
 import { open_first_run } from './FirstRunSetupWindow';
 import {
@@ -241,10 +242,54 @@ export class ChangelogRelease {
  * 点开**（用户 2026-10-02 晚间更正：上一版把旧版做成了不可展开，点不开）。
  */
 const CHANGELOG_RELEASES: ChangelogRelease[] = [
+  new ChangelogRelease('1.1.1', '2026-11-07', [
+    '新增：iOS 有线文件浏览（AFC）—— 侧边栏「文件」入口直连 iPhone 内部存储，支持面包屑路径、目录进退、下载到沙箱 Downloads、删除、新建目录、重命名。链路自己实现（上游 Windows 版走 Apple AMDS 本地 socket，没有这条）',
+    '修复：usbmux 隧道被设备 RST —— 伪 TCP 头的 th_off 是 4 bit 数据偏移、占 tcphdr 高 4 位，20 字节头的正确编码是 0x50 而我们写的是 0x05，设备按高 4 位算出"头长 = 0"判为坏包直接 RST。已用 static_assert 把这条不变量钉死',
+    '修复：设备 SYN|ACK 的 seq 可能不是 0，确认号改为按设备 seq 计算（收到 SYN|ACK 时 tx_ack = seq + 1，收数据后 tx_ack = seq + len(payload)），不再假定设备 seq 为 0',
+    '新增：USB 第二通道 —— USB DDK 需要 ACCESS_DDK_USB 进签名 profile 的 ACL，外部安装拿不到；现在走 usbManager.requestRight 弹一次设备级授权窗（不查 ACL），getFileDescriptor 拿标准 usbfs 节点的 fd，native 直接在 fd 上做 bulk / 控制传输，授权一次长期有效',
+    '新增：认领 USB 接口后调用 clear_halt（USBDEVFS_CLEAR_HALT）重置主机侧 DATA toggle，避免重开链路时第一个包被静默丢弃',
+    '新增：收包按设备报的 th_off 切载荷（不再写死 20 字节），并按 (sport, dport) 校验连接配对 —— 设备同时开着别的连接时，串台的报文不再被误判成"本隧道被重置"',
+    '修复：真机上点首启向导弹 401 创建失败 —— 根因不是 createSubWindow 参数，而是页面没注册进 main_pages.json，setUIContent 在 LoadContent 阶段找不到路由。补注册 4 个漏掉的页面（首启向导 / 键盘映射编辑器 / 键盘映射 / 窗口风格设置），并给子窗口加 401 分级降级链',
+    '移除：安卓相关代码与本地终端 —— 删掉 ADB 探测与匹配常量、侧边栏「终端」入口、终端窗口页面与六个本地 shell native 导出，HAP 内 ADB / DeX / Miracast / 三星 关键字 0 命中；「文件」入口（iOS AFC）保留',
+    '新增：首启向导窗口、繁体中文（台湾）语言档、窗口风格设置窗口（独立预览窗口透明度 + 悬停不透明）、键盘映射管理器与编辑器向导、独立预览窗口改华为多屏协同风格（画面铺满 + 上下毛玻璃浮层栏）',
+    '修复：42 个 ArkTS 编译错误已清，hvigor assembleHap BUILD SUCCESSFUL',
+    '修复：i18n 表内重复键（"取消"与"下一步"在 ZH2EN/ZH2HK 各重复定义，前者被后者静默覆盖）',
+    '修复（原生）：USB 批量读按 memmap 实际容量裁剪长度 —— 驱动报出异常大的 transferedLength 时会越界读',
+    '修复（原生）：音频渲染器 set_volume/set_enabled 裸读句柄与 stop() 的 Release 并发即 UAF；帧可用通知与"持 capture_mutex 析构解码器"构成 ABBA —— 两处都改为锁内只摘指针、锁外销毁',
+    '依赖：新增 OpenSSL 3（libssloh.so.3 / libcryptooh.so.3）随 HAP 分发 —— AFC 的两条 TLS 会话需要，NDK 不带 OpenSSL',
+  ]),
+  new ChangelogRelease('1.1.0', '2026-10-18', [
+    '新增：沉浸光感视觉体系（GlowLayer 辉光组件，三档强度 + 悬停淡入淡出 + 状态动画），并接入系统级材质让原生控件也带沉浸光感',
+    '新增：系统托盘（Tray）—— 关闭或最小化后驻留后台，常驻通知 + 一键唤回主窗口',
+    '新增：统一光感下拉 MaterialSelect，修复此前下拉"重启后为空、需先点选才显示"的问题',
+    '新增：设置持久化 AppPreferences —— 主题、语言、分辨率、帧率、解码偏好重启后保留',
+    '新增：窗口隐藏时暂停光感渲染（WindowVisibilityController），减少后台开销',
+    '完整逐版记录见仓库 CHANGELOG.md 与 docs/RELEASE_v1.1.0.md',
+  ]),
+  new ChangelogRelease('1.0.65', '2026-10-29', [
+    '修复编译失败：Index.ets 里 root_background_color() 被定义了两次（移除磨砂时的遗留），ArkTS 报 Duplicate function implementation，整个 CompileArkTS 任务失败',
+    '修复：投屏设置窗口的「开始投屏 / 停止投屏」点了完全没反应 —— 两个请求键只有写入端，主窗口从来没订阅过。现在主窗口每轮轮询消费并立即复位，状态行也不再谎称"命令总线未接通"',
+    '修复：画面调节的「重置」只把滑杆拨回默认值，画面不变、也不置脏 —— 缺的是那次 150ms 防抖预览调用',
+    '修复：主题偏好重启就丢，而且主窗口一旦重建（切语言整树重建 / 从托盘唤回）会把已选主题覆盖回「跟随系统」—— 偏好现在落盘，themeIndex 改为 @StorageLink 双向同步，启动时在 UI 装载前读回',
+    '修复：提示框已经开着时再来一条提示不显示（SubWindowHost 对已存在窗口只做 showWindow，aboutToAppear 不会再跑），新请求留在 pending 里污染下一次；现在用请求序号 + @Watch 让活着的窗口换内容',
+    '修复：关窗后的异步回调继续写已销毁组件 —— 关于页的「检查更新」网络请求、独立预览窗口的 600ms 装饰重试、导航栏提示定时器，三处都补了销毁判定/句柄回收',
+    '修复：子窗口 destroyWindow 失败时关窗钩子已被提前删除，下次关闭不再走回滚（画面调节"回滚失败就不关"会失效）',
+    '补齐 13 条缺失译文（英文/繁中）：此前「确认退出」「最小化到托盘」「解绑」等串在英文界面直接显示中文',
+    '修复（原生）：解码器销毁持锁调用 Stop/Destroy，而解码回调进入即抢同一把锁 ⇒ 参数集切换/停止投屏时可能互等卡死。现在一律"锁内只摘指针、锁外销毁"',
+    '修复（原生）：解码器 Configure/RegisterCallback/Prepare 失败时半成品实例不销毁也不置空，导致之后的重建判断永远跳过、解码器永久停在坏态；现在失败即摘除并在锁外销毁',
+    '修复（原生）：USB 批量读只按调用方缓冲裁剪长度，未按 memmap 实际容量裁剪 —— 驱动报出异常大的 transferedLength 时会越界读',
+    '修复（原生）：音频渲染器的 set_volume/set_enabled 裸读句柄，与 stop() 的 Release 并发就是 UAF；现在句柄在锁内摘取、锁外释放',
+    '修复（原生）：帧可用通知借用 capture_mutex，与「持 capture_mutex 析构解码器」构成 ABBA —— 停止投屏时正好有一帧输出就会卡死；现在帧通知用独立锁',
+  ]),
   new ChangelogRelease('1.0.64', '2026-10-11', [
     '对外文档诚实性收紧（纯文档改动，不含任何代码改动）：README 不再宣称 USB 有线投屏可用 —— ACCESS_DDK_USB 必须进 AGC 签名 profile 的 ACL 才能装包，现已临时移出，改用 ⚠️ 并说明请走 AirPlay',
     '第三方许可声明不再失实：THIRD_PARTY_NOTICES.md 原先整份是 Windows 版内容（ffmpeg.exe / *.ps1 / WPF-UI / Markdig 在鸿蒙版都不存在），且其中"应用不链接 receiver"那句在鸿蒙版不成立 —— CMake 里是真实的静态链接。已在文件头列明实际链入的三个组件及其许可',
     'SECURITY.md 记一笔已知限制：vendored plist 解析无递归深度上限。暂不修 —— 攻击者须先连上你的 AirPlay 会话；且修补点在第三方源码内，代价是失去与上游逐文件可比对的能力',
+    '修复：无线投屏延迟动辄上百、偶发上千毫秒（原版 Windows 只几十毫秒）—— 真因是 OH_MD_KEY_VIDEO_ENABLE_LOW_LATENCY 在真机上**从来没有生效过**。configure_annex_b 里那行 `low_latency_ = false` 与它正上方那段注释的结论完全相反（注释写「原版 MFT 永远开 low_latency、没有关闭路径」，代码写关），成员默认值也是 false。于是每次来参数集（会话开始必有、分辨率切换也必有）就无条件把低延迟关掉，v1.0.55 实测的那 ≈233ms 周期性滞后一直都在，从来没被兑现',
+    '低延迟与「颜色对」不再二选一：v1.0.59 撤回低延迟的根因是靠 attr.size 反推 stride —— 而低延迟会把输出缓冲布局从紧致改成 stride>width，attr.size 报的却是逻辑大小，UV 就拷到了 Y 平面尾部（绿屏/颜色全错）。现在 stride 直接取 OH_NativeBuffer_GetConfig 的真值，并且那条「stride×h×3/2 > attr.size 就退回 width」的越界兜底改为**只对推导值生效**（真值的对齐 padding 本来就不在 attr.size 里，套上去会把正确的 stride 抹掉）。两件事同时成立，才敢把低延迟开回来',
+    '自愈路径全部保留，收益落地但风险有界：本机若确实不兼容（UV 连续全零 / 硬件档探帧零像素 / 拿不到 native buffer 且 stride 推不出来），会在几帧内自动关掉低延迟并按原档重建。验证看状态行的「已自动关低延迟 N 次」—— 它 >0 说明自动关过，=0 则说明低延迟正在生效',
+    '移除：窗口半透明与全窗磨砂。全窗 backgroundEffect（radius 32）在最小化 / 最大化 / 还原 / 拖拽缩放这些系统窗口动画里**每帧都要重算模糊**，是掉帧最大单一来源。随之删掉「半透明窗口」开关、浓度档位、容器配色探测读数，以及只为「动画期临时关磨砂」而存在的窗口尺寸脉冲广播；主窗背景改由根容器的不透明 BACKGROUND 兜底',
+    '修复：托盘右键出现两个「退出」（第一个是应用自己的，第二个是系统自动追加的），且两个都关不掉应用 —— 真因是 EntryAbility.onPrepareToTerminate 把所有系统级终止（Dock 右键关闭 / 系统托盘退出 / 关机）统统拦截成收托盘，而这些入口没有任何一个能穿过它 ⇒ 除了任务管理器别无退路。现在删掉应用自己的那一项，onPrepareToTerminate 一律放行：Dock 右键关闭 = 退出，系统托盘「退出」= 退出，窗口 × = 收托盘（受「最小化到托盘」开关控制）',
   ]),
   new ChangelogRelease('1.0.63', '2026-10-11', [
     '"iPhone 配置包无 IDR"边界自愈：v1.0.62 那次画面黑屏的真因是 iOS 偶发只给 SPS+PPS 不给 IDR（vendor 库没暴露 /feedback 让接收端主动让 iPhone 重发），不是 shader 问题。本版在入队侧检测"参数集已就绪 + 入队 ≥ 60 帧仍无 IDR" → 进入 demand_idr 模式截短非 IDR 帧，等 IDR slice 来了再放行',
@@ -623,7 +668,7 @@ function diagnostic_dir(ctx: common.Context | null): string {
     return '';
   }
   const files: string = (ctx as common.UIAbilityContext).filesDir;
-  return files !== undefined ? files + '/iPhoneMirror/Logs' : '';
+  return files !== undefined ? files + '/PhoneMirror/Logs' : '';
 }
 
 /** 原版 FormatBytes(long bytes)。 */
@@ -872,6 +917,11 @@ struct AboutWindow {
   private logTimer: number = -1;
   /** 启动时更新检查的延时句柄（只为等版本号读回来，见 aboutToAppear）。 */
   private startupCheckTimer: number = -1;
+  /**
+   * 窗口是否已销毁。网络检查是异步的：关窗后 promise 才回来时，
+   * 写 @State 就是写已销毁组件（ArkUI 会报错/丢帧，严重时崩进程）。
+   */
+  private destroyed: boolean = false;
 
   /**
    * 本页所在的 Ability 上下文。
@@ -966,6 +1016,7 @@ struct AboutWindow {
   }
 
   aboutToDisappear(): void {
+    this.destroyed = true;
     if (this.logTimer >= 0) {
       clearInterval(this.logTimer);
       this.logTimer = -1;
@@ -1059,6 +1110,7 @@ struct AboutWindow {
     try {
       check_latest_release(local)
         .then((result: UpdateCheckResult): void => {
+          if (this.destroyed) return;      // 窗口已关：别再写已销毁组件
           this.checkingUpdates = false;
           this.updateStatus = this.describe_update_result(result);
           if (result.outcome !== UPDATE_OUTCOME_FAILED) {
@@ -1068,6 +1120,7 @@ struct AboutWindow {
           }
         })
         .catch((error: BusinessError): void => {
+          if (this.destroyed) return;
           this.checkingUpdates = false;
           const reason: string = error !== undefined && error !== null && error.message !== undefined
             ? error.message : '未知原因';
@@ -1196,18 +1249,22 @@ struct AboutWindow {
               .margin({ top: 4 })
               .onClick((): void => {
                 // 开发者模式调试入口：连点版本号 7 次开启，已开启时再点一次关闭。
+                // 2026-10-31 起持久化（save_developer_mode_preference）：开启后
+                // 重开应用仍保持，用户不必每次连点。
                 // 整段 try 包住：点击回调里抛异常没人接管，会把整个应用带崩。
                 try {
                   if (this.devMode) {
                     // 已开启 → 再点一次即关闭，并重置计数。
                     this.devMode = false;
                     AppStorage.setOrCreate<boolean>(DEVELOPER_MODE_KEY, false);
+                    save_developer_mode_preference(false);
                     this.versionTapCount = 0;
                   } else {
                     this.versionTapCount += 1;
                     if (this.versionTapCount >= 7) {
                       this.devMode = true;
                       AppStorage.setOrCreate<boolean>(DEVELOPER_MODE_KEY, true);
+                      save_developer_mode_preference(true);
                       this.versionTapCount = 0;
                     }
                   }

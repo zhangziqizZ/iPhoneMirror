@@ -1,5 +1,106 @@
 # 更新日志
 
+## 1.1.1（2026-11-07）
+
+### ✨ 新增：iOS 有线文件浏览（AFC）
+
+主界面侧边栏新增「文件」入口，走 **AFC（Apple File Conduit）** 直连 iPhone 内部存储：
+面包屑路径、目录进退、文件下载到沙箱 `Downloads`、删除、新建目录、重命名。
+
+链路是完整自己实现的（上游 Windows 版没有这条，它走 Apple AMDS 的本地 socket）：
+
+```
+lockdown StartSession ──TLS──▶ lockdownd
+    └─ StartService(com.apple.afc) ──▶ 新 mux 实例开 AFC 隧道 ──TLS──▶ AFC 帧
+```
+
+- 主机侧证书/私钥由 `CryptoArchitectureKit` 生成，ECDSA + SHA-256，与 iOS 配对记录同规格。
+- 配对记录落盘复用，第二次连接不再重新握手。
+- AFC 帧按 iOS 协议实现：magic `CFA6LPAA` + 40 字节小端头，支持 READ_DIR / FILE_INFO /
+  OPEN / READ / WRITE / REMOVE / MAKEDIR / RENAME。
+
+### 🔧 修复：usbmux 隧道被设备 RST（`th_off` 编码错误）
+
+自研裸 USB mux 开隧道时，设备直接回 RST（"设备拒绝连接端口 62078"），换源端口无效。
+对照上游新版 `tools/iostouch/qt/usbmux_usb.py` 找到根因：
+
+| 字段 | 修复前 | 修复后 |
+|---|---|---|
+| `th_off` | `0x05` | `0x50` |
+
+`th_off` 是 4 bit 数据偏移，占 tcphdr **高 4 位**（低 4 位是保留位）。20 字节头的正确
+编码是 `0x50`；写 `0x05` 会让设备按高 4 位算出「头长 = 0」，整条 SYN 报文错位被判为
+坏包 ⇒ 直接 RST。已加 `static_assert` 把这条不变量钉死，改错直接编译不过。
+
+顺带对齐上游的两处序号语义：
+
+- 收到 SYN|ACK 时 `tx_ack = 设备 seq + 1`（设备 seq 可能不是 0，不能用 `+= 1`）。
+- 收到数据后 `tx_ack = seg.seq + len(payload)`。
+
+以及三项健壮性：
+
+- 收包按设备报的 `th_off` 切载荷（不再写死 20 字节），越界回退。
+- 按 `(sport, dport)` 校验连接配对 —— 设备可能同时开着别的连接，串台的报文不再被
+  误判成「本隧道被重置」。
+- `OhosUsbFdTransport` 新增 `clear_halt`（USBDEVFS_CLEAR_HALT），认领接口后重置
+  主机侧 DATA toggle，避免重开链路时第一个包被静默丢弃。
+
+### 🔧 新增：USB 第二通道（usbManager 授权路径）
+
+USB DDK 通道要求 `ACCESS_DDK_USB` 进签名 profile 的 ACL，外部安装拿不到。
+新增 **usbManager 备用通道**：`usbManager.requestRight` 弹一次设备级授权窗
+（不查签名 ACL），`getFileDescriptor` 拿到标准 usbfs 节点的 fd，native 直接在 fd
+上做 bulk / 控制传输。授权一次长期有效。
+
+配套：`ACCESS_DDK_USB` 权限放回 `requestPermissions`（`usedScene.abilities` 写
+`EntryAbility` —— 真正调 `OH_Usb_*` 的就是它），USB 设备 PID 白名单补全。
+
+### 🧹 移除：安卓相关代码与本地终端
+
+- 删除 ADB 探测（`OhosUsbFdAdbInfo` / `discover_usb_fd_adb` / `collect_usb_candidates`），
+  HAP 内 `ADB` / `android` / `DeX` / `Miracast` / `三星` 关键字 0 命中。
+- 删除三星 DeX 提示文案、侧边栏的「终端」入口、`TerminalWindow` 页面与
+  `JsLocalShell*` 六个 native 导出（含 `localShell*` 类型声明）。
+- 保留「文件」入口（iOS AFC）。
+
+### 🐞 修复：子窗口创建 401（首启向导打不开）
+
+真机上点首启向导弹出 `401` 创建失败。根因不是 `createSubWindow` 参数，而是
+**页面没有注册进 `main_pages.json`** —— `setUIContent` 在 LoadContent 阶段找不到
+路由，直接失败。补注册 4 个此前漏掉的页面：`FirstRunSetupWindow` /
+`KeyboardMappingEditorWindow` / `KeyboardMappingWindow` / `WindowStyleSettingsWindow`。
+
+同时 `SubWindow` 增加 401 分级降级链：去 `isModal` → 去 `windowRect`，且
+`windowRect` 先夹到物理屏内（`display.getDefaultDisplaySync`），避免尺寸越界。
+
+### ✨ 新增（v1.1.0 之后的 P1/P2 批次）
+
+- **首启向导窗口** `FirstRunSetupWindow`。
+- **繁体中文（台湾）**语言档。
+- **窗口风格设置窗口**：独立预览窗口透明度 + 悬停不透明。
+- **键盘映射**：管理器 + 编辑器向导 + 数据模型 / 持久化（执行待绝对触控后端）。
+- **独立预览窗口**：华为多屏协同风格 —— 画面铺满 + 上下毛玻璃浮层栏（反控开关 +
+  键盘映射入口）。
+
+### 🔧 其他底层
+
+- 修复 42 个 ArkTS 编译错误（`hvigor assembleHap` 已 BUILD SUCCESSFUL）。
+- 清理 i18n 表内重复键（`'取消'` 与 `'下一步'` 在 ZH2EN/ZH2HK 各重复定义，前者被
+  后者静默覆盖）。
+- 解码器硬解零像素针对性重试 + 策略链 / 参数集诊断。
+- USB 批量读按 memmap 实际容量裁剪长度（驱动报出异常大的 `transferedLength` 时
+  越界读）。
+- 音频渲染器 `set_volume` / `set_enabled` 裸读句柄与 `stop()` 的 Release 并发即 UAF；
+  帧可用通知与「持 capture_mutex 析构解码器」构成 ABBA —— 两处都改为锁内只摘指针、
+  锁外销毁。
+
+### 📦 依赖变更
+
+- **OpenSSL 3**（`libssloh.so.3` / `libcryptooh.so.3`）随 HAP 分发 —— AFC 的两条
+  TLS 会话需要。NDK 不带 OpenSSL，改为引入本机 hnp python 环境的 3.0.15 运行库
+  + conda-forge 的 3.0.7 头文件；`compat/openssl` 垫片用 `include_next` 让路，
+  头文件路径排在 compat 之后，垫片自动失效。
+
 ## 1.0.68（2026-10-12）
 
 ### 修音频回音 / 电音 / 卡顿的根因：`queued_frames_` 每包双倍计数（一行修复）

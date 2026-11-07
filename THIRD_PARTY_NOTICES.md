@@ -21,6 +21,9 @@ material and does not replace, narrow or relicense any component listed below.
 > | PlayFair | **GPL-3.0** | 静态 | `vendored/lib/lib/playfair/LICENSE.md` |
 > | Fraunhofer FDK AAC | FDK AAC License | 静态 | `vendored/lib/lib/fdk-aac/MODULE_LICENSE_FRAUNHOFER` |
 >
+> 另有**动态链接**的 OpenSSL 3（AFC 的两条 TLS 会话所需），详见下方
+> [OpenSSL 3](#openssl-3) 一节 —— 它是 2026-11-07 起新增的第四个组件。
+>
 > 本项目本体以 **GPL-3.0-only** 发布；PlayFair 同为 GPL-3.0，因此静态合并后
 > 组合作品仍以 GPL-3.0 分发（与上文第一段的声明一致 —— 移植即衍生作品，遵循
 > GPL-3.0 section 5(a)）。
@@ -32,6 +35,33 @@ material and does not replace, narrow or relicense any component listed below.
 > 该句保留仅为原文溯源，请勿据其判断鸿蒙版的许可义务。
 >
 > *本节新增于 2026-10-11；此前本文件未做任何平台适配。*
+
+## OpenSSL 3
+
+The HarmonyOS port links dynamically against OpenSSL 3 for the TLS sessions
+used by the iOS AFC file-conduit channel (lockdown handshake + AFC tunnel).
+
+- Project: https://www.openssl.org
+- License: Apache-2.0
+- Version: 3.x (headers 3.0.7; runtime libraries 3.0.15)
+
+Two artifacts are included in the source tree:
+
+| Artifact | Location | Notes |
+|---|---|---|
+| Public headers | `entry/src/main/cpp/third_party/openssl/include/openssl/` | From the conda-forge `openssl-3.0.7` package, headers only |
+| Runtime libraries | `entry/src/main/libs/arm64-v8a/libssloh.so.3`, `libcryptooh.so.3` | From the platform's own Python (hnp) distribution; shipped with the HAP |
+
+The HarmonyOS NDK does not bundle OpenSSL. The two shared libraries above are
+redistributed unmodified as part of the release package, and are resolved at
+runtime by the loader via `DT_NEEDED`
+(`libssloh.so.3` → `libcryptooh.so.3` → `libc.so`).
+
+The `compat/openssl/` shim in the source tree is **not** a third-party
+component: it is an original placeholder that lets the tree compile without
+OpenSSL headers. Once the real headers are on the include path (after
+`compat/`), the shim forwards to them via `__has_include_next` and becomes
+inactive.
 
 ## quicktime_video_hack protocol fixtures
 
